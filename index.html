@@ -72,12 +72,12 @@ tbody tr:hover{background:#fbf9f6}
 .acciones{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px}
 .filtros>div{min-width:150px}
-dialog{border:0;border-radius:14px;padding:0;max-width:860px;width:94vw;box-shadow:0 24px 70px rgba(0,0,0,.3)}
+dialog{border:0;border-radius:14px;padding:0;max-width:1500px;width:97vw;box-shadow:0 24px 70px rgba(0,0,0,.3)}
 dialog::backdrop{background:rgba(18,24,26,.55)}
 dialog .dhead{background:var(--petroleo);color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px}
 dialog .dhead h3{font-size:16px}
 dialog .dhead button{margin-left:auto;background:rgba(255,255,255,.15);color:#fff;border-color:transparent}
-dialog .dbody{padding:16px;max-height:72dvh;overflow:auto}
+dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
 .sec{font-family:Georgia,serif;font-size:14px;color:var(--petroleo);border-bottom:1px solid var(--linea);padding-bottom:5px;margin:18px 0 10px}
 .sec:first-child{margin-top:0}
 @media(max-width:700px){
@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-9";
+const VERSION = "v2026.08.02-10";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1069,15 +1069,16 @@ function pintarItems(){
   const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
       .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
   $("w_items").innerHTML = !PRE.items.length ? '<div class="muted">Sin renglones todavía. Tocá «Agregar renglón».</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Producto</th><th style="min-width:140px">Descripción</th><th>Cant.</th><th>Un.</th><th>Precio</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    PRE.items.map(function(x,k){
      return '<tr>'+
-       '<td><select id="it_'+k+'_producto_id" '+d+' onchange="itemProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
+       '<td><select style="width:100%;min-width:240px" id="it_'+k+'_producto_id" '+d+' onchange="itemProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
        '<td><input id="it_'+k+'_descripcion" value="'+esc(x.descripcion)+'" '+d+' oninput="sincro()"></td>'+
-       '<td><input type="number" step="0.01" style="width:80px" id="it_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.01" style="width:80px" id="it_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" '+d+' oninput="cantidadCambio('+k+')"></td>'+
        '<td><input style="width:70px" id="it_'+k+'_unidad" value="'+esc(x.unidad)+'" '+d+' oninput="sincro()"></td>'+
        '<td style="min-width:150px">'+celdaMedida(x,k,d)+'</td>'+
-       '<td><input type="number" step="0.01" style="width:110px" id="it_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.01" style="width:110px" id="it_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" '+d+' oninput="precioCambio('+k+')">'+
+         '<div id="ph_'+k+'" class="muted" style="font-size:11px;color:#7a2415;'+(Number(x.precio_unit)>0?'display:none':'')+'">sin precio cargado</div></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_descuento_pct" value="'+(x.descuento_pct||0)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" '+d+' oninput="sincro()"></td>'+
        '<td style="text-align:right"><b id="sub_'+k+'"></b></td>'+
@@ -1893,7 +1894,23 @@ function celdaMedida(x, k, d){
   const cant = Number(x.cantidad||0);
   const total = Math.round(cant * c.factor * 100)/100;
   return '<input type="number" step="0.01" style="width:80px" id="it_'+k+'_medida" value="'+(x.cantidad_medida==null?"":x.cantidad_medida)+'" placeholder="'+c.um+'" '+d+' onchange="medidaAcantidad('+k+')">'+
-         '<div class="muted" style="font-size:11px;line-height:1.2;margin-top:2px">1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total</div>';
+         '<div class="muted" id="eq_'+k+'" style="font-size:11px;line-height:1.2;margin-top:2px">1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total</div>';
+}
+/* cuando cambia la cantidad a mano, recalcula el total en m²/ml y el subtotal en vivo */
+function cantidadCambio(k){
+  sincro();
+  const x = PRE.items[k];
+  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const c = convDe(p), el = $("eq_"+k);
+  if (c && el){
+    const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
+    el.innerHTML = '1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total';
+  }
+}
+function precioCambio(k){
+  sincro();
+  const x = PRE.items[k], h = $("ph_"+k);
+  if (h) h.style.display = Number(x.precio_unit)>0 ? "none" : "";
 }
 // el usuario carga los metros que necesita y el sistema saca cuantas cajas hay que vender, redondeando para arriba
 function medidaAcantidad(k){
