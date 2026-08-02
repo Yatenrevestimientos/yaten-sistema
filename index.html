@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-15";
+const VERSION = "v2026.08.02-16";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -264,6 +264,7 @@ const MENU = [
   {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
   {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
+  {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -1300,6 +1301,170 @@ function imprimirPresupuesto(){
 }
 
 
+/* ═══════════ PROVEEDORES ═══════════ */
+let PROVS = [], SALPROV = {}, FPROV = "";
+async function db16(){
+  if (window._db16 !== undefined) return window._db16;
+  const t = await sb.from("proveedores").select("id").limit(1);
+  window._db16 = !t.error;
+  return window._db16;
+}
+async function cargarProveedores(){
+  if (!P("compra-consultar")) return;
+  const [p,s] = await Promise.all([
+    sb.from("proveedores").select("*").order("nombre"),
+    sb.from("v_saldos_proveedor").select("*")
+  ]);
+  PROVS = p.data||[]; SALPROV = {};
+  (s.data||[]).forEach(function(x){ if(!x.moneda) return; SALPROV[x.proveedor_id+"_"+x.moneda] = Number(x.saldo||0); });
+}
+const saldoProv = (id,m) => SALPROV[id+"_"+m] || 0;
+VISTAS.provee = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await db16())){ $("main").innerHTML = '<div class="panel"><h2>Proveedores</h2><div class="msg err">Falta correr la migración de proveedores en la base.</div></div>'; return; }
+  await cargarProveedores();
+  if (!PRODS.length) await cargarCatalogo();
+  const puede = P("compra-modificar");
+  const t = FPROV.toLowerCase();
+  const rows = PROVS.filter(p => !t || (p.nombre+" "+(p.dni_cuit||"")+" "+(p.telefono||"")+" "+(p.celular||"")+" "+(p.email||"")+" "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id)).toLowerCase().indexOf(t)>=0);
+  $("main").innerHTML = '<div class="panel"><h2>Proveedores</h2>'+
+   '<div class="desc">Cada proveedor tiene su cuenta corriente en pesos y en dólares, y su propia lista de precios por producto. Lo que le debemos sale acá y se suma a «cuentas a pagar» en el resumen de Finanzas.</div>'+
+   '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="pvf_txt" placeholder="razón social, CUIT, teléfono, dirección, localidad…" value="'+esc(FPROV)+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="pvf_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="fichaProveedor(null)">+ Proveedor nuevo</button></div>':'')+'</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
+     ['Razón social','CUIT','Teléfono','Celular','Dirección','Localidad','Le debemos ARS','Le debemos USD'].map(h=>'<th>'+h+'</th>').join("")+
+     '</tr></thead><tbody>'+rows.map(function(p){
+       const a = saldoProv(p.id,'ARS'), u = saldoProv(p.id,'USD');
+       return '<tr style="cursor:pointer'+(p.activo?'':';opacity:.55')+'" onclick="fichaProveedor('+p.id+')">'+
+        '<td><b>'+esc(p.nombre)+'</b></td><td>'+esc(p.dni_cuit)+'</td><td>'+esc(p.telefono)+'</td><td>'+esc(p.celular)+'</td>'+
+        '<td>'+esc(p.direccion)+'</td><td>'+esc(nom(M.loc,p.localidad_id))+'</td>'+
+        '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
+        '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td></tr>';
+     }).join("")+'</tbody></table></div>'
+    : '<div class="muted">'+(FPROV?'Ningún proveedor con esa búsqueda.':'Todavía no hay proveedores cargados.')+'</div>')+
+   '</div>';
+  $("pvf_btn").onclick = function(){ FPROV = $("pvf_txt").value.trim(); VISTAS.provee(); };
+};
+async function fichaProveedor(id){
+  const p = id ? PROVS.find(x=>x.id===id) : null;
+  const puede = P("compra-modificar");
+  const d = puede?"":"disabled";
+  const v = k => p ? (p[k]==null?"":p[k]) : "";
+  let mov = [], precios = [];
+  if (p){
+    const [m,pr] = await Promise.all([
+      sb.from("pv_movimientos").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300),
+      sb.from("proveedor_precios").select("*").eq("proveedor_id",p.id)
+    ]);
+    mov = m.data||[]; precios = pr.data||[];
+  }
+  $("dtit").textContent = p ? p.nombre : "Proveedor nuevo";
+  $("dbody").innerHTML = '<div id="pvmsg"></div>'+
+   '<div class="sec">Datos del proveedor</div><div class="grid">'+
+     '<div class="f"><label>Nombre / Razón social *</label><input id="pv_nombre" value="'+esc(v("nombre"))+'" '+d+'></div>'+
+     '<div class="f"><label>DNI / CUIT</label><input id="pv_dni_cuit" value="'+esc(v("dni_cuit"))+'" '+d+'></div>'+
+     '<div class="f"><label>Categoría de IVA</label><select id="pv_cat_iva" '+d+'>'+selTxt(CAT_IVA,v("cat_iva"))+'</select></div>'+
+     '<div class="f"><label>Email</label><input id="pv_email" value="'+esc(v("email"))+'" '+d+'></div>'+
+     '<div class="f"><label>Teléfono</label><input id="pv_telefono" value="'+esc(v("telefono"))+'" '+d+'></div>'+
+     '<div class="f"><label>Celular</label><input id="pv_celular" value="'+esc(v("celular"))+'" '+d+'></div>'+
+     '<div class="f"><label>Dirección</label><input id="pv_direccion" value="'+esc(v("direccion"))+'" '+d+'></div>'+
+     '<div class="f"><label>Localidad</label><select id="pv_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select></div>'+
+     '<div class="f"><label>Activo</label><select id="pv_activo" '+d+'><option value="1" '+(!p||p.activo?"selected":"")+'>Sí</option><option value="0" '+(p&&!p.activo?"selected":"")+'>No</option></select></div>'+
+   '</div>'+
+   '<div class="f"><label>Observaciones</label><textarea id="pv_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
+   (puede?'<div class="acciones"><button class="btn" id="pv_guardar">'+(p?"Guardar cambios":"Crear proveedor")+'</button></div>':'')+
+   (p? seccionPreciosProv(p, precios) + seccionCCProv(p, mov) : '');
+  if (puede) $("pv_guardar").onclick = function(){ guardarProveedor(id); };
+  try{ $("dlg").showModal(); }catch(e){}
+}
+function seccionPreciosProv(p, precios){
+  const puede = P("compra-modificar");
+  const mapa = {}; precios.forEach(x=>{ mapa[x.producto_id] = x; });
+  const activos = PRODS.filter(x=>x.activo);
+  return '<div class="sec">Lista de precios de este proveedor</div>'+
+   '<div class="muted" style="margin-bottom:8px">Lo que <b>nos cobra</b> este proveedor por cada producto. Sirve para comparar cotizaciones antes de armar un embarque. Dejalo vacío en los productos que no le compramos.</div>'+
+   (activos.length? '<div class="tablewrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Código</th><th>Producto</th><th>Precio en ARS</th><th>Precio en USD</th></tr></thead><tbody>'+
+     activos.map(function(x){ const pr = mapa[x.id]||{};
+       return '<tr><td>'+esc(x.codigo)+'</td><td>'+esc(x.nombre)+'</td>'+
+        '<td><input type="number" step="0.01" style="width:120px" id="pp_'+x.id+'_ars" value="'+(pr.precio_ars==null?"":pr.precio_ars)+'" '+(puede?"":"disabled")+'></td>'+
+        '<td><input type="number" step="0.01" style="width:120px" id="pp_'+x.id+'_usd" value="'+(pr.precio_usd==null?"":pr.precio_usd)+'" '+(puede?"":"disabled")+'></td></tr>';
+     }).join("")+'</tbody></table></div>'+
+     (puede?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="guardarPreciosProv('+p.id+')">Guardar la lista de precios</button></div>':'')
+    : '<div class="muted">Todavía no hay productos cargados en el catálogo.</div>');
+}
+function seccionCCProv(p, mov){
+  const puede = P("compra-modificar");
+  const bloque = function(m){
+    const filas = mov.filter(x=>x.moneda===m);
+    const saldo = filas.filter(x=>!x.anulado).reduce((a,x)=>a+Number(x.credito||0)-Number(x.debito||0),0);
+    return '<div class="sec">Cuenta corriente '+m+'</div>'+
+      '<div style="margin-bottom:8px"><b style="font-size:18px;color:'+(saldo>0?'#7a2415':'#1d5b2c')+'">'+
+      (saldo>0? 'Le debemos '+fmtM(saldo,m) : saldo<0? 'Nos debe '+fmtM(-saldo,m) : 'Sin saldo')+'</b></div>'+
+      (filas.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Fecha</th><th>Detalle</th><th>Le debemos</th><th>Le pagamos</th>'+(P("finanzas-anular")?'<th></th>':'')+'</tr></thead><tbody>'+
+        filas.map(function(x){
+          return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
+            '<td style="white-space:normal;min-width:240px">'+esc(x.detalle)+'</td>'+
+            '<td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td><td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td>'+
+            (P("finanzas-anular")?'<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="anularPV('+x.id+','+p.id+')">Anular</button>')+'</td>':'')+'</tr>';
+        }).join("")+'</tbody></table></div>' : '<div class="muted">Sin movimientos en '+m+'.</div>');
+  };
+  return bloque("ARS") + bloque("USD") +
+   (puede?'<div class="sec">Ajuste manual</div>'+
+     '<div class="muted" style="margin-bottom:8px">Para cargar un saldo inicial o corregir una diferencia. Las facturas y los pagos van a mover esta cuenta solos cuando construyamos compras.</div>'+
+     '<div class="grid">'+
+       '<div class="f"><label>Moneda</label><select id="pj_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
+       '<div class="f"><label>Tipo</label><select id="pj_tipo"><option value="Credito">Le debemos más</option><option value="Debito">Le debemos menos</option></select></div>'+
+       '<div class="f"><label>Importe</label><input type="number" step="0.01" id="pj_importe"></div>'+
+     '</div><div class="f"><label>Detalle *</label><input id="pj_detalle" placeholder="Por qué se ajusta"></div>'+
+     '<div class="acciones"><button class="btn2" onclick="ajustarPV('+p.id+')">Registrar movimiento</button></div>':'');
+}
+async function guardarProveedor(id){
+  const o = {nombre:$("pv_nombre").value.trim(), dni_cuit:$("pv_dni_cuit").value||null, cat_iva:$("pv_cat_iva").value||null,
+    email:$("pv_email").value||null, telefono:$("pv_telefono").value||null, celular:$("pv_celular").value||null,
+    direccion:$("pv_direccion").value||null, localidad_id:$("pv_localidad_id").value?Number($("pv_localidad_id").value):null,
+    observaciones:$("pv_observaciones").value||null, activo:$("pv_activo").value==="1"};
+  if (!o.nombre){ $("pvmsg").innerHTML='<div class="msg err">Falta la razón social.</div>'; return; }
+  const r = id ? await sb.from("proveedores").update(o).eq("id",id) : await sb.from("proveedores").insert(o).select("id").single();
+  if (r.error){ $("pvmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  await cargarProveedores();
+  if (!id && r.data) return fichaProveedor(r.data.id);
+  $("pvmsg").innerHTML='<div class="msg ok">Guardado.</div>';
+  if (VISTA==="provee") VISTAS.provee();
+}
+async function guardarPreciosProv(provId){
+  const filas = [];
+  PRODS.filter(x=>x.activo).forEach(function(x){
+    const a = $("pp_"+x.id+"_ars"), u = $("pp_"+x.id+"_usd");
+    if (!a || !u) return;
+    const va = a.value===""?null:Number(a.value), vu = u.value===""?null:Number(u.value);
+    if (va!=null || vu!=null) filas.push({proveedor_id:provId, producto_id:x.id, precio_ars:va, precio_usd:vu});
+  });
+  await sb.from("proveedor_precios").delete().eq("proveedor_id",provId);
+  if (filas.length){
+    const r = await sb.from("proveedor_precios").insert(filas);
+    if (r.error){ $("pvmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  }
+  $("pvmsg").innerHTML='<div class="msg ok">Lista de precios guardada: '+filas.length+' producto'+(filas.length===1?"":"s")+'.</div>';
+}
+async function ajustarPV(provId){
+  const imp = Number($("pj_importe").value||0);
+  if (!(imp>0)){ $("pvmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+  const {error} = await sb.rpc("registrar_pv_manual",{p_proveedor:provId, p_moneda:$("pj_moneda").value||"ARS",
+    p_tipo:$("pj_tipo").value, p_importe:imp, p_detalle:$("pj_detalle").value||"Ajuste"});
+  if (error){ $("pvmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarProveedores();
+  fichaProveedor(provId);
+}
+async function anularPV(movId, provId){
+  const motivo = prompt("¿Por qué se anula este movimiento?");
+  if (motivo === null) return;
+  const {error} = await sb.rpc("anular_pv_movimiento",{p_id:movId, p_motivo:motivo||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarProveedores();
+  fichaProveedor(provId);
+}
+
 /* ═══════════ VENTAS ═══════════ */
 let FVEN = {texto:"", desde:"", hasta:"", anulados:false};
 VISTAS.ventas = async function(){
@@ -1903,6 +2068,15 @@ async function finResumen(){
       else { ef.favor[x.moneda] = (ef.favor[x.moneda]||0) - v; }
     });
     ef.deudores.sort((a,b)=>Number(b.saldo)-Number(a.saldo));
+    ef.pagar = {}; ef.favorProv = {};
+    if (P("compra-consultar") && await db16()){
+      const sp = await sb.from("v_saldos_proveedor").select("*");
+      (sp.data||[]).forEach(function(x){
+        const v = Number(x.saldo||0); if (!x.moneda || !v) return;
+        if (v > 0) ef.pagar[x.moneda] = (ef.pagar[x.moneda]||0) + v;
+        else ef.favorProv[x.moneda] = (ef.favorProv[x.moneda]||0) - v;
+      });
+    }
     (ivaV.data||[]).forEach(v=>{ ef.ivaDeb[v.moneda] = (ef.ivaDeb[v.moneda]||0) + Number(v.iva||0); });
     (ivaG.data||[]).forEach(g=>{ ef.ivaCred[g.moneda] = (ef.ivaCred[g.moneda]||0) + Number(g.iva||0); });
   }
@@ -1910,10 +2084,12 @@ async function finResumen(){
     const linea = (t,obj) => '<tr><td>'+t+'</td><td style="text-align:right">'+(fmtM(obj.ARS||0,"ARS")||"$ 0")+'</td><td style="text-align:right">'+(fmtM(obj.USD||0,"USD")||"US$ 0")+'</td></tr>';
     const nomC = id => { const c = CLIS.find(x=>x.id===id); return c ? c.nombre : ("#"+id); };
     html += '<div class="panel"><h2>Estado financiero</h2>'+
-      '<div class="desc">Lo que hay que cobrar y lo que hay que pagar, aparte de la plata que ya está en las cuentas. Las cuentas a pagar a proveedores y los cheques por cubrir se van a sumar acá cuando construyamos compras y cheques.</div>'+
+      '<div class="desc">Lo que hay que cobrar y lo que hay que pagar, aparte de la plata que ya está en las cuentas. Los cheques por cubrir se van a sumar acá cuando construyamos la pantalla de cheques.</div>'+
       '<div class="tablewrap"><table><thead><tr><th></th><th style="text-align:right">ARS</th><th style="text-align:right">USD</th></tr></thead><tbody>'+
       linea("Cuentas a cobrar (deuda de clientes)", ef.cobrar)+
       linea("A favor de clientes (señas o pagos de más)", ef.favor)+
+      linea("Cuentas a pagar (deuda con proveedores)", ef.pagar||{})+
+      linea("A favor sobre proveedores", ef.favorProv||{})+
       linea("IVA débito fiscal (por ventas)", ef.ivaDeb)+
       linea("IVA crédito fiscal (por gastos)", ef.ivaCred)+
       '</tbody></table></div>'+
