@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-11";
+const VERSION = "v2026.08.02-12";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -258,6 +258,7 @@ const MENU = [
   {id:"agenda",   t:"Agenda ATO",      perm:"visita-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
   {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
+  {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
@@ -936,7 +937,15 @@ async function maestraGuardar(k, id){
 }
 
 /* ═══════════ PRESUPUESTOS ═══════════ */
-const ESTADOS_PRE = ["Abierto","Enviado","Aceptado","Rechazado","Vencido","Anulado"];
+const ESTADOS_PRE = ["Abierto","Enviado","Vendido","Rechazado","Vencido","Anulado"];
+const pillE = e => '<span class="pill '+((e==="Vendido"||e==="Aceptado")?"ok":(e==="Rechazado"||e==="Anulado")?"no":e==="Enviado"?"sen":"esp")+'">'+esc(e)+'</span>';
+/* detecta si la base ya tiene la migracion de ventas */
+async function db12(){
+  if (window._db12 !== undefined) return window._db12;
+  const t = await sb.from("ventas").select("id").limit(1);
+  window._db12 = !t.error;
+  return window._db12;
+}
 let FPRE = {estado:"", desde:"", hasta:"", texto:""};
 
 VISTAS.presup = function(){
@@ -965,7 +974,6 @@ async function pintarPresupuestos(){
   const {data,error} = await q;
   if (error){ $("qlista").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
   if (!data.length){ $("qlista").innerHTML = '<div class="muted">Todavía no hay presupuestos con ese filtro.</div>'; return; }
-  const pillE = e => '<span class="pill '+(e==="Aceptado"?"ok":(e==="Rechazado"||e==="Anulado")?"no":e==="Enviado"?"sen":"esp")+'">'+esc(e)+'</span>';
   $("qlista").innerHTML = '<div class="muted" style="margin-bottom:8px">'+data.length+' presupuesto'+(data.length===1?"":"s")+'</div>'+
    '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
    ['Código','Fecha','Cliente','Localidad','Tipo','N° papel','Estado','Neto','IVA','Total'].map(h=>'<th>'+h+'</th>').join("")+
@@ -1173,6 +1181,7 @@ function presClienteElegido(){
 async function guardarPresupuesto(){
   sincro();
   await db9();
+  const estadoAntes = PRE.cab.estado;
   const o = {};
   CAMPOS_PRE.forEach(function(c){ const el=$("w_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PRE.indexOf(c)>=0) v=Number(v); o[c]=v; });
   if (!window._db9) delete o.cliente_id;
@@ -1209,11 +1218,33 @@ async function guardarPresupuesto(){
     if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">Adicional '+(k+1)+': '+esc(r.error.message)+'</div>'; return; }
     if (!x.id && r.data) x.id = r.data.id;
   }
+  let msgVenta = "";
+  if (o.estado === "Vendido" && estadoAntes !== "Vendido"){
+    // pasar a Vendido genera la venta: debita la cuenta corriente del cliente,
+    // igual que en el sistema original. Si algo falta, el estado vuelve atras.
+    let errV = null;
+    if (!(await db12())) errV = "Falta correr la migración de ventas en la base.";
+    else {
+      const rv = await sb.rpc("registrar_venta_desde_presupuesto", {p_presupuesto:id});
+      if (rv.error) errV = rv.error.message;
+    }
+    if (errV){
+      await sb.from("presupuestos").update({estado: estadoAntes||"Abierto"}).eq("id",id);
+      const fx = await sb.from("presupuestos").select("*").eq("id",id).single();
+      if (fx.data) PRE.cab = fx.data;
+      $("w_guardar").disabled = false;
+      pintarFichaPre();
+      $("qmsg").innerHTML = '<div class="msg err">El presupuesto se guardó, pero <b>no se pudo registrar la venta</b>: '+esc(errV)+'</div>';
+      if (VISTA==="presup") pintarPresupuestos();
+      return;
+    }
+    msgVenta = ' <b>Venta registrada</b>: se generó la deuda en la cuenta corriente del cliente.';
+  }
   const fresco = await sb.from("presupuestos").select("*").eq("id",id).single();
   if (fresco.data) PRE.cab = fresco.data;
   $("w_guardar").disabled = false;
   pintarFichaPre();
-  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.</div>';
+  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.'+msgVenta+'</div>';
   if (VISTA==="presup") pintarPresupuestos();
 }
 
@@ -1255,6 +1286,79 @@ function imprimirPresupuesto(){
   setTimeout(function(){ w.print(); }, 400);
 }
 
+
+/* ═══════════ VENTAS ═══════════ */
+let FVEN = {texto:"", desde:"", hasta:"", anulados:false};
+VISTAS.ventas = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await db12())){ $("main").innerHTML = '<div class="panel"><h2>Ventas</h2><div class="msg err">Falta correr la migración de ventas en la base.</div></div>'; return; }
+  if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
+  let q = sb.from("ventas").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
+  if (FVEN.desde) q = q.gte("fecha", FVEN.desde);
+  if (FVEN.hasta) q = q.lte("fecha", FVEN.hasta);
+  if (!FVEN.anulados) q = q.eq("anulado", false);
+  const {data,error} = await q;
+  if (error){ $("main").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const nomCli = id => { const c = CLIS.find(x=>x.id===id); return c ? c.nombre : ("cliente #"+id); };
+  const t = FVEN.texto.toLowerCase();
+  const rows = (data||[]).filter(v => !t || ((v.codigo||"")+" "+nomCli(v.cliente_id)+" "+(v.observaciones||"")).toLowerCase().indexOf(t)>=0);
+  $("main").innerHTML = '<div class="panel"><h2>Ventas</h2>'+
+   '<div class="desc">Cada venta nace de un presupuesto pasado a «Vendido» y genera sola la deuda en la cuenta corriente del cliente. No se borra: se anula, y la anulación revierte la deuda.</div>'+
+   '<div class="filtros">'+
+     '<div><label>Desde</label><input type="date" id="vf_desde" value="'+FVEN.desde+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="vf_hasta" value="'+FVEN.hasta+'"></div>'+
+     '<div><label>Anuladas</label><select id="vf_anul"><option value="0" '+(FVEN.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FVEN.anulados?"selected":"")+'>Mostrar</option></select></div>'+
+     '<div style="min-width:240px"><label>Buscar</label><input id="vf_txt" placeholder="código, cliente u observaciones" value="'+esc(FVEN.texto)+'"></div>'+
+     '<div style="min-width:auto"><button class="btn" id="vf_btn">Filtrar</button></div></div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Fecha','Cliente','Neto','IVA','Total',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(v=>'<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
+       '<td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td><td>'+esc(nomCli(v.cliente_id))+'</td>'+
+       '<td>'+fmtM(v.neto,v.moneda)+'</td><td>'+fmtM(v.iva,v.moneda)+'</td><td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
+       '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">No hay ventas con esos filtros. La primera se genera pasando un presupuesto a estado «Vendido».</div>')+'</div>';
+  $("vf_btn").onclick = function(){ FVEN={texto:$("vf_txt").value.trim(), desde:$("vf_desde").value, hasta:$("vf_hasta").value, anulados:$("vf_anul").value==="1"}; VISTAS.ventas(); };
+};
+async function fichaVenta(id){
+  const [v,i] = await Promise.all([
+    sb.from("ventas").select("*").eq("id",id).single(),
+    sb.from("venta_items").select("*").eq("venta_id",id).order("id")
+  ]);
+  if (v.error) return alert(v.error.message);
+  const ve = v.data, items = i.data||[];
+  if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
+  const cli = CLIS.find(x=>x.id===ve.cliente_id);
+  $("dtit").textContent = ve.codigo + " · " + (cli?cli.nombre:"");
+  $("dbody").innerHTML = '<div id="vnmsg"></div>'+
+   (ve.anulado?'<div class="msg err">Venta <b>anulada</b> el '+fmtF(ve.anulado_en)+'. Motivo: '+esc(ve.motivo_anulacion)+'. La deuda en cuenta corriente quedó revertida.</div>':'')+
+   '<div class="sec">Datos</div><div class="grid">'+
+     '<div class="f"><label>Fecha</label><div>'+fmtF(ve.fecha)+'</div></div>'+
+     '<div class="f"><label>Cliente</label><div>'+esc(cli?cli.nombre:("#"+ve.cliente_id))+'</div></div>'+
+     '<div class="f"><label>Moneda</label><div>'+esc(ve.moneda)+'</div></div>'+
+     '<div class="f"><label>Total</label><div><b>'+fmtM(ve.total,ve.moneda)+'</b> (neto '+fmtM(ve.neto,ve.moneda)+' + IVA '+fmtM(ve.iva,ve.moneda)+')</div></div>'+
+   '</div>'+
+   '<div class="sec">Renglones</div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Descripción</th><th>Cant.</th><th>Un.</th><th>Precio</th><th>IVA %</th><th>Entregado</th></tr></thead><tbody>'+
+   items.map(x=>'<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'><td style="white-space:normal;min-width:220px">'+esc(x.descripcion)+(x.es_adicional?' <span class="muted">(adicional)</span>':'')+'</td>'+
+     '<td>'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td><td>'+fmtM(x.precio_unit,ve.moneda)+'</td><td>'+fmtN(x.iva_pct)+'</td><td>'+fmtN(x.entregado)+' de '+fmtN(x.cantidad)+'</td></tr>').join("")+
+   '</tbody></table></div>'+
+   '<div class="muted" style="margin-top:6px">«Entregado» se va a completar solo con los remitos cuando exista el módulo de stock.</div>'+
+   '<div class="acciones">'+
+     (ve.presupuesto_id?'<button class="btn2" onclick="abrirPresupuesto('+ve.presupuesto_id+')">Ver el presupuesto</button>':'')+
+     (cli?'<button class="btn2" onclick="fichaCliente('+cli.id+')">Ver el cliente</button>':'')+
+     (!ve.anulado && P("venta-anular")?'<button class="btn2" onclick="anularVenta('+ve.id+')">Anular venta</button>':'')+
+   '</div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function anularVenta(id){
+  const motivo = prompt("¿Por qué se anula esta venta? La deuda del cliente se revierte.");
+  if (motivo === null) return;
+  const {error} = await sb.rpc("anular_venta", {p_id:id, p_motivo:motivo||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarClientes();
+  fichaVenta(id);
+  if (VISTA==="ventas") VISTAS.ventas();
+}
 
 /* ═══════════ CLIENTES Y CUENTA CORRIENTE ═══════════ */
 let CLIS = [], SALDOS = {}, FCLI = "";
@@ -1323,6 +1427,11 @@ async function fichaCliente(id){
       pres.sort((a,b)=>b.id-a.id);
     }
   }
+  let ventasCli = [];
+  if (c && (await db12()) && P("venta-consultar")){
+    const vv = await sb.from("ventas").select("id,codigo,fecha,total,moneda,anulado").eq("cliente_id",c.id).order("id",{ascending:false});
+    ventasCli = vv.data||[];
+  }
   $("dtit").textContent = c ? (c.codigo+" · "+c.nombre) : "Cliente nuevo";
   $("dbody").innerHTML = '<div id="clmsg"></div>'+
    '<div class="sec">Datos del cliente</div><div class="grid">'+
@@ -1341,6 +1450,7 @@ async function fichaCliente(id){
    '<div class="f"><label>Observaciones</label><textarea id="y_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
    (puede?'<div class="acciones"><button class="btn" id="y_guardar">'+(c?"Guardar cambios":"Crear cliente")+'</button></div>':'')+
    (c? seccionPresCli(c, pres) : '') +
+   (c? seccionVentasCli(c, ventasCli) : '') +
    (c? seccionCC(c, seg) : '') +
    (c? seccionNotas(c, notas, tnotas) : '');
   if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
@@ -1354,8 +1464,17 @@ function seccionPresCli(c, pres){
      pres.map(p=>'<tr style="cursor:pointer" onclick="abrirPresupuesto('+p.id+')"><td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td><td>'+esc(p.tipo)+'</td><td>'+pillE(p.estado)+'</td><td><b>'+fmtM(p.total,p.moneda)+'</b></td></tr>').join("")+
      '</tbody></table></div>'
     : '<div class="muted">Todavía no tiene presupuestos.</div>')+
-   (P("presupuesto-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="presupuestoDesdeCliente('+c.id+')">+ Presupuesto para este cliente</button></div>':'')+
-   '<div class="sec">Ventas y remitos</div><div class="muted">Las ventas y los remitos de este cliente van a aparecer acá cuando construyamos ese módulo, que es el próximo de la lista. La cuenta corriente de abajo ya está preparada para recibirlos.</div>';
+   (P("presupuesto-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="presupuestoDesdeCliente('+c.id+')">+ Presupuesto para este cliente</button></div>':'');
+}
+function seccionVentasCli(c, ventas){
+  if (!window._db12 || !P("venta-consultar")) return '';
+  return '<div class="sec">Ventas</div>'+
+   (ventas.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Fecha</th><th>Total</th><th></th></tr></thead><tbody>'+
+     ventas.map(v=>'<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')"><td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td><td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
+       '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
+     '</tbody></table></div>'
+    : '<div class="muted">Todavía no tiene ventas. Un presupuesto pasado a estado «Vendido» genera la venta y la deuda en la cuenta corriente, solo.</div>')+
+   '<div class="muted" style="margin-top:4px">Los remitos de entrega van a aparecer acá cuando construyamos stock y remitos.</div>';
 }
 function seccionNotas(c, notas, tnotas){
   if (!window._db9) return '';
