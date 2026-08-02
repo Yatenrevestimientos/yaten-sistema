@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-12";
+const VERSION = "v2026.08.02-13";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -214,15 +214,19 @@ async function arrancar(){
 }
 
 async function cargarMaestras(){
-  const [loc,can,ori,obj,mot,per] = await Promise.all([
+  const [loc,can,ori,obj,mot,per,cga,cco,tno] = await Promise.all([
     sb.from("localidades").select("id,nombre,zona,activo").order("nombre"),
     sb.from("canales_contacto").select("id,nombre,activo").order("nombre"),
     sb.from("origenes").select("id,nombre,tipo,activo").order("nombre"),
     sb.from("objeciones").select("id,nombre,etapa,activo").order("id"),
     sb.from("motivos").select("id,nombre,aplica_a,activo").order("id"),
-    sb.from("perfiles").select("id,nombre,rol,activo,comision_pct").order("nombre")
+    sb.from("perfiles").select("id,nombre,rol,activo,comision_pct").order("nombre"),
+    sb.from("conceptos_gasto").select("id,nombre,activo").order("nombre"),
+    sb.from("conceptos_cobranza").select("id,nombre,activo").order("nombre"),
+    sb.from("tipos_nota").select("id,nombre,activo").order("id")
   ]);
-  M = {loc:loc.data||[], can:can.data||[], ori:ori.data||[], obj:obj.data||[], mot:mot.data||[]};
+  M = {loc:loc.data||[], can:can.data||[], ori:ori.data||[], obj:obj.data||[], mot:mot.data||[],
+       cga:cga.data||[], cco:cco.data||[], tno:tno.data||[]};
   EQUIPO = per.data||[];
 }
 async function cargarCatalogo(){
@@ -863,7 +867,16 @@ const MAESTRAS = [
    cols:[{c:"etapa", t:"Etapa", ph:"Entrada, Visita, Ambas"}]},
   {k:"mot", tabla:"motivos",          titulo:"Motivos de descarte",
    ayuda:"Por qué se cae un prospecto o un presupuesto.",
-   cols:[{c:"aplica_a", t:"Aplica a", ph:"Prospecto o Presupuesto"}]}
+   cols:[{c:"aplica_a", t:"Aplica a", ph:"Prospecto o Presupuesto"}]},
+  {k:"cga", tabla:"conceptos_gasto",  titulo:"Conceptos de egresos",
+   ayuda:"La familia de cada gasto: local, sueldos, publicidad, impuestos. Cada gasto se cuelga de un concepto y el detalle va aparte, así el reporte por concepto te muestra todos los gastos de esa familia. También se pueden agregar desde el propio formulario de gasto.",
+   cols:[]},
+  {k:"cco", tabla:"conceptos_cobranza", titulo:"Conceptos de cobranza",
+   ayuda:"Cómo entra la plata de los clientes: seña, anticipo, saldo. También se agregan desde el formulario de cobranza.",
+   cols:[]},
+  {k:"tno", tabla:"tipos_nota",       titulo:"Tipos de nota del cliente",
+   ayuda:"Las familias del historial de notas: seguimiento, reparación, reclamo, aviso. También se agregan desde la ficha del cliente.",
+   cols:[]}
 ];
 
 VISTAS.maestras = function(){
