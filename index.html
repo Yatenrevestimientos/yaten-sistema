@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-18";
+const VERSION = "v2026.08.02-19";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2239,7 +2239,7 @@ async function guardarVentaDirecta(){
 }
 
 /* ═══════════ CLIENTES Y CUENTA CORRIENTE ═══════════ */
-let CLIS = [], SALDOS = {}, FCLI = "";
+let CLIS = [], SALDOS = {}, FCLI = "", FDEUDA = false;
 async function cargarClientes(){
   if (!P("cliente-consultar")) return;
   const [c,s] = await Promise.all([
@@ -2257,12 +2257,26 @@ VISTAS.clientes = async function(){
   await cargarClientes();
   const puede = P("cliente-agregar");
   const t = FCLI.toLowerCase();
-  const rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)+" "+(c.observaciones||"")).toLowerCase().indexOf(t)>=0);
+  let rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)+" "+(c.observaciones||"")).toLowerCase().indexOf(t)>=0);
+  // los morosos: quienes me deben plata, ordenados de mayor a menor
+  const debe = c => Math.max(saldoCli(c.id,'ARS'),0) + Math.max(saldoCli(c.id,'USD'),0);
+  if (FDEUDA){
+    rows = rows.filter(c => saldoCli(c.id,'ARS') > 0 || saldoCli(c.id,'USD') > 0)
+               .sort((a,b) => debe(b) - debe(a));
+  }
+  const totDeuda = {ARS:0, USD:0};
+  rows.forEach(function(c){ ['ARS','USD'].forEach(function(m){ const v = saldoCli(c.id,m); if (v>0) totDeuda[m] += v; }); });
+  const cuantosDeben = CLIS.filter(c => saldoCli(c.id,'ARS')>0 || saldoCli(c.id,'USD')>0).length;
   $("main").innerHTML = '<div class="panel"><h2>Clientes</h2>'+
    '<div class="desc">Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.</div>'+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
+   '<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>'+
    '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
+   ((FDEUDA||totDeuda.ARS>0||totDeuda.USD>0)? '<div class="kpis" style="margin-bottom:10px">'+
+      '<div class="kpi" style="border-left-color:#7a2415"><div class="t">'+(FDEUDA?'Me deben':'Total a cobrar')+' en pesos</div><div class="n">'+(fmtM(totDeuda.ARS,"ARS")||"$ 0")+'</div><div class="muted">'+rows.filter(c=>saldoCli(c.id,"ARS")>0).length+' cliente'+(rows.filter(c=>saldoCli(c.id,"ARS")>0).length===1?"":"s")+'</div></div>'+
+      '<div class="kpi" style="border-left-color:#7a2415"><div class="t">'+(FDEUDA?'Me deben':'Total a cobrar')+' en dólares</div><div class="n">'+(fmtM(totDeuda.USD,"USD")||"US$ 0")+'</div><div class="muted">'+rows.filter(c=>saldoCli(c.id,"USD")>0).length+' cliente'+(rows.filter(c=>saldoCli(c.id,"USD")>0).length===1?"":"s")+'</div></div>'+
+    '</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Nombre / Razón social','Localidad','Teléfono','Email','Saldo ARS','Saldo USD'].map(h=>'<th>'+h+'</th>').join("")+
      '</tr></thead><tbody>'+rows.map(function(c){
@@ -2272,9 +2286,10 @@ VISTAS.clientes = async function(){
         '<td>'+esc(c.celular||c.telefono||"")+'</td><td>'+esc(c.email)+'</td>'+
         '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
         '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td></tr>';
-     }).join("")+'</tbody></table></div>' : '<div class="muted">Todavía no hay clientes cargados.</div>')+
+     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.'))+'</div>')+
    '</div>';
-  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); VISTAS.clientes(); };
+  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
+  $("cf_deuda").onchange = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
   if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
 };
 
@@ -2471,6 +2486,7 @@ async function formCobranza(cliId){
    '<div class="sec">Registrar cobranza</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><input type="date" id="k_fecha" value="'+hoy()+'"></div>'+
      '<div class="f"><label>Cuenta corriente</label><select id="k_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
+     '<div class="f"><label>Tipo de cuenta</label><select id="k_tipo_cta" onchange="filtrarCtasCobranza()"><option value="">Todas</option>'+TCTAS.filter(t=>t.activo).map(t=>'<option value="'+t.id+'">'+esc(t.nombre)+'</option>').join("")+'</select></div>'+
      '<div class="f"><label>¿En qué cuenta entra la plata?</label><select id="k_cuenta">'+optCtas(cuentas)+'</select></div>'+
      '<div class="f"><label>Importe en la cuenta corriente</label><input type="number" step="0.01" id="k_importe" oninput="calcCobranza()"></div>'+
      '<div class="f" id="k_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="k_tc" oninput="calcCobranza()" placeholder="pesos por dólar"></div>'+
@@ -2481,6 +2497,7 @@ async function formCobranza(cliId){
    '<div class="f"><label>Observaciones</label><textarea id="k_obs" rows="2"></textarea></div>'+
    '<div class="muted" id="k_nota">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
    '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+  window._CTAS_COB = cuentas;
   $("k_moneda").onchange = calcCobranza;
   $("k_cuenta").onchange = calcCobranza;
   calcCobranza();
@@ -2499,6 +2516,17 @@ async function formCobranza(cliId){
     await cargarClientes();
     fichaCliente(cliId);
   };
+}
+/* el tipo de cuenta acota el desplegable, como en Pirka: primero Efectivo/Banco/Cheques y despues la cuenta */
+function filtrarCtasCobranza(){
+  const t = $("k_tipo_cta").value;
+  const lista = (window._CTAS_COB||[]).filter(c => !t || String(c.tipo_cuenta_id)===String(t));
+  const sel = $("k_cuenta");
+  const antes = sel.value;
+  sel.innerHTML = optCtas(lista);
+  if (lista.some(c=>String(c.id)===String(antes))) sel.value = antes;
+  if (!lista.length) sel.innerHTML = '<option value="">— no hay cuentas de ese tipo —</option>';
+  calcCobranza();
 }
 async function concCobAgregar(cliId){
   const n = $("k_conc_nuevo").value.trim(); if (!n) return;
