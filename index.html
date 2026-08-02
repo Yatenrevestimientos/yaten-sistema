@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-13";
+const VERSION = "v2026.08.02-14";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1685,9 +1685,47 @@ VISTAS.finanzas = async function(){
   ({resumen:finResumen, cuentas:finCuentas, movs:finMovs, gastos:finGastos, transf:finTransf, retiros:finRetiros}[FIN.tab]||finResumen)();
 };
 
-function finResumen(){
+async function finResumen(){
   const monedas = ["ARS","USD"];
   let html = "";
+  // Estado financiero, como el reporte de finanzas de Pirka:
+  // cuentas a cobrar / a favor de clientes salen de la cuenta corriente;
+  // cuentas a pagar y cheques por cubrir se suman cuando existan compras y cheques.
+  let ef = null;
+  if (P("cliente-consultar")){
+    await db12();
+    const [s, ivaV, ivaG] = await Promise.all([
+      sb.from("v_saldos_cliente").select("*"),
+      window._db12 ? sb.from("ventas").select("iva,moneda,anulado").eq("anulado",false) : Promise.resolve({data:[]}),
+      sb.from("gastos").select("iva,moneda,anulado").eq("anulado",false)
+    ]);
+    if (!CLIS.length) await cargarClientes();
+    ef = {cobrar:{}, favor:{}, deudores:[], ivaDeb:{}, ivaCred:{}};
+    (s.data||[]).forEach(function(x){
+      const v = Number(x.saldo||0); if (!x.moneda || !v) return;
+      if (v > 0){ ef.cobrar[x.moneda] = (ef.cobrar[x.moneda]||0) + v; ef.deudores.push(x); }
+      else { ef.favor[x.moneda] = (ef.favor[x.moneda]||0) - v; }
+    });
+    ef.deudores.sort((a,b)=>Number(b.saldo)-Number(a.saldo));
+    (ivaV.data||[]).forEach(v=>{ ef.ivaDeb[v.moneda] = (ef.ivaDeb[v.moneda]||0) + Number(v.iva||0); });
+    (ivaG.data||[]).forEach(g=>{ ef.ivaCred[g.moneda] = (ef.ivaCred[g.moneda]||0) + Number(g.iva||0); });
+  }
+  if (ef){
+    const linea = (t,obj) => '<tr><td>'+t+'</td><td style="text-align:right">'+(fmtM(obj.ARS||0,"ARS")||"$ 0")+'</td><td style="text-align:right">'+(fmtM(obj.USD||0,"USD")||"US$ 0")+'</td></tr>';
+    const nomC = id => { const c = CLIS.find(x=>x.id===id); return c ? c.nombre : ("#"+id); };
+    html += '<div class="panel"><h2>Estado financiero</h2>'+
+      '<div class="desc">Lo que hay que cobrar y lo que hay que pagar, aparte de la plata que ya está en las cuentas. Las cuentas a pagar a proveedores y los cheques por cubrir se van a sumar acá cuando construyamos compras y cheques.</div>'+
+      '<div class="tablewrap"><table><thead><tr><th></th><th style="text-align:right">ARS</th><th style="text-align:right">USD</th></tr></thead><tbody>'+
+      linea("Cuentas a cobrar (deuda de clientes)", ef.cobrar)+
+      linea("A favor de clientes (señas o pagos de más)", ef.favor)+
+      linea("IVA débito fiscal (por ventas)", ef.ivaDeb)+
+      linea("IVA crédito fiscal (por gastos)", ef.ivaCred)+
+      '</tbody></table></div>'+
+      (ef.deudores.length? '<div class="sec">Clientes con deuda</div><div class="tablewrap" style="max-height:280px;overflow:auto"><table><thead><tr><th>Cliente</th><th>Moneda</th><th style="text-align:right">Debe</th></tr></thead><tbody>'+
+        ef.deudores.map(d=>'<tr style="cursor:pointer" onclick="fichaCliente('+d.cliente_id+')"><td>'+esc(nomC(d.cliente_id))+'</td><td>'+esc(d.moneda)+'</td><td style="text-align:right;color:#7a2415"><b>'+fmtM(d.saldo,d.moneda)+'</b></td></tr>').join("")+
+        '</tbody></table></div>' : '<div class="muted">Ningún cliente debe plata ahora.</div>')+
+      '</div>';
+  }
   monedas.forEach(function(m){
     const grupos = TCTAS.map(function(t){
       const cs = CTAS.filter(c=>c.tipo_cuenta_id===t.id && c.moneda===m && c.activo);
