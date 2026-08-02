@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-10";
+const VERSION = "v2026.08.02-11";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -284,7 +284,7 @@ async function traerProspectos(f){
     if (f.estado) q = q.eq("estado", f.estado);
     if (f.ato) q = q.eq("ato_id", f.ato);
     if (f.vl)  q = q.eq("vl_id", f.vl);
-    if (f.texto) q = q.or("nombre.ilike.%"+f.texto+"%,codigo.ilike.%"+f.texto+"%,telefono.ilike.%"+f.texto+"%,celular.ilike.%"+f.texto+"%");
+    if (f.texto) q = q.or("nombre.ilike.%"+f.texto+"%,codigo.ilike.%"+f.texto+"%,telefono.ilike.%"+f.texto+"%,celular.ilike.%"+f.texto+"%,email.ilike.%"+f.texto+"%,direccion.ilike.%"+f.texto+"%,motivo_consulta.ilike.%"+f.texto+"%,nro_presup_papel.ilike.%"+f.texto+"%");
   }
   const {data,error} = await q;
   if (error){ alert("Error leyendo prospectos: "+error.message); return []; }
@@ -354,7 +354,7 @@ VISTAS.planilla = function(){
      '<div><label>Resultado</label><select id="fres"><option value="">Todos</option>'+RESULTADOS.map(r=>'<option '+(FILTROS.resultado===r?"selected":"")+'>'+r+'</option>').join("")+'</select></div>'+
      '<div><label>Estado</label><select id="fest"><option value="">Todos</option>'+ESTADOS.map(r=>'<option '+(FILTROS.estado===r?"selected":"")+'>'+r+'</option>').join("")+'</select></div>'+
      '<div><label>ATO</label><select id="fato"><option value="">Todos</option>'+EQUIPO.map(p=>'<option value="'+p.id+'" '+(FILTROS.ato===p.id?"selected":"")+'>'+esc(p.nombre)+'</option>').join("")+'</select></div>'+
-     '<div><label>Buscar</label><input id="ftxt" placeholder="nombre, código o teléfono" value="'+esc(FILTROS.texto)+'"></div>'+
+     '<div><label>Buscar</label><input id="ftxt" placeholder="nombre, teléfono, dirección, email, N° papel…" value="'+esc(FILTROS.texto)+'"></div>'+
      '<div style="min-width:auto"><button class="btn" id="fbtn">Filtrar</button></div>'+
      '<div style="min-width:auto"><button class="btn2" id="fclr">Limpiar</button></div>'+
    '</div><div id="plres" class="muted">Cargando…</div></div>';
@@ -602,11 +602,17 @@ VISTAS.segui = async function(){
       '<td>'+esc(p.codigo)+'</td><td>'+esc(p.nombre)+'</td><td>'+esc(p.celular||p.telefono||"")+'</td>'+
       '<td>'+esc(s.proxima_accion)+'</td><td style="white-space:normal;min-width:220px">'+esc(s.observacion)+'</td>'+
       '<td>'+esc(nomP(s.quien_id))+'</td><td>'+badge(p.resultado||"")+'</td></tr>'; };
-  const venc = (seg||[]).filter(s=>s.proxima_fecha<h), prox = (seg||[]).filter(s=>s.proxima_fecha>=h);
+  const ts = (window.FSEG||"").toLowerCase();
+  const pasa = s => { const p = pros[s.prospecto_id]||{};
+    return !ts || ((p.codigo||"")+" "+(p.nombre||"")+" "+(p.celular||"")+" "+(p.telefono||"")+" "+(s.proxima_accion||"")+" "+(s.observacion||"")).toLowerCase().indexOf(ts)>=0; };
+  const venc = (seg||[]).filter(s=>s.proxima_fecha<h && pasa(s)), prox = (seg||[]).filter(s=>s.proxima_fecha>=h && pasa(s));
   const bloque = (t,rows,de) => '<div class="panel"><h2>'+t+'</h2><div class="desc">'+de+'</div>'+
     (rows.length?'<div class="tablewrap"><table><thead><tr><th>Próxima</th><th>Código</th><th>Cliente</th><th>Contacto</th><th>Acción</th><th>Última observación</th><th>Quién</th><th>Resultado</th></tr></thead><tbody>'+rows.map(fila).join("")+'</tbody></table></div>':'<div class="muted">Nada pendiente.</div>')+'</div>';
-  $("main").innerHTML = bloque("Vencidos", venc, "Acciones cuya fecha ya pasó y siguen abiertas.") +
-                        bloque("Próximos", prox, "Agenda de contacto por delante.");
+  $("main").innerHTML = '<div class="panel"><div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="sg_txt" placeholder="cliente, teléfono, acción u observación" value="'+esc(window.FSEG||"")+'"></div>'+
+    '<div style="min-width:auto"><button class="btn" id="sg_btn">Buscar</button></div></div></div>'+
+    bloque("Vencidos", venc, "Acciones cuya fecha ya pasó y siguen abiertas.") +
+    bloque("Próximos", prox, "Agenda de contacto por delante.");
+  $("sg_btn").onclick = function(){ window.FSEG = $("sg_txt").value.trim(); VISTAS.segui(); };
 };
 
 /* ─────────── EFECTIVIDAD ─────────── */
@@ -677,7 +683,7 @@ VISTAS.productos = function(){
     '<div class="desc">El catálogo. De acá salen los precios de todos los presupuestos. El IVA se marca producto por producto.</div>'+
     '<div id="pmsg"></div>'+
     '<div class="filtros">'+
-      '<div><label>Buscar</label><input id="pf_txt" placeholder="código o nombre" value="'+esc(FPROD.texto)+'"></div>'+
+      '<div><label>Buscar</label><input id="pf_txt" placeholder="código, nombre, tipo o unidad" value="'+esc(FPROD.texto)+'"></div>'+
       '<div><label>Tipo</label><select id="pf_tipo"><option value="">Todos</option>'+TIPOSP.map(t=>'<option value="'+t.id+'" '+(FPROD.tipo==t.id?"selected":"")+'>'+esc(t.nombre)+'</option>').join("")+'</select></div>'+
       '<div><label>Mostrar</label><select id="pf_act"><option value="1" '+(FPROD.soloActivos?"selected":"")+'>Solo activos</option><option value="0" '+(!FPROD.soloActivos?"selected":"")+'>Todos</option></select></div>'+
       '<div style="min-width:auto"><button class="btn" id="pf_btn">Filtrar</button></div>'+
@@ -696,7 +702,7 @@ function pintarProductos(){
   const rows = PRODS.filter(function(p){
     if (FPROD.soloActivos && !p.activo) return false;
     if (FPROD.tipo && String(p.tipo_id) !== String(FPROD.tipo)) return false;
-    if (t && (p.codigo+" "+p.nombre).toLowerCase().indexOf(t) < 0) return false;
+    if (t && (p.codigo+" "+p.nombre+" "+nom(TIPOSP,p.tipo_id)+" "+(p.unidad||"")).toLowerCase().indexOf(t) < 0) return false;
     return true;
   });
   if (!rows.length){ $("plista").innerHTML = '<div class="muted">No hay productos con ese filtro. Usá «+ Producto nuevo» para cargar el primero.</div>'; return; }
@@ -941,7 +947,7 @@ VISTAS.presup = function(){
      '<div><label>Estado</label><select id="qf_est"><option value="">Todos</option>'+ESTADOS_PRE.map(e=>'<option '+(FPRE.estado===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
      '<div><label>Desde</label><input type="date" id="qf_desde" value="'+FPRE.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="qf_hasta" value="'+FPRE.hasta+'"></div>'+
-     '<div><label>Buscar</label><input id="qf_txt" placeholder="cliente o código" value="'+esc(FPRE.texto)+'"></div>'+
+     '<div><label>Buscar</label><input id="qf_txt" placeholder="cliente, teléfono, dirección de obra, código…" value="'+esc(FPRE.texto)+'"></div>'+
      '<div style="min-width:auto"><button class="btn" id="qf_btn">Filtrar</button></div>'+
      (P("presupuesto-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="qf_nuevo">+ Presupuesto nuevo</button></div>':'')+
    '</div><div id="qlista" class="muted">Cargando…</div></div>';
@@ -955,7 +961,7 @@ async function pintarPresupuestos(){
   if (FPRE.estado) q = q.eq("estado", FPRE.estado);
   if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
   if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
-  if (FPRE.texto)  q = q.or("cliente_nombre.ilike.%"+FPRE.texto+"%,codigo.ilike.%"+FPRE.texto+"%,nro_papel.ilike.%"+FPRE.texto+"%");
+  if (FPRE.texto)  q = q.or("cliente_nombre.ilike.%"+FPRE.texto+"%,codigo.ilike.%"+FPRE.texto+"%,nro_papel.ilike.%"+FPRE.texto+"%,cliente_tel.ilike.%"+FPRE.texto+"%,cliente_email.ilike.%"+FPRE.texto+"%,direccion_obra.ilike.%"+FPRE.texto+"%");
   const {data,error} = await q;
   if (error){ $("qlista").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
   if (!data.length){ $("qlista").innerHTML = '<div class="muted">Todavía no hay presupuestos con ese filtro.</div>'; return; }
@@ -1269,10 +1275,10 @@ VISTAS.clientes = async function(){
   await cargarClientes();
   const puede = P("cliente-agregar");
   const t = FCLI.toLowerCase();
-  const rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")).toLowerCase().indexOf(t)>=0);
+  const rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)+" "+(c.observaciones||"")).toLowerCase().indexOf(t)>=0);
   $("main").innerHTML = '<div class="panel"><h2>Clientes</h2>'+
    '<div class="desc">Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.</div>'+
-   '<div class="filtros"><div style="min-width:260px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, código, teléfono o documento" value="'+esc(FCLI)+'"></div>'+
+   '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
    '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
@@ -1525,7 +1531,7 @@ function formCredDeb(cliId){
 }
 
 /* ═══════════ FINANZAS ═══════════ */
-let FIN = {tab:"resumen", moneda:"ARS", desde:"", hasta:"", anulados:false};
+let FIN = {tab:"resumen", moneda:"ARS", desde:"", hasta:"", anulados:false, texto:""};
 let CTAS = [], TCTAS = [], CGASTOS = [];
 
 async function cargarFin(){
@@ -1651,9 +1657,10 @@ async function finMovs(){
      '<div><label>Desde</label><input type="date" id="mf_desde" value="'+FIN.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="mf_hasta" value="'+FIN.hasta+'"></div>'+
      '<div><label>Anulados</label><select id="mf_anul"><option value="0" '+(FIN.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FIN.anulados?"selected":"")+'>Mostrar</option></select></div>'+
+     '<div style="min-width:220px"><label>Buscar</label><input id="mf_txt" placeholder="detalle, cuenta o motivo" value="'+esc(FIN.texto||"")+'"></div>'+
      '<div style="min-width:auto"><button class="btn" id="mf_btn">Filtrar</button></div></div>'+
    '<div id="mlista" class="muted">Cargando…</div></div>';
-  $("mf_btn").onclick = function(){ FIN.moneda=$("mf_mon").value; FIN.desde=$("mf_desde").value; FIN.hasta=$("mf_hasta").value; FIN.anulados=$("mf_anul").value==="1"; finMovs(); };
+  $("mf_btn").onclick = function(){ FIN.moneda=$("mf_mon").value; FIN.desde=$("mf_desde").value; FIN.hasta=$("mf_hasta").value; FIN.anulados=$("mf_anul").value==="1"; FIN.texto=$("mf_txt").value.trim(); finMovs(); };
   let q = sb.from("movimientos_cuenta").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
   if (FIN.desde) q = q.gte("fecha", FIN.desde);
   if (FIN.hasta) q = q.lte("fecha", FIN.hasta+"T23:59:59");
@@ -1661,7 +1668,9 @@ async function finMovs(){
   const {data,error} = await q;
   if (error){ $("mlista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const ctaDe = id => { const c = CTAS.find(x=>x.id===id); return c?c:{nombre:"?",moneda:"ARS"}; };
-  const rows = (data||[]).filter(x=> !FIN.moneda || ctaDe(x.cuenta_id).moneda===FIN.moneda);
+  const tm = (FIN.texto||"").toLowerCase();
+  const rows = (data||[]).filter(x=> (!FIN.moneda || ctaDe(x.cuenta_id).moneda===FIN.moneda) &&
+    (!tm || ((x.detalle||"")+" "+(x.motivo||"")+" "+ctaDe(x.cuenta_id).nombre).toLowerCase().indexOf(tm)>=0));
   $("mlista").innerHTML = rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
     ['Cuenta','Fecha','Detalle','Crédito','Débito','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
     rows.map(function(x){ const c = ctaDe(x.cuenta_id);
@@ -1700,7 +1709,7 @@ async function finGastos(){
   const {data,error} = await q;
   if (error){ $("glista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const t = FG.texto.toLowerCase();
-  const rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")).toLowerCase().indexOf(t)>=0);
+  const rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")+" "+nom(CGASTOS,g.concepto_id)+" "+nom(CTAS,g.cuenta_id)).toLowerCase().indexOf(t)>=0);
   if (!rows.length){ $("glista").innerHTML='<div class="muted">No hay gastos con esos filtros.</div>'; return; }
   const vivos = rows.filter(g=>!g.anulado);
   const tot = m => vivos.filter(g=>g.moneda===m);
@@ -1778,16 +1787,21 @@ async function anularGasto(id){
 
 async function finTransf(){
   const puede = P("finanzas-modificar");
-  const {data} = await sb.from("transferencias").select("*").order("fecha",{ascending:false}).limit(300);
+  let {data} = await sb.from("transferencias").select("*").order("fecha",{ascending:false}).limit(300);
+  const tt = (window.FTR||"").toLowerCase();
+  if (tt) data = (data||[]).filter(t=>((t.observaciones||"")+" "+nom(CTAS,t.cuenta_origen_id)+" "+nom(CTAS,t.cuenta_destino_id)).toLowerCase().indexOf(tt)>=0);
   $("fbody").innerHTML = '<div class="panel"><h2>Transferencias entre cuentas</h2>'+
    '<div class="desc">Mover plata de una cuenta a otra. Si son de distinta moneda, se cargan los dos importes.</div><div id="trmsg"></div>'+
-   (puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="formTransf()">+ Transferencia</button></div>':'')+
+   '<div class="filtros"><div style="min-width:240px"><label>Buscar</label><input id="tr_txt" placeholder="cuenta u observaciones" value="'+esc(window.FTR||"")+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="tr_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formTransf()">+ Transferencia</button></div>':'')+'</div>'+
    ((data||[]).length? '<div class="tablewrap"><table><thead><tr>'+['Fecha','Origen','Importe','Destino','Importe','Obs.',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      data.map(t=>'<tr style="'+(t.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(t.fecha)+'</td><td>'+esc(nom(CTAS,t.cuenta_origen_id))+'</td>'+
        '<td>'+fmtM(t.importe_origen,t.moneda_origen)+'</td><td>'+esc(nom(CTAS,t.cuenta_destino_id))+'</td><td>'+fmtM(t.importe_destino,t.moneda_destino)+'</td>'+
        '<td style="white-space:normal">'+esc(t.observaciones)+'</td>'+
        '<td>'+(t.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularTransf('+t.id+')">Anular</button>':''))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Sin transferencias.</div>')+'</div>';
+  $("tr_btn").onclick = function(){ window.FTR = $("tr_txt").value.trim(); finTransf(); };
 }
 function formTransf(){
   const cs = CTAS.filter(c=>c.activo);
@@ -1834,15 +1848,20 @@ async function anularTransf(id){
 
 async function finRetiros(){
   const puede = P("finanzas-modificar");
-  const {data} = await sb.from("retiros").select("*").order("fecha",{ascending:false}).limit(300);
+  let {data} = await sb.from("retiros").select("*").order("fecha",{ascending:false}).limit(300);
+  const tt = (window.FRE||"").toLowerCase();
+  if (tt) data = (data||[]).filter(r=>((r.quien||"")+" "+(r.observaciones||"")+" "+nom(CTAS,r.cuenta_id)).toLowerCase().indexOf(tt)>=0);
   $("fbody").innerHTML = '<div class="panel"><h2>Retiros de dinero</h2>'+
    '<div class="desc">La plata que sale de una caja y no es un gasto del negocio.</div><div id="remsg"></div>'+
-   (puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="formRetiro()">+ Retiro</button></div>':'')+
+   '<div class="filtros"><div style="min-width:240px"><label>Buscar</label><input id="re_txt" placeholder="quién, cuenta u observaciones" value="'+esc(window.FRE||"")+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="re_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formRetiro()">+ Retiro</button></div>':'')+'</div>'+
    ((data||[]).length? '<div class="tablewrap"><table><thead><tr>'+['Fecha','Cuenta','Importe','Quién','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      data.map(r=>'<tr style="'+(r.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(r.fecha)+'</td><td>'+esc(nom(CTAS,r.cuenta_id))+'</td>'+
        '<td><b>'+fmtM(r.importe,r.moneda)+'</b></td><td>'+esc(r.quien)+'</td><td style="white-space:normal">'+esc(r.observaciones)+'</td>'+
        '<td>'+(r.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularRetiro('+r.id+')">Anular</button>':''))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Sin retiros.</div>')+'</div>';
+  $("re_btn").onclick = function(){ window.FRE = $("re_txt").value.trim(); finRetiros(); };
 }
 function formRetiro(){
   const cs = CTAS.filter(c=>c.activo);
