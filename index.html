@@ -144,7 +144,10 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
+const VERSION = "v2026.08.02-2";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
+let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
+let PRE = null;                                           // presupuesto abierto en edicion
 
 const P    = c => !!(PERFIL && PERFIL.permisos && PERFIL.permisos.includes(c));
 const $    = id => document.getElementById(id);
@@ -200,10 +203,11 @@ async function arrancar(){
   PERFIL = perf;
   if (!PERFIL.activo){ await sb.auth.signOut(); PERFIL=null; lmsg("Tu usuario está desactivado. Hablá con administración."); arrancando=false; return; }
   await cargarMaestras();
+  await cargarCatalogo();
   $("login").classList.add("hide");
   $("app").classList.remove("hide");
   $("hnom").textContent = PERFIL.nombre;
-  $("hrol").textContent = PERFIL.rol + " · " + (PERFIL.permisos||[]).length + " permisos";
+  $("hrol").textContent = PERFIL.rol + " · " + (PERFIL.permisos||[]).length + " permisos · " + VERSION;
   const primera = MENU.find(m=>!m.perm||P(m.perm));
   ir(primera ? primera.id : "tablero");
   arrancando = false;
@@ -221,6 +225,27 @@ async function cargarMaestras(){
   M = {loc:loc.data||[], can:can.data||[], ori:ori.data||[], obj:obj.data||[], mot:mot.data||[]};
   EQUIPO = per.data||[];
 }
+async function cargarCatalogo(){
+  if (!P("producto-consultar")) return;
+  const [pr,tp,li,pp] = await Promise.all([
+    sb.from("productos").select("*").order("codigo"),
+    sb.from("tipos_producto").select("id,nombre,activo").order("nombre"),
+    sb.from("listas_precios").select("*").order("id"),
+    sb.from("precios_por_lista").select("*")
+  ]);
+  PRODS = pr.data||[]; TIPOSP = tp.data||[]; LISTAS = li.data||[];
+  PRECIOS = {}; (pp.data||[]).forEach(x=>{ PRECIOS[x.lista_id+"_"+x.producto_id] = x; });
+}
+// precio de un producto segun lista y moneda: override por lista, si no el de la ficha con el ajuste de la lista
+function precioDe(prod, listaId, moneda){
+  if (!prod) return 0;
+  const ov = PRECIOS[listaId+"_"+prod.id];
+  const campo = moneda === "USD" ? "precio_usd" : "precio_ars";
+  if (ov && ov[campo] != null && ov[campo] !== "") return Number(ov[campo]);
+  const lista = LISTAS.find(l=>l.id==listaId);
+  const aj = lista ? Number(lista.ajuste_pct||0) : 0;
+  return Math.round(Number(prod[campo]||0) * (1 + aj/100) * 100) / 100;
+}
 const equipoRol = r => EQUIPO.filter(p=>p.activo && p.rol===r);
 const VLS  = () => equipoRol("VL").length  ? equipoRol("VL")  : EQUIPO.filter(p=>p.activo);
 const ATOS = () => equipoRol("ATO").length ? equipoRol("ATO") : EQUIPO.filter(p=>p.activo);
@@ -232,7 +257,9 @@ const MENU = [
   {id:"nuevo",    t:"Nuevo prospecto", perm:"prospecto-agregar"},
   {id:"agenda",   t:"Agenda ATO",      perm:"visita-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
+  {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
+  {id:"productos",t:"Productos",       perm:"producto-consultar"},
   {id:"equipo",   t:"Equipo",          perm:"usuario-consultar"},
   {id:"maestras", t:"Maestras",        perm:"maestra-consultar"}
 ];
@@ -610,6 +637,153 @@ async function guardarPerfil(id){
   if (!error) await cargarMaestras();
 }
 
+/* ═══════════ PRODUCTOS ═══════════ */
+const UNIDADES = ["m2","caja","unidad","ml","bolsa","kg","hora"];
+let FPROD = {texto:"", tipo:"", soloActivos:true};
+
+VISTAS.productos = function(){
+  const puedeAlta   = P("producto-agregar");
+  const puedeEditar = P("producto-modificar");
+  const puedePrecio = P("producto-precio");
+  $("main").innerHTML =
+    '<div class="panel"><h2>Productos</h2>'+
+    '<div class="desc">El catálogo. De acá salen los precios de todos los presupuestos. El IVA se marca producto por producto.</div>'+
+    '<div id="pmsg"></div>'+
+    '<div class="filtros">'+
+      '<div><label>Buscar</label><input id="pf_txt" placeholder="código o nombre" value="'+esc(FPROD.texto)+'"></div>'+
+      '<div><label>Tipo</label><select id="pf_tipo"><option value="">Todos</option>'+TIPOSP.map(t=>'<option value="'+t.id+'" '+(FPROD.tipo==t.id?"selected":"")+'>'+esc(t.nombre)+'</option>').join("")+'</select></div>'+
+      '<div><label>Mostrar</label><select id="pf_act"><option value="1" '+(FPROD.soloActivos?"selected":"")+'>Solo activos</option><option value="0" '+(!FPROD.soloActivos?"selected":"")+'>Todos</option></select></div>'+
+      '<div style="min-width:auto"><button class="btn" id="pf_btn">Filtrar</button></div>'+
+      (puedeAlta?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="pf_nuevo">+ Producto nuevo</button></div>':'')+
+    '</div>'+
+    '<div id="plista"></div></div>'+
+    (puedePrecio? bloqueListas() : '');
+  $("pf_btn").onclick = function(){ FPROD={texto:$("pf_txt").value.trim(), tipo:$("pf_tipo").value, soloActivos:$("pf_act").value==="1"}; pintarProductos(); };
+  if (puedeAlta) $("pf_nuevo").onclick = function(){ fichaProducto(null); };
+  pintarProductos();
+};
+function pintarProductos(){
+  const t = FPROD.texto.toLowerCase();
+  const rows = PRODS.filter(function(p){
+    if (FPROD.soloActivos && !p.activo) return false;
+    if (FPROD.tipo && String(p.tipo_id) !== String(FPROD.tipo)) return false;
+    if (t && (p.codigo+" "+p.nombre).toLowerCase().indexOf(t) < 0) return false;
+    return true;
+  });
+  if (!rows.length){ $("plista").innerHTML = '<div class="muted">No hay productos con ese filtro. Usá «+ Producto nuevo» para cargar el primero.</div>'; return; }
+  $("plista").innerHTML =
+   '<div class="muted" style="margin-bottom:8px">'+rows.length+' producto'+(rows.length===1?"":"s")+'</div>'+
+   '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
+   ['Código','Nombre','Tipo','Unidad','m² x caja','IVA %','Precio ARS','Precio USD','Costo USD','Venta','Activo'].map(h=>'<th>'+h+'</th>').join("")+
+   '</tr></thead><tbody>'+rows.map(function(p){
+     return '<tr style="cursor:pointer'+(p.activo?'':';opacity:.55')+'" onclick="fichaProducto('+p.id+')">'+
+       '<td><b>'+esc(p.codigo)+'</b></td><td>'+esc(p.nombre)+'</td><td>'+esc(nom(TIPOSP,p.tipo_id))+'</td>'+
+       '<td>'+esc(p.unidad)+'</td><td>'+fmtN(p.m2_por_caja)+'</td><td>'+fmtN(p.iva_pct)+'</td>'+
+       '<td>'+fmtM(p.precio_ars,"ARS")+'</td><td>'+fmtM(p.precio_usd,"USD")+'</td><td>'+fmtM(p.costo_usd,"USD")+'</td>'+
+       '<td>'+(p.disponible_venta?'<span class="pill ok">Sí</span>':'<span class="pill no">No</span>')+'</td>'+
+       '<td>'+(p.activo?"Sí":"No")+'</td></tr>';
+   }).join("")+'</tbody></table></div>';
+}
+function bloqueListas(){
+  return '<div class="panel"><h2>Listas de precios</h2>'+
+   '<div class="desc">Cada lista aplica un ajuste sobre el precio de la ficha del producto. Un menos 10 % es descuento profesional; un más 15 % sería recargo. Podés agregar las listas que quieras.</div>'+
+   '<div id="lmsg2"></div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Descripción</th><th>Ajuste %</th><th>Activa</th><th></th></tr></thead><tbody>'+
+   '<tr style="background:#f6fbf7"><td><input id="nl_nombre" placeholder="Nombre de la lista"></td><td><input id="nl_desc" placeholder="Para qué se usa"></td>'+
+   '<td><input id="nl_aj" type="number" step="0.1" placeholder="0"></td><td>—</td><td><button class="btn btn-sm" onclick="listaAgregar()">Agregar</button></td></tr>'+
+   LISTAS.map(function(l){ return '<tr'+(l.activo?'':' style="opacity:.55"')+'>'+
+     '<td><input id="el_'+l.id+'_nombre" value="'+esc(l.nombre)+'"></td>'+
+     '<td><input id="el_'+l.id+'_desc" value="'+esc(l.descripcion)+'"></td>'+
+     '<td><input id="el_'+l.id+'_aj" type="number" step="0.1" style="width:90px" value="'+(l.ajuste_pct==null?0:l.ajuste_pct)+'"></td>'+
+     '<td><select id="el_'+l.id+'_act"><option value="1" '+(l.activo?"selected":"")+'>Sí</option><option value="0" '+(!l.activo?"selected":"")+'>No</option></select></td>'+
+     '<td><button class="btn2 btn-sm" onclick="listaGuardar('+l.id+')">Guardar</button></td></tr>';
+   }).join("")+'</tbody></table></div></div>';
+}
+async function listaAgregar(){
+  const nombre = $("nl_nombre").value.trim();
+  if (!nombre){ $("lmsg2").innerHTML = '<div class="msg err">Poné un nombre.</div>'; return; }
+  const {error} = await sb.from("listas_precios").insert({nombre:nombre, descripcion:$("nl_desc").value||null, ajuste_pct:Number($("nl_aj").value||0), activo:true});
+  if (error){ $("lmsg2").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCatalogo(); VISTAS.productos();
+}
+async function listaGuardar(id){
+  const {error} = await sb.from("listas_precios").update({nombre:$("el_"+id+"_nombre").value.trim(), descripcion:$("el_"+id+"_desc").value||null,
+    ajuste_pct:Number($("el_"+id+"_aj").value||0), activo:$("el_"+id+"_act").value==="1"}).eq("id",id);
+  if (error){ $("lmsg2").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCatalogo(); VISTAS.productos();
+}
+
+function fichaProducto(id){
+  const p = id ? PRODS.find(x=>x.id===id) : null;
+  const nuevo = !p;
+  const puede = nuevo ? P("producto-agregar") : P("producto-modificar");
+  const puedePrecio = P("producto-precio");
+  const d  = puede ? "" : "disabled";
+  const dp = puedePrecio ? "" : "disabled";
+  const v = (c,def) => p ? (p[c]==null?"":p[c]) : (def===undefined?"":def);
+  $("dtit").textContent = nuevo ? "Producto nuevo" : (p.codigo+" · "+p.nombre);
+  $("dbody").innerHTML = '<div id="fpmsg"></div>'+
+   '<div class="sec">Identificación</div><div class="grid">'+
+     '<div class="f"><label>Código *</label><input id="q_codigo" value="'+esc(v("codigo"))+'" placeholder="SPC-EVO-1220-N01" '+d+'></div>'+
+     '<div class="f"><label>Nombre *</label><input id="q_nombre" value="'+esc(v("nombre"))+'" '+d+'></div>'+
+     '<div class="f"><label>Tipo</label><select id="q_tipo_id" '+d+'>'+selOpts(TIPOSP, v("tipo_id"))+'</select></div>'+
+     (puede?'<div class="f"><label>¿No está el tipo?</label><div style="display:flex;gap:6px"><input id="q_tipo_nuevo" placeholder="Tipo nuevo"><button class="btn2 btn-sm" onclick="tipoAgregar()">Agregar</button></div></div>':'')+
+   '</div>'+
+   '<div class="sec">Medida y presentación</div><div class="grid">'+
+     '<div class="f"><label>Unidad de venta</label><select id="q_unidad" '+d+'>'+UNIDADES.map(u=>'<option '+(v("unidad","m2")===u?"selected":"")+'>'+u+'</option>').join("")+'</select></div>'+
+     '<div class="f"><label>m² por caja</label><input type="number" step="0.001" id="q_m2_por_caja" value="'+v("m2_por_caja")+'" '+d+'></div>'+
+     '<div class="f"><label>Piezas por caja</label><input type="number" step="1" id="q_piezas_por_caja" value="'+v("piezas_por_caja")+'" '+d+'></div>'+
+     '<div class="f"><label>Largo cm</label><input type="number" step="0.1" id="q_largo_cm" value="'+v("largo_cm")+'" '+d+'></div>'+
+     '<div class="f"><label>Ancho cm</label><input type="number" step="0.1" id="q_ancho_cm" value="'+v("ancho_cm")+'" '+d+'></div>'+
+     '<div class="f"><label>Espesor mm</label><input type="number" step="0.1" id="q_espesor_mm" value="'+v("espesor_mm")+'" '+d+'></div>'+
+     '<div class="f"><label>Peso por caja kg</label><input type="number" step="0.01" id="q_peso_kg_caja" value="'+v("peso_kg_caja")+'" '+d+'></div>'+
+   '</div>'+
+   '<div class="sec">Precios e IVA</div><div class="grid">'+
+     '<div class="f"><label>IVA %</label><input type="number" step="0.1" id="q_iva_pct" value="'+v("iva_pct",21)+'" '+dp+'></div>'+
+     '<div class="f"><label>Precio ARS</label><input type="number" step="0.01" id="q_precio_ars" value="'+v("precio_ars",0)+'" '+dp+'></div>'+
+     '<div class="f"><label>Precio USD</label><input type="number" step="0.01" id="q_precio_usd" value="'+v("precio_usd",0)+'" '+dp+'></div>'+
+     '<div class="f"><label>Moneda de referencia</label><select id="q_moneda_base" '+dp+'>'+["ARS","USD"].map(x=>'<option '+(v("moneda_base","ARS")===x?"selected":"")+'>'+x+'</option>').join("")+'</select></div>'+
+     '<div class="f"><label>Costo USD (landed)</label><input type="number" step="0.01" id="q_costo_usd" value="'+v("costo_usd",0)+'" '+dp+'></div>'+
+   '</div>'+
+   '<div class="muted" style="margin-top:-4px">El costo landed lo va a completar solo el módulo de importaciones cuando llegue cada contenedor. Por ahora se carga a mano si querés ver el margen.</div>'+
+   '<div class="sec">Operación</div><div class="grid">'+
+     '<div class="f"><label>Stock mínimo</label><input type="number" step="0.01" id="q_stock_minimo" value="'+v("stock_minimo",0)+'" '+d+'></div>'+
+     '<div class="f"><label>Se vende</label><select id="q_disponible_venta" '+d+'><option value="1" '+(p&&!p.disponible_venta?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.disponible_venta?"selected":"")+'>No</option></select></div>'+
+     '<div class="f"><label>Se instala</label><select id="q_se_instala" '+d+'><option value="1" '+(p&&!p.se_instala?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.se_instala?"selected":"")+'>No</option></select></div>'+
+     '<div class="f"><label>Activo</label><select id="q_activo" '+d+'><option value="1" '+(p&&!p.activo?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.activo?"selected":"")+'>No</option></select></div>'+
+   '</div>'+
+   '<div class="f"><label>Observaciones</label><textarea id="q_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
+   ((puede||puedePrecio)?'<div class="acciones"><button class="btn" id="q_guardar">'+(nuevo?"Crear producto":"Guardar cambios")+'</button></div>':'<div class="muted">Tu rol consulta el catálogo pero no lo modifica.</div>');
+  if (puede||puedePrecio) $("q_guardar").onclick = function(){ guardarProducto(id); };
+  $("dlg").showModal();
+}
+async function tipoAgregar(){
+  const n = $("q_tipo_nuevo").value.trim();
+  if (!n) return;
+  const {error} = await sb.from("tipos_producto").insert({nombre:n, activo:true});
+  if (error){ $("fpmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCatalogo();
+  const sel = $("q_tipo_id");
+  sel.innerHTML = selOpts(TIPOSP, (TIPOSP.find(t=>t.nombre===n)||{}).id);
+  $("q_tipo_nuevo").value = "";
+  $("fpmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y seleccionado.</div>';
+}
+const CAMPOS_PROD = ["codigo","nombre","tipo_id","unidad","m2_por_caja","piezas_por_caja","largo_cm","ancho_cm","espesor_mm","peso_kg_caja",
+  "iva_pct","precio_ars","precio_usd","moneda_base","costo_usd","stock_minimo","observaciones"];
+const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","costo_usd","stock_minimo"];
+async function guardarProducto(id){
+  const o = {};
+  CAMPOS_PROD.forEach(function(c){ const el=$("q_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PROD.indexOf(c)>=0) v=Number(v); o[c]=v; });
+  ["disponible_venta","se_instala","activo"].forEach(function(c){ const el=$("q_"+c); if(el) o[c] = el.value==="1"; });
+  if (!o.codigo || !o.nombre){ $("fpmsg").innerHTML = '<div class="msg err">El código y el nombre son obligatorios.</div>'; return; }
+  const r = id ? await sb.from("productos").update(o).eq("id",id) : await sb.from("productos").insert(o);
+  if (r.error){ $("fpmsg").innerHTML = '<div class="msg err">'+(r.error.message.indexOf("duplicate")>=0?"Ya existe un producto con ese código.":esc(r.error.message))+'</div>'; return; }
+  await cargarCatalogo();
+  $("fpmsg").innerHTML = '<div class="msg ok">Guardado.</div>';
+  if (VISTA==="productos") pintarProductos();
+  if (!id) $("dlg").close();
+}
+
 /* ─────────── MAESTRAS (alta, edición y baja) ─────────── */
 const MAESTRAS = [
   {k:"loc", tabla:"localidades",      titulo:"Localidades",
@@ -699,6 +873,310 @@ async function maestraGuardar(k, id){
   VISTAS.maestras();
   maestraMsg(k, "Guardado.", "ok");
 }
+
+/* ═══════════ PRESUPUESTOS ═══════════ */
+const ESTADOS_PRE = ["Abierto","Enviado","Aceptado","Rechazado","Vencido","Anulado"];
+let FPRE = {estado:"", desde:"", hasta:"", texto:""};
+
+VISTAS.presup = function(){
+  $("main").innerHTML =
+   '<div class="panel"><h2>Presupuestos</h2>'+
+   '<div class="desc">Cada presupuesto arma su total solo: productos, descuentos, adicionales e IVA producto por producto.</div>'+
+   '<div class="filtros">'+
+     '<div><label>Estado</label><select id="qf_est"><option value="">Todos</option>'+ESTADOS_PRE.map(e=>'<option '+(FPRE.estado===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
+     '<div><label>Desde</label><input type="date" id="qf_desde" value="'+FPRE.desde+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="qf_hasta" value="'+FPRE.hasta+'"></div>'+
+     '<div><label>Buscar</label><input id="qf_txt" placeholder="cliente o código" value="'+esc(FPRE.texto)+'"></div>'+
+     '<div style="min-width:auto"><button class="btn" id="qf_btn">Filtrar</button></div>'+
+     (P("presupuesto-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="qf_nuevo">+ Presupuesto nuevo</button></div>':'')+
+   '</div><div id="qlista" class="muted">Cargando…</div></div>';
+  $("qf_btn").onclick = function(){ FPRE={estado:$("qf_est").value,desde:$("qf_desde").value,hasta:$("qf_hasta").value,texto:$("qf_txt").value.trim()}; pintarPresupuestos(); };
+  if (P("presupuesto-agregar")) $("qf_nuevo").onclick = function(){ abrirPresupuesto(null); };
+  pintarPresupuestos();
+};
+async function pintarPresupuestos(){
+  $("qlista").innerHTML = '<div class="muted">Cargando…</div>';
+  let q = sb.from("presupuestos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
+  if (FPRE.estado) q = q.eq("estado", FPRE.estado);
+  if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
+  if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
+  if (FPRE.texto)  q = q.or("cliente_nombre.ilike.%"+FPRE.texto+"%,codigo.ilike.%"+FPRE.texto+"%,nro_papel.ilike.%"+FPRE.texto+"%");
+  const {data,error} = await q;
+  if (error){ $("qlista").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  if (!data.length){ $("qlista").innerHTML = '<div class="muted">Todavía no hay presupuestos con ese filtro.</div>'; return; }
+  const pillE = e => '<span class="pill '+(e==="Aceptado"?"ok":(e==="Rechazado"||e==="Anulado")?"no":e==="Enviado"?"sen":"esp")+'">'+esc(e)+'</span>';
+  $("qlista").innerHTML = '<div class="muted" style="margin-bottom:8px">'+data.length+' presupuesto'+(data.length===1?"":"s")+'</div>'+
+   '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
+   ['Código','Fecha','Cliente','Localidad','Tipo','N° papel','Estado','Neto','IVA','Total'].map(h=>'<th>'+h+'</th>').join("")+
+   '</tr></thead><tbody>'+data.map(function(p){
+     return '<tr style="cursor:pointer" onclick="abrirPresupuesto('+p.id+')">'+
+       '<td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td><td>'+esc(p.cliente_nombre)+'</td>'+
+       '<td>'+esc(nom(M.loc,p.localidad_id))+'</td><td>'+esc(p.tipo)+'</td><td>'+esc(p.nro_papel)+'</td>'+
+       '<td>'+pillE(p.estado)+'</td><td>'+fmtM(p.neto,p.moneda)+'</td><td>'+fmtM(p.iva,p.moneda)+'</td>'+
+       '<td><b>'+fmtM(p.total,p.moneda)+'</b></td></tr>';
+   }).join("")+'</tbody></table></div>';
+}
+
+async function abrirPresupuesto(id){
+  if (id){
+    const [c,i,a] = await Promise.all([
+      sb.from("presupuestos").select("*").eq("id",id).single(),
+      sb.from("presupuesto_items").select("*").eq("presupuesto_id",id).order("orden").order("id"),
+      sb.from("presupuesto_adicionales").select("*").eq("presupuesto_id",id).order("id")
+    ]);
+    if (c.error) return alert(c.error.message);
+    PRE = {cab:c.data, items:(i.data||[]), adic:(a.data||[]), borrarItems:[], borrarAdic:[]};
+  } else {
+    const listaDef = LISTAS.filter(l=>l.activo)[0];
+    PRE = {cab:{fecha:hoy(), validez_dias:15, moneda:"ARS", estado:"Abierto", descuento_pct:0, vl_id:PERFIL.id,
+                lista_id: listaDef?listaDef.id:null, tipo:"Producto suelto",
+                condiciones:"Precios sujetos a confirmación de stock. Validez del presupuesto: 15 días."},
+           items:[], adic:[], borrarItems:[], borrarAdic:[]};
+  }
+  pintarFichaPre();
+  $("dlg").showModal();
+}
+
+function calcTotales(){
+  const f = 1 - Number(PRE.cab.descuento_pct||0)/100;
+  let n=0, i=0;
+  PRE.items.forEach(function(x){
+    const base = Number(x.cantidad||0) * Number(x.precio_unit||0) * (1 - Number(x.descuento_pct||0)/100);
+    n += base;
+    if (x.aplica_iva !== false) i += base * Number(x.iva_pct||0)/100;
+  });
+  let na=0, ia=0;
+  PRE.adic.forEach(function(x){
+    na += Number(x.importe||0);
+    if (x.aplica_iva !== false) ia += Number(x.importe||0) * Number(x.iva_pct||0)/100;
+  });
+  const neto = n*f + na, iva = i*f + ia;
+  return {neto:neto, iva:iva, total:neto+iva, brutoItems:n, descItems:n*(1-f), adic:na};
+}
+
+function pintarFichaPre(){
+  const c = PRE.cab;
+  const puede = c.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
+  const d = puede ? "" : "disabled";
+  $("dtit").textContent = c.codigo ? (c.codigo+" · "+(c.cliente_nombre||"")) : "Presupuesto nuevo";
+  $("dbody").innerHTML = '<div id="qmsg"></div>'+
+   '<div class="sec">Cliente y obra</div><div class="grid">'+
+     '<div class="f"><label>Cliente *</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
+     '<div class="f"><label>Teléfono</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
+     '<div class="f"><label>Email</label><input id="w_cliente_email" value="'+esc(c.cliente_email)+'" '+d+'></div>'+
+     '<div class="f"><label>Localidad</label><select id="w_localidad_id" '+d+'>'+selOpts(M.loc,c.localidad_id)+'</select></div>'+
+     '<div class="f"><label>Dirección de obra</label><input id="w_direccion_obra" value="'+esc(c.direccion_obra)+'" '+d+'></div>'+
+   '</div>'+
+   '<div class="sec">Datos del presupuesto</div><div class="grid">'+
+     '<div class="f"><label>Fecha</label><input type="date" id="w_fecha" value="'+(c.fecha||hoy())+'" '+d+'></div>'+
+     '<div class="f"><label>Validez (días)</label><input type="number" id="w_validez_dias" value="'+(c.validez_dias==null?15:c.validez_dias)+'" '+d+'></div>'+
+     '<div class="f"><label>Tipo</label><select id="w_tipo" '+d+'>'+selTxt(TIPOVENTA,c.tipo)+'</select></div>'+
+     '<div class="f"><label>Estado</label><select id="w_estado" '+d+'>'+selTxt(ESTADOS_PRE,c.estado||"Abierto")+'</select></div>'+
+     '<div class="f"><label>Lista de precios</label><select id="w_lista_id" '+d+'>'+selOpts(LISTAS,c.lista_id)+'</select></div>'+
+     '<div class="f"><label>Moneda</label><select id="w_moneda" '+d+' onchange="sincro()">'+selTxt(["ARS","USD"],c.moneda||"ARS")+'</select></div>'+
+     '<div class="f"><label>Cotización USD</label><input type="number" step="0.01" id="w_cotizacion_usd" value="'+(c.cotizacion_usd==null?"":c.cotizacion_usd)+'" '+d+'></div>'+
+     '<div class="f"><label>N° presupuesto papel</label><input id="w_nro_papel" value="'+esc(c.nro_papel)+'" '+d+'></div>'+
+     '<div class="f"><label>VL</label><select id="w_vl_id" '+d+'>'+selPer(VLS(),c.vl_id)+'</select></div>'+
+     '<div class="f"><label>ATO</label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
+     '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+selOpts(M.mot,c.motivo_rechazo_id)+'</select></div>'+
+   '</div>'+
+   '<div class="sec">Productos</div><div id="w_items"></div>'+
+   (puede?'<div class="acciones"><button class="btn2 btn-sm" onclick="itemAgregar()">+ Agregar renglón</button></div>':'')+
+   '<div class="sec">Adicionales · flete, colocación, extras</div><div id="w_adic"></div>'+
+   (puede?'<div class="acciones"><button class="btn2 btn-sm" onclick="adicAgregar()">+ Agregar adicional</button></div>':'')+
+   '<div class="sec">Totales</div>'+
+   '<div class="grid"><div class="f"><label>Descuento general % (sobre productos)</label><input type="number" step="0.1" id="w_descuento_pct" value="'+(c.descuento_pct||0)+'" '+d+' oninput="sincro()"></div></div>'+
+   '<div id="w_tot"></div>'+
+   '<div class="sec">Notas</div>'+
+   '<div class="f"><label>Notas del presupuesto (se imprimen)</label><textarea id="w_notas" rows="3" '+d+'>'+esc(c.notas)+'</textarea></div>'+
+   '<div class="f"><label>Condiciones comerciales</label><textarea id="w_condiciones" rows="2" '+d+'>'+esc(c.condiciones)+'</textarea></div>'+
+   '<div class="acciones">'+
+     (puede?'<button class="btn" id="w_guardar">Guardar presupuesto</button>':'<span class="muted">Tu rol consulta los presupuestos y no los modifica.</span>')+
+     (c.id?'<button class="btn2" onclick="imprimirPresupuesto()">Imprimir o guardar PDF</button>':'')+
+     (c.id&&P("presupuesto-eliminar")?'<button class="btn3" id="w_borrar">Eliminar</button>':'')+
+   '</div>';
+  pintarItems(); pintarAdic(); pintarTotales();
+  if (puede) $("w_guardar").onclick = guardarPresupuesto;
+  if (c.id && P("presupuesto-eliminar")) $("w_borrar").onclick = async function(){
+    if (!confirm("¿Eliminar "+c.codigo+"? No se puede deshacer.")) return;
+    const {error} = await sb.from("presupuestos").delete().eq("id",c.id);
+    if (error) return alert(error.message);
+    $("dlg").close(); pintarPresupuestos();
+  };
+}
+
+function pintarItems(){
+  const puede = PRE.cab.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
+  const d = puede ? "" : "disabled";
+  const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
+      .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
+  $("w_items").innerHTML = !PRE.items.length ? '<div class="muted">Sin renglones todavía. Tocá «Agregar renglón».</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Producto</th><th style="min-width:140px">Descripción</th><th>Cant.</th><th>Un.</th><th>Precio</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   PRE.items.map(function(x,k){
+     return '<tr>'+
+       '<td><select id="it_'+k+'_producto_id" '+d+' onchange="itemProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
+       '<td><input id="it_'+k+'_descripcion" value="'+esc(x.descripcion)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.01" style="width:80px" id="it_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input style="width:70px" id="it_'+k+'_unidad" value="'+esc(x.unidad)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.01" style="width:110px" id="it_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_descuento_pct" value="'+(x.descuento_pct||0)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" '+d+' oninput="sincro()"></td>'+
+       '<td style="text-align:right"><b id="sub_'+k+'"></b></td>'+
+       (puede?'<td><button class="btn2 btn-sm" onclick="itemQuitar('+k+')">Quitar</button></td>':'')+
+     '</tr>';
+   }).join("")+'</tbody></table></div>';
+}
+function pintarAdic(){
+  const puede = PRE.cab.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
+  const d = puede ? "" : "disabled";
+  $("w_adic").innerHTML = !PRE.adic.length ? '<div class="muted">Sin adicionales.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Concepto</th><th>Importe</th><th>IVA %</th><th>Con IVA</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   PRE.adic.map(function(x,k){
+     return '<tr>'+
+       '<td><input id="ad_'+k+'_concepto" value="'+esc(x.concepto)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.01" style="width:120px" id="ad_'+k+'_importe" value="'+(x.importe==null?"":x.importe)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><input type="number" step="0.1" style="width:70px" id="ad_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" '+d+' oninput="sincro()"></td>'+
+       '<td><select id="ad_'+k+'_aplica_iva" '+d+' onchange="sincro()"><option value="1" '+(x.aplica_iva===false?"":"selected")+'>Sí</option><option value="0" '+(x.aplica_iva===false?"selected":"")+'>No</option></select></td>'+
+       (puede?'<td><button class="btn2 btn-sm" onclick="adicQuitar('+k+')">Quitar</button></td>':'')+
+     '</tr>';
+   }).join("")+'</tbody></table></div>';
+}
+function pintarTotales(){
+  const t = calcTotales(), m = PRE.cab.moneda||"ARS";
+  PRE.items.forEach(function(x,k){
+    const el = $("sub_"+k); if (!el) return;
+    el.textContent = fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100), m) || "—";
+  });
+  $("w_tot").innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr><td>Productos</td><td style="text-align:right">'+(fmtM(t.brutoItems,m)||"—")+'</td></tr>'+
+    (t.descItems>0?'<tr><td>Descuento general</td><td style="text-align:right;color:#7a2415">− '+(fmtM(t.descItems,m)||"")+'</td></tr>':'')+
+    (t.adic>0?'<tr><td>Adicionales</td><td style="text-align:right">'+(fmtM(t.adic,m)||"")+'</td></tr>':'')+
+    '<tr><td><b>Neto</b></td><td style="text-align:right"><b>'+(fmtM(t.neto,m)||"—")+'</b></td></tr>'+
+    '<tr><td>IVA</td><td style="text-align:right">'+(fmtM(t.iva,m)||"—")+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(t.total,m)||"—")+'</b></td></tr>'+
+  '</tbody></table></div>';
+}
+function sincro(){
+  PRE.items.forEach(function(x,k){
+    ["producto_id","descripcion","cantidad","unidad","precio_unit","descuento_pct","iva_pct"].forEach(function(c){
+      const el = $("it_"+k+"_"+c); if (!el) return;
+      x[c] = (c==="descripcion"||c==="unidad") ? el.value : (el.value===""?null:Number(el.value));
+    });
+  });
+  PRE.adic.forEach(function(x,k){
+    const c1=$("ad_"+k+"_concepto"), c2=$("ad_"+k+"_importe"), c3=$("ad_"+k+"_iva_pct"), c4=$("ad_"+k+"_aplica_iva");
+    if (c1) x.concepto = c1.value;
+    if (c2) x.importe = c2.value===""?0:Number(c2.value);
+    if (c3) x.iva_pct = c3.value===""?0:Number(c3.value);
+    if (c4) x.aplica_iva = c4.value==="1";
+  });
+  const dg = $("w_descuento_pct"); if (dg) PRE.cab.descuento_pct = Number(dg.value||0);
+  const mo = $("w_moneda"); if (mo) PRE.cab.moneda = mo.value;
+  pintarTotales();
+}
+function itemAgregar(){ sincro(); PRE.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"m2", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true}); pintarItems(); pintarTotales(); }
+function itemQuitar(k){ sincro(); const x = PRE.items[k]; if (x.id) PRE.borrarItems.push(x.id); PRE.items.splice(k,1); pintarItems(); pintarTotales(); }
+function itemProducto(k){
+  sincro();
+  const x = PRE.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  if (p){
+    x.descripcion = p.nombre;
+    x.unidad = p.unidad;
+    x.iva_pct = Number(p.iva_pct||0);
+    x.aplica_iva = Number(p.iva_pct||0) > 0;
+    x.precio_unit = precioDe(p, $("w_lista_id").value, $("w_moneda").value);
+  }
+  pintarItems(); pintarTotales();
+}
+function adicAgregar(){ sincro(); PRE.adic.push({concepto:"", importe:0, iva_pct:21, aplica_iva:true}); pintarAdic(); pintarTotales(); }
+function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdic.push(x.id); PRE.adic.splice(k,1); pintarAdic(); pintarTotales(); }
+
+const CAMPOS_PRE = ["cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
+  "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
+const NUM_PRE = ["localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct"];
+async function guardarPresupuesto(){
+  sincro();
+  const o = {};
+  CAMPOS_PRE.forEach(function(c){ const el=$("w_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PRE.indexOf(c)>=0) v=Number(v); o[c]=v; });
+  if (!o.cliente_nombre){ $("qmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
+  if (o.descuento_pct == null) o.descuento_pct = 0;
+  $("w_guardar").disabled = true;
+  let id = PRE.cab.id;
+  if (id){
+    const r = await sb.from("presupuestos").update(o).eq("id",id);
+    if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  } else {
+    const r = await sb.from("presupuestos").insert(o).select("id,codigo").single();
+    if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+    id = r.data.id; PRE.cab.id = id; PRE.cab.codigo = r.data.codigo;
+  }
+  if (PRE.borrarItems.length) await sb.from("presupuesto_items").delete().in("id", PRE.borrarItems);
+  if (PRE.borrarAdic.length)  await sb.from("presupuesto_adicionales").delete().in("id", PRE.borrarAdic);
+  PRE.borrarItems = []; PRE.borrarAdic = [];
+  for (let k=0; k<PRE.items.length; k++){
+    const x = PRE.items[k];
+    const fila = {presupuesto_id:id, orden:k, producto_id:x.producto_id||null, descripcion:x.descripcion||"(sin descripcion)",
+                  cantidad:Number(x.cantidad||0), unidad:x.unidad||null, precio_unit:Number(x.precio_unit||0),
+                  descuento_pct:Number(x.descuento_pct||0), iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false};
+    const r = x.id ? await sb.from("presupuesto_items").update(fila).eq("id",x.id)
+                   : await sb.from("presupuesto_items").insert(fila).select("id").single();
+    if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">Renglón '+(k+1)+': '+esc(r.error.message)+'</div>'; return; }
+    if (!x.id && r.data) x.id = r.data.id;
+  }
+  for (let k=0; k<PRE.adic.length; k++){
+    const x = PRE.adic[k];
+    const fila = {presupuesto_id:id, concepto:x.concepto||"Adicional", importe:Number(x.importe||0), iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false};
+    const r = x.id ? await sb.from("presupuesto_adicionales").update(fila).eq("id",x.id)
+                   : await sb.from("presupuesto_adicionales").insert(fila).select("id").single();
+    if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">Adicional '+(k+1)+': '+esc(r.error.message)+'</div>'; return; }
+    if (!x.id && r.data) x.id = r.data.id;
+  }
+  const fresco = await sb.from("presupuestos").select("*").eq("id",id).single();
+  if (fresco.data) PRE.cab = fresco.data;
+  $("w_guardar").disabled = false;
+  pintarFichaPre();
+  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.</div>';
+  if (VISTA==="presup") pintarPresupuestos();
+}
+
+function imprimirPresupuesto(){
+  const c = PRE.cab, m = c.moneda||"ARS", t = calcTotales();
+  const fila = x => '<tr><td>'+esc(x.descripcion)+'</td><td class="r">'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
+    '<td class="r">'+fmtM(x.precio_unit,m)+'</td><td class="r">'+(Number(x.descuento_pct)?fmtN(x.descuento_pct)+"%":"")+'</td>'+
+    '<td class="r">'+fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100),m)+'</td></tr>';
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(c.codigo)+'</title><style>'+
+   'body{font:13px Georgia,serif;color:#1b2426;margin:34px;max-width:760px}'+
+   'h1{font-size:22px;color:#24393C;margin:0;letter-spacing:1px}.sub{color:#6b7679;font-size:12px;margin-bottom:18px}'+
+   'table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border:0;padding:3px 8px}.tot .g td{font-size:17px;font-weight:bold;border-top:2px solid #24393C}'+
+   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;margin:14px 0;background:#faf8f4}'+
+   '.pie{margin-top:26px;font-size:11px;color:#6b7679;border-top:1px solid #ddd;padding-top:10px}'+
+   '</style></head><body>'+
+   '<h1>YATEN REVESTIMIENTOS</h1><div class="sub">Presupuesto '+esc(c.codigo)+' · '+fmtF(c.fecha)+' · válido por '+(c.validez_dias||15)+' días</div>'+
+   '<div class="caja"><b>'+esc(c.cliente_nombre)+'</b>'+
+     (c.cliente_tel?' · '+esc(c.cliente_tel):'')+(c.cliente_email?' · '+esc(c.cliente_email):'')+
+     ((c.direccion_obra||c.localidad_id)?'<br>Obra: '+esc(c.direccion_obra)+' '+esc(nom(M.loc,c.localidad_id)):'')+
+     (c.tipo?'<br>Modalidad: '+esc(c.tipo):'')+'</div>'+
+   '<table><thead><tr><th>Detalle</th><th class="r">Cant.</th><th>Un.</th><th class="r">Precio</th><th class="r">Desc.</th><th class="r">Subtotal</th></tr></thead><tbody>'+
+   PRE.items.map(fila).join("")+'</tbody></table>'+
+   (PRE.adic.length? '<table><thead><tr><th>Adicionales</th><th class="r">Importe</th></tr></thead><tbody>'+
+      PRE.adic.map(x=>'<tr><td>'+esc(x.concepto)+'</td><td class="r">'+fmtM(x.importe,m)+'</td></tr>').join("")+'</tbody></table>' : '')+
+   '<table class="tot"><tbody>'+
+     (t.descItems>0?'<tr><td class="r">Descuento general</td><td class="r">- '+fmtM(t.descItems,m)+'</td></tr>':'')+
+     '<tr><td class="r">Neto</td><td class="r">'+fmtM(t.neto,m)+'</td></tr>'+
+     '<tr><td class="r">IVA</td><td class="r">'+fmtM(t.iva,m)+'</td></tr>'+
+     '<tr class="g"><td class="r">TOTAL</td><td class="r">'+fmtM(t.total,m)+'</td></tr>'+
+   '</tbody></table>'+
+   (c.notas? '<div class="caja"><b>Notas</b><br>'+esc(c.notas).replace(/\n/g,"<br>")+'</div>' : '')+
+   '<div class="pie">'+esc(c.condiciones||"")+'</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes para este sitio y volvé a intentar."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
+
 </script>
 </body>
 </html>
