@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-4";
+const VERSION = "v2026.08.02-5";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -659,6 +659,7 @@ VISTAS.productos = function(){
       (puedeAlta?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="pf_nuevo">+ Producto nuevo</button></div>':'')+
     '</div>'+
     '<div id="plista"></div></div>'+
+    panelAjustePrecios()+
     (puedeAlta? bloqueTipos() : '')+
     (puedePrecio? bloqueListas() : '');
   $("pf_btn").onclick = function(){ FPROD={texto:$("pf_txt").value.trim(), tipo:$("pf_tipo").value, soloActivos:$("pf_act").value==="1"}; pintarProductos(); };
@@ -761,6 +762,7 @@ function fichaProducto(id){
      '<div class="f"><label>Unidad de venta</label><select id="q_unidad" '+d+'>'+UNIDADES.map(u=>'<option '+(v("unidad","m2")===u?"selected":"")+'>'+u+'</option>').join("")+'</select></div>'+
      '<div class="f"><label>m² por caja</label><input type="number" step="0.001" id="q_m2_por_caja" value="'+v("m2_por_caja")+'" '+d+'></div>'+
      '<div class="f"><label>Piezas por caja</label><input type="number" step="1" id="q_piezas_por_caja" value="'+v("piezas_por_caja")+'" '+d+'></div>'+
+     '<div class="f"><label>Metros lineales por unidad</label><input type="number" step="0.001" id="q_ml_por_unidad" value="'+v("ml_por_unidad")+'" placeholder="zócalos, varillas" '+d+'></div>'+
      '<div class="f"><label>Largo cm</label><input type="number" step="0.1" id="q_largo_cm" value="'+v("largo_cm")+'" '+d+'></div>'+
      '<div class="f"><label>Ancho cm</label><input type="number" step="0.1" id="q_ancho_cm" value="'+v("ancho_cm")+'" '+d+'></div>'+
      '<div class="f"><label>Espesor mm</label><input type="number" step="0.1" id="q_espesor_mm" value="'+v("espesor_mm")+'" '+d+'></div>'+
@@ -796,9 +798,9 @@ async function tipoAgregar(){
   $("q_tipo_nuevo").value = "";
   $("fpmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y seleccionado.</div>';
 }
-const CAMPOS_PROD = ["codigo","nombre","tipo_id","unidad","m2_por_caja","piezas_por_caja","largo_cm","ancho_cm","espesor_mm","peso_kg_caja",
+const CAMPOS_PROD = ["codigo","nombre","tipo_id","unidad","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja",
   "iva_pct","precio_ars","precio_usd","moneda_base","costo_usd","stock_minimo","observaciones"];
-const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","costo_usd","stock_minimo"];
+const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","costo_usd","stock_minimo"];
 async function guardarProducto(id){
   const o = {};
   CAMPOS_PROD.forEach(function(c){ const el=$("q_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PROD.indexOf(c)>=0) v=Number(v); o[c]=v; });
@@ -1046,6 +1048,7 @@ function pintarItems(){
        '<td><input id="it_'+k+'_descripcion" value="'+esc(x.descripcion)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.01" style="width:80px" id="it_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input style="width:70px" id="it_'+k+'_unidad" value="'+esc(x.unidad)+'" '+d+' oninput="sincro()"></td>'+
+       '<td style="min-width:150px">'+celdaMedida(x,k,d)+'</td>'+
        '<td><input type="number" step="0.01" style="width:110px" id="it_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_descuento_pct" value="'+(x.descuento_pct||0)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" '+d+' oninput="sincro()"></td>'+
@@ -1145,7 +1148,7 @@ async function guardarPresupuesto(){
     const x = PRE.items[k];
     const fila = {presupuesto_id:id, orden:k, producto_id:x.producto_id||null, descripcion:x.descripcion||"(sin descripcion)",
                   cantidad:Number(x.cantidad||0), unidad:x.unidad||null, precio_unit:Number(x.precio_unit||0),
-                  descuento_pct:Number(x.descuento_pct||0), iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false};
+                  descuento_pct:Number(x.descuento_pct||0), iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false, cantidad_medida:x.cantidad_medida||null, unidad_medida:x.unidad_medida||null};
     const r = x.id ? await sb.from("presupuesto_items").update(fila).eq("id",x.id)
                    : await sb.from("presupuesto_items").insert(fila).select("id").single();
     if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">Renglón '+(k+1)+': '+esc(r.error.message)+'</div>'; return; }
@@ -1656,6 +1659,79 @@ async function anularRetiro(id){
   const {error} = await sb.rpc("anular_retiro",{p_id:id,p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarFin(); VISTAS.finanzas();
+}
+
+
+/* ─────────── conversión de medidas en el renglón ─────────── */
+// devuelve como se mide realmente el producto: cuantos m2 o ml trae cada unidad de venta
+function convDe(prod){
+  if (!prod) return null;
+  const m2 = Number(prod.m2_por_caja||0), ml = Number(prod.ml_por_unidad||0);
+  if (m2 > 0) return {factor:m2, um:"m²"};
+  if (ml > 0) return {factor:ml, um:"ml"};
+  return null;
+}
+function celdaMedida(x, k, d){
+  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const c = convDe(p);
+  if (!c) return '<span class="muted">—</span>';
+  const cant = Number(x.cantidad||0);
+  const total = Math.round(cant * c.factor * 100)/100;
+  return '<input type="number" step="0.01" style="width:80px" id="it_'+k+'_medida" value="'+(x.cantidad_medida==null?"":x.cantidad_medida)+'" placeholder="'+c.um+'" '+d+' onchange="medidaAcantidad('+k+')">'+
+         '<div class="muted" style="font-size:11px;line-height:1.2;margin-top:2px">1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total</div>';
+}
+// el usuario carga los metros que necesita y el sistema saca cuantas cajas hay que vender, redondeando para arriba
+function medidaAcantidad(k){
+  const x = PRE.items[k];
+  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const c = convDe(p);
+  const el = $("it_"+k+"_medida");
+  if (!c || !el) return;
+  const med = Number(el.value||0);
+  x.cantidad_medida = med || null;
+  x.unidad_medida = c.um;
+  if (med > 0){
+    x.cantidad = Math.ceil((med / c.factor) * 1000) / 1000;
+    x.cantidad = Math.ceil(med / c.factor);
+    if (x.cantidad < 1) x.cantidad = 1;
+  }
+  pintarItems(); pintarTotales();
+}
+
+/* ─────────── actualización masiva de precios ─────────── */
+function panelAjustePrecios(){
+  if (!P("producto-precio")) return '';
+  return '<div class="panel"><h2>Actualizar precios</h2>'+
+   '<div class="desc">Con la inflación y el dólar moviéndose, tocar producto por producto es inviable. Acá aplicás un porcentaje a todo el catálogo o a un tipo, de una sola vez.</div>'+
+   '<div id="apmsg"></div><div class="filtros">'+
+     '<div><label>Aplicar a</label><select id="ap_tipo"><option value="">Todo el catálogo</option>'+TIPOSP.map(t=>'<option value="'+t.id+'">'+esc(t.nombre)+'</option>').join("")+'</select></div>'+
+     '<div><label>Moneda</label><select id="ap_moneda"><option value="ARS">Solo pesos</option><option value="USD">Solo dólares</option><option value="AMBAS">Las dos</option></select></div>'+
+     '<div><label>Porcentaje</label><input type="number" step="0.1" id="ap_pct" placeholder="15 sube, -10 baja"></div>'+
+     '<div><label>Redondear a</label><select id="ap_red"><option value="0">Sin redondear</option><option value="100">Centenas</option><option value="1000">Miles</option></select></div>'+
+     '<div style="min-width:auto"><button class="btn" onclick="aplicarAjuste()">Aplicar</button></div>'+
+   '</div><div class="muted">Los presupuestos ya guardados no cambian: cada renglón conserva el precio con el que se cerró.</div></div>';
+}
+async function aplicarAjuste(){
+  const pct = Number($("ap_pct").value||0);
+  if (!pct){ $("apmsg").innerHTML='<div class="msg err">Poné un porcentaje distinto de cero.</div>'; return; }
+  const tipo = $("ap_tipo").value, mon = $("ap_moneda").value, red = Number($("ap_red").value||0);
+  const afectados = PRODS.filter(p=>p.activo && (!tipo || String(p.tipo_id)===String(tipo)));
+  if (!afectados.length){ $("apmsg").innerHTML='<div class="msg err">No hay productos activos con ese filtro.</div>'; return; }
+  if (!confirm("Vas a "+(pct>0?"aumentar":"bajar")+" un "+Math.abs(pct)+" % el precio de "+afectados.length+" producto(s). ¿Confirmás?")) return;
+  const f = 1 + pct/100;
+  const ajustar = v => { let n = Number(v||0) * f; if (red>0) n = Math.round(n/red)*red; else n = Math.round(n*100)/100; return n; };
+  let fallos = 0;
+  for (let i=0;i<afectados.length;i++){
+    const p = afectados[i], o = {};
+    if (mon === "ARS" || mon === "AMBAS") o.precio_ars = ajustar(p.precio_ars);
+    if (mon === "USD" || mon === "AMBAS") o.precio_usd = ajustar(p.precio_usd);
+    const r = await sb.from("productos").update(o).eq("id", p.id);
+    if (r.error) fallos++;
+  }
+  await cargarCatalogo();
+  VISTAS.productos();
+  $("apmsg").innerHTML = fallos? '<div class="msg err">'+fallos+' productos no se pudieron actualizar.</div>'
+    : '<div class="msg ok">Listo: '+afectados.length+' productos actualizados '+(pct>0?"+":"")+pct+' %.</div>';
 }
 
 </script>
