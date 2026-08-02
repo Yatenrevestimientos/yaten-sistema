@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-5";
+const VERSION = "v2026.08.02-6";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1520,22 +1520,55 @@ async function finMovs(){
     }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
 }
 
+let FG = {desde:"", hasta:"", concepto:"", cuenta:"", anulados:false, texto:""};
 async function finGastos(){
   const puede = P("finanzas-modificar");
-  const {data} = await sb.from("gastos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300);
-  const rows = (data||[]).filter(x=>FIN.anulados||!x.anulado);
   $("fbody").innerHTML = '<div class="panel"><h2>Gastos</h2>'+
-   '<div class="desc">Cada gasto sale de una cuenta y le baja el saldo. No se borran: se anulan y quedan a la vista.</div>'+
+   '<div class="desc">Cada gasto sale de una cuenta y le baja el saldo. No se borran: se anulan y quedan a la vista, para que la auditoría cierre.</div>'+
    '<div id="gmsg"></div>'+
-   (puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="formGasto()">+ Gasto nuevo</button></div>':'')+
-   (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
-     ['Fecha','Cuenta','Concepto','Neto','IVA','Importe','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.45;text-decoration:line-through':'')+'">'+
-       '<td>'+fmtF(g.fecha)+'</td><td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
-       '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
-       '<td style="white-space:normal;min-width:180px">'+esc(g.detalle_extra)+'</td>'+
-       '<td>'+(g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
-     }).join("")+'</tbody></table></div>' : '<div class="muted">Todavía no hay gastos cargados.</div>')+'</div>';
+   '<div class="filtros">'+
+     '<div><label>Desde</label><input type="date" id="gf_desde" value="'+FG.desde+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="gf_hasta" value="'+FG.hasta+'"></div>'+
+     '<div><label>Concepto</label><select id="gf_concepto"><option value="">Todos</option>'+CGASTOS.map(c=>'<option value="'+c.id+'" '+(String(FG.concepto)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
+     '<div><label>Cuenta</label><select id="gf_cuenta"><option value="">Todas</option>'+CTAS.map(c=>'<option value="'+c.id+'" '+(String(FG.cuenta)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
+     '<div><label>Buscar</label><input id="gf_txt" placeholder="detalle, proveedor o comprobante" value="'+esc(FG.texto)+'"></div>'+
+     '<div><label>Anulados</label><select id="gf_anul"><option value="0" '+(FG.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FG.anulados?"selected":"")+'>Mostrar</option></select></div>'+
+     '<div style="min-width:auto"><button class="btn" id="gf_btn">Filtrar</button></div>'+
+     '<div style="min-width:auto"><button class="btn2" id="gf_clr">Limpiar</button></div>'+
+     (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formGasto()">+ Gasto nuevo</button></div>':'')+
+   '</div><div id="glista" class="muted">Cargando…</div></div>';
+  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1"}; finGastos(); };
+  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",cuenta:"",anulados:false,texto:""}; finGastos(); };
+  let q = sb.from("gastos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(1000);
+  if (FG.desde) q = q.gte("fecha", FG.desde);
+  if (FG.hasta) q = q.lte("fecha", FG.hasta);
+  if (FG.concepto) q = q.eq("concepto_id", Number(FG.concepto));
+  if (FG.cuenta) q = q.eq("cuenta_id", Number(FG.cuenta));
+  if (!FG.anulados) q = q.eq("anulado", false);
+  const {data,error} = await q;
+  if (error){ $("glista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const t = FG.texto.toLowerCase();
+  const rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")).toLowerCase().indexOf(t)>=0);
+  if (!rows.length){ $("glista").innerHTML='<div class="muted">No hay gastos con esos filtros.</div>'; return; }
+  const vivos = rows.filter(g=>!g.anulado);
+  const tot = m => vivos.filter(g=>g.moneda===m);
+  const resumen = ["ARS","USD"].map(function(m){
+    const v = tot(m); if (!v.length) return "";
+    const ti = v.reduce((a,g)=>a+Number(g.importe||0),0), tn = v.reduce((a,g)=>a+Number(g.neto||0),0), tv = v.reduce((a,g)=>a+Number(g.iva||0),0);
+    return '<div class="kpi" style="border-left-color:var(--oxido)"><div class="t">Gastado en '+m+' · '+v.length+' gastos</div><div class="n" style="font-size:20px">'+fmtM(ti,m)+'</div>'+
+           '<div class="muted" style="font-size:12px">neto '+fmtM(tn,m)+' · IVA '+fmtM(tv,m)+'</div></div>';
+  }).join("");
+  $("glista").innerHTML = (resumen?'<div class="kpis">'+resumen+'</div>':'')+
+   '<div class="muted" style="margin-bottom:8px">'+rows.length+' gasto'+(rows.length===1?"":"s")+(FG.anulados?" (incluye anulados)":"")+'</div>'+
+   '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
+   ['Fecha','Cuenta','Concepto','Proveedor','Comprobante','Neto','IVA','Importe','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+   rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.5;text-decoration:line-through':'')+'">'+
+     '<td>'+fmtF(g.fecha)+'</td><td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
+     '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
+     '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
+     '<td style="white-space:normal;min-width:160px">'+esc(g.detalle_extra)+'</td>'+
+     '<td>'+(g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
+   }).join("")+'</tbody></table></div>';
 }
 function formGasto(){
   const cuentas = CTAS.filter(c=>c.activo);
@@ -1547,7 +1580,11 @@ function formGasto(){
     '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
     '<div class="f"><label>Concepto</label><select id="g_concepto">'+selOpts(CGASTOS,null)+'</select></div>'+
     '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="g_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concGastoAgregar()">Agregar</button></div></div>'+
+    '<div class="f"><label>Proveedor</label><input id="g_proveedor" placeholder="opcional"></div>'+
+    '<div class="f"><label>N° de comprobante</label><input id="g_comprobante" placeholder="opcional"></div>'+
+    '<div class="f"><label>CUIT del proveedor</label><input id="g_cuit" placeholder="opcional"></div>'+
    '</div><div id="g_calc" class="muted"></div>'+
+   '<div class="muted" style="margin-top:4px">Proveedor, comprobante y CUIT son opcionales, pero si los cargás ahora el día de mañana se puede sacar el crédito fiscal sin volver a abrir cada gasto.</div>'+
    '<div class="f"><label>Detalle</label><input id="g_extra" placeholder="A qué corresponde"></div>'+
    '<div class="acciones"><button class="btn" id="g_guardar">Registrar gasto</button></div>';
   calcGasto();
@@ -1555,7 +1592,8 @@ function formGasto(){
     const imp = Number($("g_importe").value||0);
     if (!(imp>0)){ $("fgmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
     const {error} = await sb.rpc("registrar_gasto",{p_fecha:$("g_fecha").value||hoy(), p_cuenta:Number($("g_cuenta").value), p_importe:imp,
-      p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null});
+      p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null,
+      p_comprobante:$("g_comprobante").value||null, p_cuit:$("g_cuit").value||null, p_proveedor:$("g_proveedor").value||null});
     if (error){ $("fgmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
   };
