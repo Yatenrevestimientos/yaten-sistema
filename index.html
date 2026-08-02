@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-3";
+const VERSION = "v2026.08.02-4";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -258,6 +258,8 @@ const MENU = [
   {id:"agenda",   t:"Agenda ATO",      perm:"visita-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
   {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
+  {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
+  {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
   {id:"equipo",   t:"Equipo",          perm:"usuario-consultar"},
@@ -1201,6 +1203,459 @@ function imprimirPresupuesto(){
   if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes para este sitio y volvé a intentar."); return; }
   w.document.write(html); w.document.close();
   setTimeout(function(){ w.print(); }, 400);
+}
+
+
+/* ═══════════ CLIENTES Y CUENTA CORRIENTE ═══════════ */
+let CLIS = [], SALDOS = {}, FCLI = "";
+async function cargarClientes(){
+  if (!P("cliente-consultar")) return;
+  const [c,s] = await Promise.all([
+    sb.from("clientes").select("*").order("nombre"),
+    sb.from("v_saldos_cliente").select("*")
+  ]);
+  CLIS = c.data||[];
+  SALDOS = {};
+  (s.data||[]).forEach(function(x){ if(!x.moneda) return; SALDOS[x.cliente_id+"_"+x.moneda] = Number(x.saldo||0); });
+}
+const saldoCli = (id,m) => SALDOS[id+"_"+m] || 0;
+
+VISTAS.clientes = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  await cargarClientes();
+  const puede = P("cliente-agregar");
+  const t = FCLI.toLowerCase();
+  const rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")).toLowerCase().indexOf(t)>=0);
+  $("main").innerHTML = '<div class="panel"><h2>Clientes</h2>'+
+   '<div class="desc">Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.</div>'+
+   '<div class="filtros"><div style="min-width:260px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, código, teléfono o documento" value="'+esc(FCLI)+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Nombre / Razón social','Localidad','Teléfono','Email','Saldo ARS','Saldo USD'].map(h=>'<th>'+h+'</th>').join("")+
+     '</tr></thead><tbody>'+rows.map(function(c){
+       const a = saldoCli(c.id,'ARS'), u = saldoCli(c.id,'USD');
+       return '<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCliente('+c.id+')">'+
+        '<td><b>'+esc(c.codigo)+'</b></td><td>'+esc(c.nombre)+'</td><td>'+esc(nom(M.loc,c.localidad_id))+'</td>'+
+        '<td>'+esc(c.celular||c.telefono||"")+'</td><td>'+esc(c.email)+'</td>'+
+        '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
+        '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td></tr>';
+     }).join("")+'</tbody></table></div>' : '<div class="muted">Todavía no hay clientes cargados.</div>')+
+   '</div>';
+  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); VISTAS.clientes(); };
+  if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
+};
+
+const CAMPOS_CLI = ["nombre","tipo_doc","nro_doc","cat_iva","telefono","celular","email","direccion","localidad_id","origen_id","lista_id","observaciones"];
+const NUM_CLI = ["localidad_id","origen_id","lista_id"];
+const TIPOS_DOC = ["DNI","CUIT","CUIL","Pasaporte","Sin documento"];
+const CAT_IVA = ["Consumidor Final","Responsable Inscripto","Monotributista","Exento","No Responsable"];
+
+async function fichaCliente(id){
+  const c = id ? CLIS.find(x=>x.id===id) : null;
+  const puede = c ? P("cliente-modificar") : P("cliente-agregar");
+  const d = puede ? "" : "disabled";
+  const v = k => c ? (c[k]==null?"":c[k]) : "";
+  let seg = [];
+  if (c){
+    const r = await sb.from("cc_movimientos").select("*").eq("cliente_id",c.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300);
+    seg = r.data||[];
+  }
+  $("dtit").textContent = c ? (c.codigo+" · "+c.nombre) : "Cliente nuevo";
+  $("dbody").innerHTML = '<div id="clmsg"></div>'+
+   '<div class="sec">Datos del cliente</div><div class="grid">'+
+     '<div class="f"><label>Nombre o razón social *</label><input id="y_nombre" value="'+esc(v("nombre"))+'" '+d+'></div>'+
+     '<div class="f"><label>Tipo de documento</label><select id="y_tipo_doc" '+d+'>'+selTxt(TIPOS_DOC,v("tipo_doc"))+'</select></div>'+
+     '<div class="f"><label>N° de documento</label><input id="y_nro_doc" value="'+esc(v("nro_doc"))+'" '+d+'></div>'+
+     '<div class="f"><label>Categoría de IVA</label><select id="y_cat_iva" '+d+'>'+selTxt(CAT_IVA,v("cat_iva"))+'</select></div>'+
+     '<div class="f"><label>Teléfono</label><input id="y_telefono" value="'+esc(v("telefono"))+'" '+d+'></div>'+
+     '<div class="f"><label>Celular</label><input id="y_celular" value="'+esc(v("celular"))+'" '+d+'></div>'+
+     '<div class="f"><label>Email</label><input id="y_email" value="'+esc(v("email"))+'" '+d+'></div>'+
+     '<div class="f"><label>Dirección</label><input id="y_direccion" value="'+esc(v("direccion"))+'" '+d+'></div>'+
+     '<div class="f"><label>Localidad</label><select id="y_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select></div>'+
+     '<div class="f"><label>Cómo nos conoció</label><select id="y_origen_id" '+d+'>'+selOpts(M.ori,v("origen_id"))+'</select></div>'+
+     '<div class="f"><label>Lista de precios</label><select id="y_lista_id" '+d+'>'+selOpts(LISTAS,v("lista_id"))+'</select></div>'+
+   '</div>'+
+   '<div class="f"><label>Observaciones</label><textarea id="y_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
+   (puede?'<div class="acciones"><button class="btn" id="y_guardar">'+(c?"Guardar cambios":"Crear cliente")+'</button></div>':'')+
+   (c? seccionCC(c, seg) : '');
+  if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
+  if (c) armarAccionesCC(c);
+  $("dlg").showModal();
+}
+function seccionCC(c, seg){
+  const bloque = function(m){
+    const filas = seg.filter(x=>x.moneda===m);
+    const saldo = filas.filter(x=>!x.anulado).reduce((a,x)=>a+Number(x.debito||0)-Number(x.credito||0),0);
+    return '<div class="sec">Cuenta corriente '+m+'</div>'+
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><b style="font-size:18px;color:'+(saldo>0?'#7a2415':'#1d5b2c')+'">'+
+      (saldo>0? 'Debe '+fmtM(saldo,m) : saldo<0? 'A favor '+fmtM(-saldo,m) : 'Sin saldo')+'</b>'+
+      '<label style="margin:0;text-transform:none"><input type="checkbox" id="cc_anul_'+m+'" onchange="fichaCliente('+c.id+')" style="width:auto"> ver anulados</label></div>'+
+      (filas.length? '<div class="tablewrap" style="max-height:250px;overflow:auto"><table><thead><tr><th>Fecha</th><th>Detalle</th><th>Débito</th><th>Crédito</th>'+(P("finanzas-anular")?'<th></th>':'')+'</tr></thead><tbody>'+
+        filas.map(function(x){
+          return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
+            '<td style="white-space:normal;min-width:240px">'+esc(x.detalle)+'</td>'+
+            '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
+            (P("finanzas-anular")? '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="anularCC('+x.id+','+c.id+')">Anular</button>')+'</td>':'')+
+          '</tr>';
+        }).join("")+'</tbody></table></div>' : '<div class="muted">Sin movimientos.</div>');
+  };
+  return bloque('ARS') + bloque('USD') +
+    (P("venta-cobranza")? '<div class="acciones" style="margin-top:14px">'+
+      '<button class="btn" onclick="formCobranza('+c.id+')">Registrar cobranza</button>'+
+      '<button class="btn2" onclick="formCredDeb('+c.id+')">Registrar crédito / débito</button></div>' : '');
+}
+function armarAccionesCC(){}
+async function guardarCliente(id){
+  const o = {};
+  CAMPOS_CLI.forEach(function(k){ const el=$("y_"+k); if(!el) return; let x=el.value; if(x==="") x=null; else if(NUM_CLI.indexOf(k)>=0) x=Number(x); o[k]=x; });
+  if (!o.nombre){ $("clmsg").innerHTML='<div class="msg err">Falta el nombre.</div>'; return; }
+  const r = id ? await sb.from("clientes").update(o).eq("id",id) : await sb.from("clientes").insert(o);
+  if (r.error){ $("clmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  await cargarClientes();
+  $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>';
+  if (VISTA==="clientes") VISTAS.clientes();
+  if (!id) $("dlg").close();
+}
+async function anularCC(movId, cliId){
+  const motivo = prompt("¿Por qué anulás este movimiento? Queda registrado con tu nombre.");
+  if (motivo === null) return;
+  const {error} = await sb.rpc("anular_cc_movimiento", {p_id:movId, p_motivo:motivo||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarClientes();
+  fichaCliente(cliId);
+}
+
+/* ─────────── COBRANZA ─────────── */
+async function formCobranza(cliId){
+  const cli = CLIS.find(x=>x.id===cliId);
+  const [ct,cc] = await Promise.all([
+    sb.from("v_saldos_cuenta").select("*").order("nombre"),
+    sb.from("conceptos_cobranza").select("*").order("id")
+  ]);
+  const cuentas = (ct.data||[]).filter(x=>x.activo);
+  $("dtit").textContent = "Cobranza · " + cli.nombre;
+  $("dbody").innerHTML = '<div id="cbmsg"></div>'+
+   '<div class="sec">Registrar cobranza</div><div class="grid">'+
+     '<div class="f"><label>Fecha</label><input type="date" id="k_fecha" value="'+hoy()+'"></div>'+
+     '<div class="f"><label>Cuenta corriente</label><select id="k_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
+     '<div class="f"><label>¿En qué cuenta entra la plata?</label><select id="k_cuenta">'+cuentas.map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+' ('+x.moneda+')</option>').join("")+'</select></div>'+
+     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="k_importe"></div>'+
+     '<div class="f"><label>Concepto</label><select id="k_concepto">'+selOpts(cc.data||[],null)+'</select></div>'+
+     '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="k_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concCobAgregar('+cliId+')">Agregar</button></div></div>'+
+   '</div>'+
+   '<div class="f"><label>Observaciones</label><textarea id="k_obs" rows="2"></textarea></div>'+
+   '<div class="muted">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
+   '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+  $("k_guardar").onclick = async function(){
+    const imp = Number($("k_importe").value||0);
+    if (!(imp>0)){ $("cbmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+    $("k_guardar").disabled = true;
+    const {error} = await sb.rpc("registrar_cobranza", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:$("k_moneda").value,
+      p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null});
+    $("k_guardar").disabled = false;
+    if (error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    await cargarClientes();
+    fichaCliente(cliId);
+  };
+}
+async function concCobAgregar(cliId){
+  const n = $("k_conc_nuevo").value.trim(); if (!n) return;
+  const {error} = await sb.from("conceptos_cobranza").insert({nombre:n, activo:true});
+  if (error) return alert(error.message);
+  formCobranza(cliId);
+}
+function formCredDeb(cliId){
+  const cli = CLIS.find(x=>x.id===cliId);
+  $("dtit").textContent = "Crédito / débito · " + cli.nombre;
+  $("dbody").innerHTML = '<div id="cdmsg"></div>'+
+   '<div class="sec">Ajuste manual de cuenta corriente</div><div class="grid">'+
+     '<div class="f"><label>Moneda</label><select id="j_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
+     '<div class="f"><label>Tipo</label><select id="j_tipo"><option>Debito</option><option>Credito</option></select></div>'+
+     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="j_importe"></div>'+
+   '</div>'+
+   '<div class="f"><label>Detalle *</label><input id="j_detalle" placeholder="Por qué se ajusta"></div>'+
+   '<div class="muted">Débito le suma deuda al cliente. Crédito se la baja. Este ajuste no toca ninguna caja: es solo la cuenta corriente.</div>'+
+   '<div class="acciones"><button class="btn" id="j_guardar">Guardar</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+  $("j_guardar").onclick = async function(){
+    const imp = Number($("j_importe").value||0);
+    if (!(imp>0)){ $("cdmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    const {error} = await sb.rpc("registrar_cc_manual",{p_cliente:cliId,p_moneda:$("j_moneda").value,p_tipo:$("j_tipo").value,p_importe:imp,p_detalle:$("j_detalle").value||"Ajuste"});
+    if (error){ $("cdmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    await cargarClientes();
+    fichaCliente(cliId);
+  };
+}
+
+/* ═══════════ FINANZAS ═══════════ */
+let FIN = {tab:"resumen", moneda:"ARS", desde:"", hasta:"", anulados:false};
+let CTAS = [], TCTAS = [], CGASTOS = [];
+
+async function cargarFin(){
+  const [c,t,g] = await Promise.all([
+    sb.from("v_saldos_cuenta").select("*").order("nombre"),
+    sb.from("tipos_cuenta").select("*").order("orden").order("nombre"),
+    sb.from("conceptos_gasto").select("*").order("nombre")
+  ]);
+  CTAS = c.data||[]; TCTAS = t.data||[]; CGASTOS = g.data||[];
+}
+VISTAS.finanzas = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  await cargarFin();
+  const tabs = [["resumen","Resumen"],["cuentas","Cuentas"],["movs","Movimientos"],["gastos","Gastos"],["transf","Transferencias"],["retiros","Retiros"]];
+  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
+    '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
+    tabs.map(t=>'<button onclick="FIN.tab=\''+t[0]+'\';VISTAS.finanzas()" style="border:0;border-radius:0;background:'+(FIN.tab===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+(FIN.tab===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
+    '</div></div><div id="fbody"></div>';
+  ({resumen:finResumen, cuentas:finCuentas, movs:finMovs, gastos:finGastos, transf:finTransf, retiros:finRetiros}[FIN.tab]||finResumen)();
+};
+
+function finResumen(){
+  const monedas = ["ARS","USD"];
+  let html = "";
+  monedas.forEach(function(m){
+    const grupos = TCTAS.map(function(t){
+      const cs = CTAS.filter(c=>c.tipo_cuenta_id===t.id && c.moneda===m && c.activo);
+      return {t:t, cs:cs, total:cs.reduce((a,c)=>a+Number(c.saldo||0),0)};
+    }).filter(g=>g.cs.length);
+    const sinTipo = CTAS.filter(c=>!c.tipo_cuenta_id && c.moneda===m && c.activo);
+    if (sinTipo.length) grupos.push({t:{nombre:"Sin tipo asignado"}, cs:sinTipo, total:sinTipo.reduce((a,c)=>a+Number(c.saldo||0),0)});
+    const gran = grupos.reduce((a,g)=>a+g.total,0);
+    html += '<div class="panel"><h2>Estado de cuentas en '+m+'</h2>'+
+      '<div class="kpi" style="margin-bottom:14px;border-left-color:var(--petroleo)"><div class="t">Total en '+m+'</div><div class="n">'+(fmtM(gran,m)||(m==="USD"?"US$ 0":"$ 0"))+'</div></div>'+
+      (grupos.length? grupos.map(function(g){
+        return '<div class="sec">'+esc(g.t.nombre)+'</div><div class="tablewrap"><table><tbody>'+
+          g.cs.map(c=>'<tr><td>'+esc(c.nombre)+'</td><td style="text-align:right">'+(fmtM(c.saldo,m)||"—")+'</td></tr>').join("")+
+          '<tr style="background:#f6f3ee"><td><b>Total '+esc(g.t.nombre)+'</b></td><td style="text-align:right"><b>'+(fmtM(g.total,m)||"—")+'</b></td></tr>'+
+          '</tbody></table></div>';
+      }).join("") : '<div class="muted">No hay cuentas en esta moneda todavía.</div>')+'</div>';
+  });
+  $("fbody").innerHTML = html;
+}
+
+function finCuentas(){
+  const puede = P("cuenta-modificar");
+  $("fbody").innerHTML =
+   '<div class="panel"><h2>Tipos de cuenta</h2><div class="desc">Las familias con las que se agrupa el dinero: caja, banco, fondo de inversión, Mercado Pago, tarjetas, cheques. Agregá los que necesites y el resumen los totaliza solo.</div>'+
+   '<div id="tcmsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Orden</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   (puede?'<tr style="background:#f6fbf7"><td><input id="ntc_nombre" placeholder="Ej: Criptomonedas"></td><td><input id="ntc_orden" type="number" style="width:80px" value="9"></td><td>—</td><td><button class="btn btn-sm" onclick="tipoCtaAgregar()">Agregar</button></td></tr>':'')+
+   TCTAS.map(t=>'<tr'+(t.activo?'':' style="opacity:.55"')+'>'+
+     '<td>'+(puede?'<input id="etc_'+t.id+'_n" value="'+esc(t.nombre)+'">':esc(t.nombre))+'</td>'+
+     '<td>'+(puede?'<input id="etc_'+t.id+'_o" type="number" style="width:80px" value="'+t.orden+'">':t.orden)+'</td>'+
+     '<td>'+(puede?'<select id="etc_'+t.id+'_a"><option value="1" '+(t.activo?"selected":"")+'>Sí</option><option value="0" '+(!t.activo?"selected":"")+'>No</option></select>':(t.activo?"Sí":"No"))+'</td>'+
+     (puede?'<td><button class="btn2 btn-sm" onclick="tipoCtaGuardar('+t.id+')">Guardar</button></td>':'')+'</tr>').join("")+
+   '</tbody></table></div></div>'+
+   '<div class="panel"><h2>Cuentas</h2><div class="desc">Cada caja, banco o billetera con su moneda. El saldo lo calcula el sistema con los movimientos, no se escribe a mano.</div>'+
+   '<div id="ctmsg"></div>'+(puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="fichaCuenta(null)">+ Cuenta nueva</button></div>':'')+
+   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Moneda</th><th>Tope</th><th>Saldo</th><th>Activa</th></tr></thead><tbody>'+
+   (CTAS.length? CTAS.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
+     '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+(fmtM(c.saldo,c.moneda)||'—')+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")
+     : '<tr><td colspan="6" class="muted">Todavía no hay cuentas. Creá la primera con «Cuenta nueva».</td></tr>')+
+   '</tbody></table></div></div>';
+}
+async function tipoCtaAgregar(){
+  const n = $("ntc_nombre").value.trim(); if(!n){ $("tcmsg").innerHTML='<div class="msg err">Poné un nombre.</div>'; return; }
+  const {error} = await sb.from("tipos_cuenta").insert({nombre:n, orden:Number($("ntc_orden").value||9), activo:true});
+  if (error){ $("tcmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarFin(); finCuentas();
+}
+async function tipoCtaGuardar(id){
+  const {error} = await sb.from("tipos_cuenta").update({nombre:$("etc_"+id+"_n").value.trim(), orden:Number($("etc_"+id+"_o").value||0), activo:$("etc_"+id+"_a").value==="1"}).eq("id",id);
+  if (error){ $("tcmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarFin(); finCuentas();
+}
+function fichaCuenta(id){
+  const c = id ? CTAS.find(x=>x.id===id) : null;
+  const puede = P("cuenta-modificar");
+  const d = puede?"":"disabled";
+  $("dtit").textContent = c ? c.nombre : "Cuenta nueva";
+  $("dbody").innerHTML = '<div id="fcmsg"></div><div class="grid">'+
+    '<div class="f"><label>Nombre *</label><input id="z_nombre" value="'+esc(c?c.nombre:"")+'" placeholder="Caja Chica Local" '+d+'></div>'+
+    '<div class="f"><label>Tipo de cuenta</label><select id="z_tipo" '+d+'>'+selOpts(TCTAS, c?c.tipo_cuenta_id:null)+'</select></div>'+
+    '<div class="f"><label>Moneda</label><select id="z_moneda" '+d+'>'+selTxt(["ARS","USD"], c?c.moneda:"ARS")+'</select></div>'+
+    '<div class="f"><label>Tope (0 = sin tope)</label><input type="number" step="0.01" id="z_tope" value="'+(c?c.tope:0)+'" '+d+'></div>'+
+    '<div class="f"><label>Activa</label><select id="z_activo" '+d+'><option value="1" '+(!c||c.activo?"selected":"")+'>Sí</option><option value="0" '+(c&&!c.activo?"selected":"")+'>No</option></select></div>'+
+   '</div><div class="f"><label>Descripción</label><textarea id="z_desc" rows="2" '+d+'>'+esc(c?c.descripcion:"")+'</textarea></div>'+
+   (c?'<div class="muted">Saldo actual: <b>'+(fmtM(c.saldo,c.moneda)||"—")+'</b>. Se calcula con los movimientos y no se puede editar a mano.</div>':'')+
+   (puede?'<div class="acciones"><button class="btn" id="z_guardar">'+(c?"Guardar":"Crear cuenta")+'</button></div>':'');
+  if (puede) $("z_guardar").onclick = async function(){
+    const o = {nombre:$("z_nombre").value.trim(), descripcion:$("z_desc").value||null, tipo_cuenta_id:$("z_tipo").value?Number($("z_tipo").value):null,
+               moneda:$("z_moneda").value, tope:Number($("z_tope").value||0), activo:$("z_activo").value==="1"};
+    if (!o.nombre){ $("fcmsg").innerHTML='<div class="msg err">Falta el nombre.</div>'; return; }
+    const r = id ? await sb.from("cuentas").update(o).eq("id",id) : await sb.from("cuentas").insert(o);
+    if (r.error){ $("fcmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+    await cargarFin(); $("dlg").close(); if (VISTA==="finanzas") VISTAS.finanzas();
+  };
+  $("dlg").showModal();
+}
+
+async function finMovs(){
+  $("fbody").innerHTML = '<div class="panel"><h2>Movimientos de cuentas</h2>'+
+   '<div class="filtros">'+
+     '<div><label>Moneda</label><select id="mf_mon"><option value="">Todas</option>'+["ARS","USD"].map(x=>'<option '+(FIN.moneda===x?"selected":"")+'>'+x+'</option>').join("")+'</select></div>'+
+     '<div><label>Desde</label><input type="date" id="mf_desde" value="'+FIN.desde+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="mf_hasta" value="'+FIN.hasta+'"></div>'+
+     '<div><label>Anulados</label><select id="mf_anul"><option value="0" '+(FIN.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FIN.anulados?"selected":"")+'>Mostrar</option></select></div>'+
+     '<div style="min-width:auto"><button class="btn" id="mf_btn">Filtrar</button></div></div>'+
+   '<div id="mlista" class="muted">Cargando…</div></div>';
+  $("mf_btn").onclick = function(){ FIN.moneda=$("mf_mon").value; FIN.desde=$("mf_desde").value; FIN.hasta=$("mf_hasta").value; FIN.anulados=$("mf_anul").value==="1"; finMovs(); };
+  let q = sb.from("movimientos_cuenta").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
+  if (FIN.desde) q = q.gte("fecha", FIN.desde);
+  if (FIN.hasta) q = q.lte("fecha", FIN.hasta+"T23:59:59");
+  if (!FIN.anulados) q = q.eq("anulado", false);
+  const {data,error} = await q;
+  if (error){ $("mlista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const ctaDe = id => { const c = CTAS.find(x=>x.id===id); return c?c:{nombre:"?",moneda:"ARS"}; };
+  const rows = (data||[]).filter(x=> !FIN.moneda || ctaDe(x.cuenta_id).moneda===FIN.moneda);
+  $("mlista").innerHTML = rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+    ['Cuenta','Fecha','Detalle','Crédito','Débito','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+    rows.map(function(x){ const c = ctaDe(x.cuenta_id);
+      return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+esc(c.nombre)+'</td><td>'+fmtF(x.fecha)+'</td>'+
+        '<td style="white-space:normal;min-width:260px">'+esc(x.detalle)+'</td>'+
+        '<td style="color:#1d5b2c">'+(Number(x.credito)?fmtM(x.credito,c.moneda):'')+'</td>'+
+        '<td style="color:#7a2415">'+(Number(x.debito)?fmtM(x.debito,c.moneda):'')+'</td><td>'+esc(x.motivo)+'</td></tr>';
+    }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
+}
+
+async function finGastos(){
+  const puede = P("finanzas-modificar");
+  const {data} = await sb.from("gastos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300);
+  const rows = (data||[]).filter(x=>FIN.anulados||!x.anulado);
+  $("fbody").innerHTML = '<div class="panel"><h2>Gastos</h2>'+
+   '<div class="desc">Cada gasto sale de una cuenta y le baja el saldo. No se borran: se anulan y quedan a la vista.</div>'+
+   '<div id="gmsg"></div>'+
+   (puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="formGasto()">+ Gasto nuevo</button></div>':'')+
+   (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+     ['Fecha','Cuenta','Concepto','Neto','IVA','Importe','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.45;text-decoration:line-through':'')+'">'+
+       '<td>'+fmtF(g.fecha)+'</td><td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
+       '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
+       '<td style="white-space:normal;min-width:180px">'+esc(g.detalle_extra)+'</td>'+
+       '<td>'+(g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
+     }).join("")+'</tbody></table></div>' : '<div class="muted">Todavía no hay gastos cargados.</div>')+'</div>';
+}
+function formGasto(){
+  const cuentas = CTAS.filter(c=>c.activo);
+  $("dtit").textContent = "Gasto nuevo";
+  $("dbody").innerHTML = '<div id="fgmsg"></div><div class="grid">'+
+    '<div class="f"><label>Fecha</label><input type="date" id="g_fecha" value="'+hoy()+'"></div>'+
+    '<div class="f"><label>Cuenta de donde sale</label><select id="g_cuenta">'+cuentas.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></div>'+
+    '<div class="f"><label>Importe total</label><input type="number" step="0.01" id="g_importe" oninput="calcGasto()"></div>'+
+    '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
+    '<div class="f"><label>Concepto</label><select id="g_concepto">'+selOpts(CGASTOS,null)+'</select></div>'+
+    '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="g_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concGastoAgregar()">Agregar</button></div></div>'+
+   '</div><div id="g_calc" class="muted"></div>'+
+   '<div class="f"><label>Detalle</label><input id="g_extra" placeholder="A qué corresponde"></div>'+
+   '<div class="acciones"><button class="btn" id="g_guardar">Registrar gasto</button></div>';
+  calcGasto();
+  $("g_guardar").onclick = async function(){
+    const imp = Number($("g_importe").value||0);
+    if (!(imp>0)){ $("fgmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    const {error} = await sb.rpc("registrar_gasto",{p_fecha:$("g_fecha").value||hoy(), p_cuenta:Number($("g_cuenta").value), p_importe:imp,
+      p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null});
+    if (error){ $("fgmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    await cargarFin(); $("dlg").close(); VISTAS.finanzas();
+  };
+  $("dlg").showModal();
+}
+function calcGasto(){
+  const t = Number($("g_importe").value||0), p = Number($("g_imp").value||0);
+  const neto = p? Math.round(t/(1+p/100)*100)/100 : t;
+  $("g_calc").innerHTML = 'Neto '+(fmtM(neto,"ARS")||"—")+' · IVA '+(fmtM(Math.round((t-neto)*100)/100,"ARS")||"—")+' · Total '+(fmtM(t,"ARS")||"—");
+}
+async function concGastoAgregar(){
+  const n = $("g_conc_nuevo").value.trim(); if(!n) return;
+  const {error} = await sb.from("conceptos_gasto").insert({nombre:n, activo:true});
+  if (error) return alert(error.message);
+  await cargarFin();
+  $("g_concepto").innerHTML = selOpts(CGASTOS, (CGASTOS.find(x=>x.nombre===n)||{}).id);
+  $("g_conc_nuevo").value = "";
+}
+async function anularGasto(id){
+  const m = prompt("¿Por qué anulás este gasto?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_gasto",{p_id:id,p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarFin(); VISTAS.finanzas();
+}
+
+async function finTransf(){
+  const puede = P("finanzas-modificar");
+  const {data} = await sb.from("transferencias").select("*").order("fecha",{ascending:false}).limit(300);
+  $("fbody").innerHTML = '<div class="panel"><h2>Transferencias entre cuentas</h2>'+
+   '<div class="desc">Mover plata de una cuenta a otra. Si son de distinta moneda, se cargan los dos importes.</div><div id="trmsg"></div>'+
+   (puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="formTransf()">+ Transferencia</button></div>':'')+
+   ((data||[]).length? '<div class="tablewrap"><table><thead><tr>'+['Fecha','Origen','Importe','Destino','Importe','Obs.',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     data.map(t=>'<tr style="'+(t.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(t.fecha)+'</td><td>'+esc(nom(CTAS,t.cuenta_origen_id))+'</td>'+
+       '<td>'+fmtM(t.importe_origen,t.moneda_origen)+'</td><td>'+esc(nom(CTAS,t.cuenta_destino_id))+'</td><td>'+fmtM(t.importe_destino,t.moneda_destino)+'</td>'+
+       '<td style="white-space:normal">'+esc(t.observaciones)+'</td>'+
+       '<td>'+(t.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularTransf('+t.id+')">Anular</button>':''))+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Sin transferencias.</div>')+'</div>';
+}
+function formTransf(){
+  const cs = CTAS.filter(c=>c.activo);
+  const op = cs.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("");
+  $("dtit").textContent = "Transferencia entre cuentas";
+  $("dbody").innerHTML = '<div id="ftmsg"></div><div class="grid">'+
+    '<div class="f"><label>Fecha</label><input type="date" id="x_fecha" value="'+hoy()+'"></div>'+
+    '<div class="f"><label>Sale de</label><select id="x_origen">'+op+'</select></div>'+
+    '<div class="f"><label>Importe que sale</label><input type="number" step="0.01" id="x_io"></div>'+
+    '<div class="f"><label>Entra en</label><select id="x_destino">'+op+'</select></div>'+
+    '<div class="f"><label>Importe que entra</label><input type="number" step="0.01" id="x_id" placeholder="dejalo vacío si es la misma moneda"></div>'+
+   '</div><div class="f"><label>Observaciones</label><input id="x_obs"></div>'+
+   '<div class="acciones"><button class="btn" id="x_guardar">Registrar</button></div>';
+  $("x_guardar").onclick = async function(){
+    const io = Number($("x_io").value||0);
+    if (!(io>0)){ $("ftmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
+      p_imp_origen:io, p_imp_destino:Number($("x_id").value||0), p_obs:$("x_obs").value||null});
+    if (error){ $("ftmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    await cargarFin(); $("dlg").close(); VISTAS.finanzas();
+  };
+  $("dlg").showModal();
+}
+async function anularTransf(id){
+  const m = prompt("¿Por qué anulás esta transferencia?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_transferencia",{p_id:id,p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarFin(); VISTAS.finanzas();
+}
+
+async function finRetiros(){
+  const puede = P("finanzas-modificar");
+  const {data} = await sb.from("retiros").select("*").order("fecha",{ascending:false}).limit(300);
+  $("fbody").innerHTML = '<div class="panel"><h2>Retiros de dinero</h2>'+
+   '<div class="desc">La plata que sale de una caja y no es un gasto del negocio.</div><div id="remsg"></div>'+
+   (puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="formRetiro()">+ Retiro</button></div>':'')+
+   ((data||[]).length? '<div class="tablewrap"><table><thead><tr>'+['Fecha','Cuenta','Importe','Quién','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     data.map(r=>'<tr style="'+(r.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(r.fecha)+'</td><td>'+esc(nom(CTAS,r.cuenta_id))+'</td>'+
+       '<td><b>'+fmtM(r.importe,r.moneda)+'</b></td><td>'+esc(r.quien)+'</td><td style="white-space:normal">'+esc(r.observaciones)+'</td>'+
+       '<td>'+(r.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularRetiro('+r.id+')">Anular</button>':''))+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Sin retiros.</div>')+'</div>';
+}
+function formRetiro(){
+  const cs = CTAS.filter(c=>c.activo);
+  $("dtit").textContent = "Retiro de dinero";
+  $("dbody").innerHTML = '<div id="frmsg"></div><div class="grid">'+
+    '<div class="f"><label>Fecha</label><input type="date" id="r_fecha" value="'+hoy()+'"></div>'+
+    '<div class="f"><label>Cuenta</label><select id="r_cuenta">'+cs.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></div>'+
+    '<div class="f"><label>Importe</label><input type="number" step="0.01" id="r_importe"></div>'+
+    '<div class="f"><label>Quién retira</label><input id="r_quien"></div>'+
+   '</div><div class="f"><label>Observaciones</label><input id="r_obs"></div>'+
+   '<div class="acciones"><button class="btn" id="r_guardar">Registrar retiro</button></div>';
+  $("r_guardar").onclick = async function(){
+    const imp = Number($("r_importe").value||0);
+    if (!(imp>0)){ $("frmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    const {error} = await sb.rpc("registrar_retiro",{p_fecha:$("r_fecha").value||hoy(), p_cuenta:Number($("r_cuenta").value), p_importe:imp, p_quien:$("r_quien").value||null, p_obs:$("r_obs").value||null});
+    if (error){ $("frmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    await cargarFin(); $("dlg").close(); VISTAS.finanzas();
+  };
+  $("dlg").showModal();
+}
+async function anularRetiro(id){
+  const m = prompt("¿Por qué anulás este retiro?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_retiro",{p_id:id,p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarFin(); VISTAS.finanzas();
 }
 
 </script>
