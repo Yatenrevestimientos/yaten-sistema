@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-14";
+const VERSION = "v2026.08.02-15";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1322,7 +1322,8 @@ VISTAS.ventas = async function(){
      '<div><label>Hasta</label><input type="date" id="vf_hasta" value="'+FVEN.hasta+'"></div>'+
      '<div><label>Anuladas</label><select id="vf_anul"><option value="0" '+(FVEN.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FVEN.anulados?"selected":"")+'>Mostrar</option></select></div>'+
      '<div style="min-width:240px"><label>Buscar</label><input id="vf_txt" placeholder="código, cliente u observaciones" value="'+esc(FVEN.texto)+'"></div>'+
-     '<div style="min-width:auto"><button class="btn" id="vf_btn">Filtrar</button></div></div>'+
+     '<div style="min-width:auto"><button class="btn" id="vf_btn">Filtrar</button></div>'+
+     (P("venta-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formVentaNueva(null)">+ Venta nueva</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Fecha','Cliente','Neto','IVA','Total',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(v=>'<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
@@ -1370,6 +1371,200 @@ async function anularVenta(id){
   if (error) return alert(error.message);
   await cargarClientes();
   fichaVenta(id);
+  if (VISTA==="ventas") VISTAS.ventas();
+}
+
+/* ─── Venta directa: se busca el cliente y se cargan los renglones a mano ─── */
+let VTA = null;
+async function formVentaNueva(cliId){
+  $("dtit").textContent = "Venta nueva";
+  if (!(await db12())){
+    $("dbody").innerHTML = '<div class="msg err">Falta correr la migración de ventas en la base.</div>';
+    try{ $("dlg").showModal(); }catch(e){} return;
+  }
+  if (!P("venta-agregar")){
+    $("dbody").innerHTML = '<div class="msg err">No tenés permiso para registrar ventas.</div>';
+    try{ $("dlg").showModal(); }catch(e){} return;
+  }
+  if (!CLIS.length) await cargarClientes();
+  if (!PRODS.length) await cargarCatalogo();
+  if (!CLIS.length){
+    $("dbody").innerHTML = '<div class="msg err"><b>Todavía no hay clientes cargados.</b><br>Una venta siempre es a un cliente, porque genera la deuda en su cuenta corriente. Creá el cliente primero en la pantalla Clientes.</div>';
+    try{ $("dlg").showModal(); }catch(e){} return;
+  }
+  VTA = {cliente_id: cliId||null, fecha:hoy(), moneda:"ARS", obs:"", items:[], filtro:""};
+  pintarFormVenta();
+  try{ $("dlg").showModal(); }catch(e){}
+}
+function ventaClientesFiltrados(){
+  const t = (VTA.filtro||"").trim().toLowerCase();
+  return CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)).toLowerCase().indexOf(t)>=0);
+}
+function opcionesCliVenta(lista){
+  return '<option value="">— '+lista.length+' cliente'+(lista.length===1?"":"s")+' —</option>'+
+    lista.map(c=>'<option value="'+c.id+'" '+(String(VTA.cliente_id)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+(c.codigo?' ('+esc(c.codigo)+')':'')+'</option>').join("");
+}
+function pintarFormVenta(){
+  const lista = ventaClientesFiltrados();
+  $("dbody").innerHTML = '<div id="vnmsg"></div>'+
+   '<div class="sec">¿A quién le vendemos?</div><div class="grid">'+
+     '<div class="f"><label>Buscar cliente</label><input id="v_busca" value="'+esc(VTA.filtro)+'" placeholder="nombre, teléfono, dirección, documento…" oninput="ventaBuscar()"></div>'+
+     '<div class="f"><label>Cliente *</label><select id="v_cliente" onchange="ventaClienteElegido()">'+opcionesCliVenta(lista)+'</select></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="v_fecha" value="'+VTA.fecha+'" onchange="ventaSincro()"></div>'+
+     '<div class="f"><label>Moneda</label><select id="v_moneda" onchange="ventaMoneda()"><option value="ARS" '+(VTA.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(VTA.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
+   '</div>'+
+   '<div class="muted" id="v_info" style="margin-bottom:10px"></div>'+
+   '<div class="sec">Qué se vende</div>'+
+   '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="ventaItemAgregar()">+ Producto</button>'+
+     '<button class="btn2 btn-sm" onclick="ventaAdicAgregar()">+ Adicional (flete, colocación…)</button></div>'+
+   '<div id="v_items"></div>'+
+   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="v_obs" value="'+esc(VTA.obs)+'" oninput="ventaSincro()" placeholder="opcional"></div>'+
+   '<div id="v_tot" style="margin-top:10px"></div>'+
+   '<div class="muted" style="margin-top:8px">Al registrarla, la venta le suma la deuda a la cuenta corriente del cliente, en una sola operación. Si te equivocás, se anula con motivo y la deuda se revierte: no se borra nunca.</div>'+
+   '<div class="acciones"><button class="btn" id="v_guardar" onclick="guardarVentaDirecta()">Registrar venta</button>'+
+     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  pintarVentaInfo(); pintarVentaItems(); pintarVentaTotales();
+}
+function ventaBuscar(){
+  VTA.filtro = $("v_busca").value;
+  const lista = ventaClientesFiltrados();
+  $("v_cliente").innerHTML = opcionesCliVenta(lista);
+  if (lista.length === 1){ $("v_cliente").value = lista[0].id; ventaClienteElegido(); }
+}
+function ventaClienteElegido(){
+  VTA.cliente_id = $("v_cliente").value || null;
+  pintarVentaInfo();
+}
+function pintarVentaInfo(){
+  const el = $("v_info"); if (!el) return;
+  const cli = CLIS.find(c=>String(c.id)===String(VTA.cliente_id));
+  if (!cli){ el.innerHTML = 'Buscá y elegí el cliente. Si escribís y queda uno solo, se selecciona solo.'; return; }
+  const a = saldoCli(cli.id,'ARS'), u = saldoCli(cli.id,'USD');
+  el.innerHTML = '<b>'+esc(cli.nombre)+'</b> · '+esc(cli.celular||cli.telefono||"sin teléfono")+' · '+esc(nom(M.loc,cli.localidad_id)||"sin localidad")+
+    '<br>Deuda actual: <b>'+(a?fmtM(a,'ARS'):'$ 0')+'</b>'+(u?' y <b>'+fmtM(u,'USD')+'</b>':'')+
+    (cli.lista_id?' · Lista de precios: '+esc(nom(LISTAS,cli.lista_id)):'');
+}
+function listaDeVenta(){
+  const cli = CLIS.find(c=>String(c.id)===String(VTA.cliente_id));
+  if (cli && cli.lista_id) return cli.lista_id;
+  const l = LISTAS.filter(x=>x.activo)[0];
+  return l ? l.id : null;
+}
+function ventaItemAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:false}); pintarVentaItems(); pintarVentaTotales(); }
+function ventaAdicAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:true}); pintarVentaItems(); pintarVentaTotales(); }
+function ventaItemQuitar(k){ ventaSincro(); VTA.items.splice(k,1); pintarVentaItems(); pintarVentaTotales(); }
+function ventaMoneda(){ VTA.moneda = $("v_moneda").value || "ARS"; ventaSincro(); pintarVentaItems(); pintarVentaTotales(); }
+function ventaSincro(){
+  VTA.items.forEach(function(x,k){
+    ["producto_id","descripcion","cantidad","unidad","precio_unit","descuento_pct","iva_pct"].forEach(function(c){
+      const el = $("vi_"+k+"_"+c); if (!el) return;
+      x[c] = (c==="descripcion"||c==="unidad") ? el.value : (el.value===""?null:Number(el.value));
+    });
+  });
+  const f = $("v_fecha"); if (f) VTA.fecha = f.value || hoy();
+  const o = $("v_obs");   if (o) VTA.obs = o.value;
+  pintarVentaTotales();
+}
+function ventaProducto(k){
+  ventaSincro();
+  const x = VTA.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  if (p){
+    x.descripcion = p.nombre;
+    x.unidad = p.unidad;
+    x.iva_pct = Number(p.iva_pct||0);
+    x.aplica_iva = Number(p.iva_pct||0) > 0;
+    x.precio_unit = precioDe(p, listaDeVenta(), VTA.moneda);
+  }
+  pintarVentaItems(); pintarVentaTotales();
+}
+function celdaMedidaVenta(x,k){
+  if (x.es_adicional) return '<span class="muted">—</span>';
+  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const c = convDe(p);
+  if (!c) return '<span class="muted">—</span>';
+  const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
+  return '<input type="number" step="0.01" style="width:80px" id="vi_'+k+'_medida" placeholder="'+c.um+'" onchange="ventaMedida('+k+')">'+
+    '<div class="muted" id="veq_'+k+'" style="font-size:11px;line-height:1.2;margin-top:2px">1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total</div>';
+}
+function ventaMedida(k){
+  const x = VTA.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const c = convDe(p), el = $("vi_"+k+"_medida");
+  if (!c || !el) return;
+  const med = Number(el.value||0);
+  x.cantidad = Math.ceil(med / c.factor);
+  if (x.cantidad < 1) x.cantidad = 1;
+  pintarVentaItems(); pintarVentaTotales();
+}
+function ventaCantidad(k){
+  ventaSincro();
+  const x = VTA.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const c = convDe(p), el = $("veq_"+k);
+  if (c && el){
+    const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
+    el.innerHTML = '1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total';
+  }
+}
+function pintarVentaItems(){
+  const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
+      .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
+  $("v_items").innerHTML = !VTA.items.length ? '<div class="muted">Sin renglones todavía. Agregá el primero con «+ Producto».</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
+   VTA.items.map(function(x,k){
+     return '<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'>'+
+       '<td>'+(x.es_adicional?'<span class="muted">Adicional</span>':'<select style="width:100%;min-width:240px" id="vi_'+k+'_producto_id" onchange="ventaProducto('+k+')">'+opts(x.producto_id)+'</select>')+'</td>'+
+       '<td><input id="vi_'+k+'_descripcion" value="'+esc(x.descripcion)+'" oninput="ventaSincro()" placeholder="'+(x.es_adicional?"Flete, colocación…":"")+'"></td>'+
+       '<td><input type="number" step="0.01" style="width:80px" id="vi_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" oninput="ventaCantidad('+k+')"></td>'+
+       '<td><input style="width:70px" id="vi_'+k+'_unidad" value="'+esc(x.unidad)+'" oninput="ventaSincro()"></td>'+
+       '<td style="min-width:150px">'+celdaMedidaVenta(x,k)+'</td>'+
+       '<td><input type="number" step="0.01" style="width:110px" id="vi_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" oninput="ventaSincro()"></td>'+
+       '<td><input type="number" step="0.1" style="width:70px" id="vi_'+k+'_descuento_pct" value="'+(x.descuento_pct||0)+'" oninput="ventaSincro()"></td>'+
+       '<td><input type="number" step="0.1" style="width:70px" id="vi_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" oninput="ventaSincro()"></td>'+
+       '<td style="text-align:right"><b id="vsub_'+k+'"></b></td>'+
+       '<td><button class="btn2 btn-sm" onclick="ventaItemQuitar('+k+')">Quitar</button></td>'+
+     '</tr>';
+   }).join("")+'</tbody></table></div>';
+}
+function calcVentaTotales(){
+  let n=0, i=0;
+  VTA.items.forEach(function(x){
+    const base = Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100);
+    n += base;
+    if (x.aplica_iva !== false) i += base*Number(x.iva_pct||0)/100;
+  });
+  return {neto:n, iva:i, total:n+i};
+}
+function pintarVentaTotales(){
+  const t = calcVentaTotales(), m = VTA.moneda||"ARS";
+  VTA.items.forEach(function(x,k){
+    const el = $("vsub_"+k); if (!el) return;
+    el.textContent = fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100), m) || "—";
+  });
+  const tt = $("v_tot"); if (!tt) return;
+  tt.innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr><td>Neto</td><td style="text-align:right">'+(fmtM(t.neto,m)||"—")+'</td></tr>'+
+    '<tr><td>IVA</td><td style="text-align:right">'+(fmtM(t.iva,m)||"—")+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(t.total,m)||"—")+'</b></td></tr>'+
+    '</tbody></table></div>';
+  const b = $("v_guardar");
+  if (b) b.textContent = t.total>0 ? ("Registrar venta por "+fmtM(t.total,m)) : "Registrar venta";
+}
+async function guardarVentaDirecta(){
+  ventaSincro();
+  const err = t => { $("vnmsg").innerHTML = '<div class="msg err">'+esc(t)+'</div>'; };
+  if (!VTA.cliente_id) return err("Elegí el cliente al que le vas a vender.");
+  if (!VTA.items.length) return err("La venta no tiene renglones.");
+  const t = calcVentaTotales();
+  if (!(t.total>0)) return err("El total tiene que ser mayor a cero. Revisá cantidades y precios.");
+  const items = VTA.items.map(x=>({producto_id:x.es_adicional?null:(x.producto_id||null), descripcion:x.descripcion||"", cantidad:Number(x.cantidad||0),
+     unidad:x.unidad||"", precio_unit:Number(x.precio_unit||0), descuento_pct:Number(x.descuento_pct||0),
+     iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false, es_adicional:!!x.es_adicional}));
+  $("v_guardar").disabled = true;
+  const {data,error} = await sb.rpc("registrar_venta_directa", {p_cliente:Number(VTA.cliente_id), p_fecha:VTA.fecha||hoy(),
+     p_moneda:VTA.moneda||"ARS", p_items:items, p_obs:VTA.obs||null});
+  $("v_guardar").disabled = false;
+  if (error) return err(error.message);
+  await cargarClientes();
+  await fichaVenta(data);
   if (VISTA==="ventas") VISTAS.ventas();
 }
 
@@ -1486,7 +1681,8 @@ function seccionVentasCli(c, ventas){
      ventas.map(v=>'<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')"><td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td><td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
        '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
      '</tbody></table></div>'
-    : '<div class="muted">Todavía no tiene ventas. Un presupuesto pasado a estado «Vendido» genera la venta y la deuda en la cuenta corriente, solo.</div>')+
+    : '<div class="muted">Todavía no tiene ventas. Se le puede vender de dos formas: pasando un presupuesto a estado «Vendido», o cargando la venta directo acá.</div>')+
+   (P("venta-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="formVentaNueva('+c.id+')">+ Venta para este cliente</button></div>':'')+
    '<div class="muted" style="margin-top:4px">Los remitos de entrega van a aparecer acá cuando construyamos stock y remitos.</div>';
 }
 function seccionNotas(c, notas, tnotas){
