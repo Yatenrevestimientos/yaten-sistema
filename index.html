@@ -371,7 +371,11 @@ async function pintarPlanilla(){
 }
 
 /* ─────────── FORMULARIO ─────────── */
-function selOpts(arr,val){ return '<option value=""></option>' + arr.map(o=>'<option value="'+o.id+'" '+(String(val)===String(o.id)?"selected":"")+'>'+esc(o.nombre)+'</option>').join(""); }
+function selOpts(arr,val){
+  // muestra los activos, y ademas el que ya estuviera elegido aunque se haya dado de baja
+  const vis = (arr||[]).filter(o=>o.activo || String(val)===String(o.id));
+  return '<option value=""></option>' + vis.map(o=>'<option value="'+o.id+'" '+(String(val)===String(o.id)?"selected":"")+'>'+esc(o.nombre)+(o.activo?"":" (de baja)")+'</option>').join("");
+}
 function selTxt(arr,val){ return '<option value=""></option>' + arr.map(o=>'<option '+(val===o?"selected":"")+'>'+esc(o)+'</option>').join(""); }
 function selPer(arr,val){ return '<option value=""></option>' + arr.map(e=>'<option value="'+e.id+'" '+(val===e.id?"selected":"")+'>'+esc(e.nombre)+'</option>').join(""); }
 
@@ -606,16 +610,95 @@ async function guardarPerfil(id){
   if (!error) await cargarMaestras();
 }
 
-/* ─────────── MAESTRAS ─────────── */
+/* ─────────── MAESTRAS (alta, edición y baja) ─────────── */
+const MAESTRAS = [
+  {k:"loc", tabla:"localidades",      titulo:"Localidades",
+   ayuda:"Toda localidad donde vendas o entregues. Si aparece una nueva, agregala acá y queda disponible en el acto.",
+   cols:[{c:"zona", t:"Zona", ph:"Bariloche, Cordillera, Alto Valle…"}]},
+  {k:"can", tabla:"canales_contacto", titulo:"Canales de contacto",
+   ayuda:"Por dónde entró el contacto: WhatsApp, Instagram, teléfono, visita al local.",
+   cols:[]},
+  {k:"ori", tabla:"origenes",         titulo:"Cómo nos conocieron",
+   ayuda:"Cada acción de publicidad o vía de recomendación. Cuando pruebes algo nuevo, lo agregás acá con su costo y después el reporte de orígenes te dice si sirvió.",
+   cols:[{c:"tipo", t:"Tipo", ph:"Organico, Pago, Referido, Offline"},
+         {c:"costo_mensual", t:"Costo mensual", num:true, ph:"0"}]},
+  {k:"obj", tabla:"objeciones",       titulo:"Objeciones",
+   ayuda:"El motivo que frena la venta. Sirve para saber contra qué estás peleando.",
+   cols:[{c:"etapa", t:"Etapa", ph:"Entrada, Visita, Ambas"}]},
+  {k:"mot", tabla:"motivos",          titulo:"Motivos de descarte",
+   ayuda:"Por qué se cae un prospecto o un presupuesto.",
+   cols:[{c:"aplica_a", t:"Aplica a", ph:"Prospecto o Presupuesto"}]}
+];
+
 VISTAS.maestras = function(){
-  const t = (tit,arr,extra) => '<div class="panel"><h2>'+tit+'</h2>'+
-    '<div class="tablewrap"><table><thead><tr><th>Nombre</th>'+(extra?'<th>'+extra+'</th>':'')+'<th>Activo</th></tr></thead><tbody>'+
-    arr.map(o=>'<tr><td>'+esc(o.nombre)+'</td>'+(extra?'<td>'+esc(o.zona||o.tipo||o.etapa||o.aplica_a||"")+'</td>':'')+'<td>'+(o.activo?"Sí":"No")+'</td></tr>').join("")+
-    '</tbody></table></div></div>';
-  $("main").innerHTML = '<div class="muted" style="margin-bottom:10px">Listas cerradas del sistema. Nada se escribe a mano en los formularios: todo se elige de acá.</div>'
-    + t("Localidades",M.loc,"Zona") + t("Canales de contacto",M.can) + t("Orígenes",M.ori,"Tipo")
-    + t("Objeciones",M.obj,"Etapa") + t("Motivos",M.mot,"Aplica a");
+  const puede = P("maestra-modificar");
+  const bloque = function(m){
+    const arr = M[m.k]||[];
+    const anchos = m.cols.length;
+    const filaNueva = puede ? '<tr style="background:#f6fbf7">'+
+        '<td><input id="n_'+m.k+'_nombre" placeholder="Escribí el nombre nuevo"></td>'+
+        m.cols.map(c=>'<td><input id="n_'+m.k+'_'+c.c+'" '+(c.num?'type="number" step="0.01"':'')+' placeholder="'+esc(c.ph||"")+'"></td>').join("")+
+        '<td>—</td><td><button class="btn btn-sm" onclick="maestraAgregar(\''+m.k+'\')">Agregar</button></td></tr>' : '';
+    const filas = arr.map(function(o){
+      const id = m.k+'_'+o.id;
+      if (!puede) return '<tr><td>'+esc(o.nombre)+'</td>'+m.cols.map(c=>'<td>'+esc(o[c.c])+'</td>').join("")+'<td>'+(o.activo?"Sí":"No")+'</td></tr>';
+      return '<tr'+(o.activo?'':' style="opacity:.55"')+'>'+
+        '<td><input id="e_'+id+'_nombre" value="'+esc(o.nombre)+'"></td>'+
+        m.cols.map(c=>'<td><input id="e_'+id+'_'+c.c+'" '+(c.num?'type="number" step="0.01"':'')+' value="'+esc(o[c.c])+'"></td>').join("")+
+        '<td><select id="e_'+id+'_activo"><option value="1" '+(o.activo?"selected":"")+'>Sí</option><option value="0" '+(!o.activo?"selected":"")+'>No</option></select></td>'+
+        '<td><button class="btn2 btn-sm" onclick="maestraGuardar(\''+m.k+'\','+o.id+')">Guardar</button></td></tr>';
+    }).join("");
+    return '<div class="panel"><h2>'+m.titulo+'</h2><div class="desc">'+m.ayuda+'</div>'+
+      '<div id="msg_'+m.k+'"></div>'+
+      '<div class="tablewrap"><table><thead><tr><th>Nombre</th>'+
+        m.cols.map(c=>'<th>'+c.t+'</th>').join("")+'<th>Activo</th>'+(puede?'<th></th>':'')+
+      '</tr></thead><tbody>'+filaNueva+filas+'</tbody></table></div>'+
+      '<div class="muted" style="margin-top:8px">'+arr.length+' registros · '+arr.filter(o=>o.activo).length+' activos</div></div>';
+  };
+  $("main").innerHTML =
+    '<div class="panel"><h2>Tablas maestras</h2><div class="desc">Estas son las listas que después aparecen en los desplegables de toda la carga. '+
+    (puede
+      ? 'Podés agregar los que hagan falta cuando hagan falta: una localidad nueva, una campaña de publicidad nueva, una objeción que empezaste a escuchar. Se usan en el acto, sin esperar a nadie.'
+      : 'Tu rol las consulta pero no las modifica.')+
+    '</div><div class="muted">Nada se borra. Si algo deja de usarse se pone Activo en <b>No</b>: desaparece de los desplegables pero los registros viejos que lo referencian siguen enteros. Borrar dejaría huérfano todo lo cargado.</div></div>'
+    + MAESTRAS.map(bloque).join("");
 };
+
+function maestraVal(prefijo, m, incluirActivo, id){
+  const o = {};
+  const g = campo => { const el = $(prefijo+campo); return el ? el.value : null; };
+  o.nombre = (g("nombre")||"").trim();
+  m.cols.forEach(function(c){
+    let v = g(c.c);
+    if (v === "" || v == null) v = null; else if (c.num) v = Number(v);
+    o[c.c] = v;
+  });
+  if (incluirActivo) o.activo = g("activo") === "1";
+  return o;
+}
+function maestraMsg(k, texto, tipo){ $("msg_"+k).innerHTML = texto ? '<div class="msg '+tipo+'">'+esc(texto)+'</div>' : ""; }
+
+async function maestraAgregar(k){
+  const m = MAESTRAS.find(x=>x.k===k);
+  const o = maestraVal("n_"+k+"_", m, false);
+  if (!o.nombre) return maestraMsg(k, "Escribí un nombre antes de agregar.", "err");
+  o.activo = true;
+  const {error} = await sb.from(m.tabla).insert(o);
+  if (error) return maestraMsg(k, error.message.indexOf("duplicate")>=0 ? "Ya existe uno con ese nombre." : error.message, "err");
+  await cargarMaestras();
+  VISTAS.maestras();
+  maestraMsg(k, "Agregado: "+o.nombre+". Ya está disponible en los desplegables.", "ok");
+}
+async function maestraGuardar(k, id){
+  const m = MAESTRAS.find(x=>x.k===k);
+  const o = maestraVal("e_"+k+"_"+id+"_", m, true, id);
+  if (!o.nombre) return maestraMsg(k, "El nombre no puede quedar vacío.", "err");
+  const {error} = await sb.from(m.tabla).update(o).eq("id", id);
+  if (error) return maestraMsg(k, error.message, "err");
+  await cargarMaestras();
+  VISTAS.maestras();
+  maestraMsg(k, "Guardado.", "ok");
+}
 </script>
 </body>
 </html>
