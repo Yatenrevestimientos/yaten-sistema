@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-7";
+const VERSION = "v2026.08.02-8";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -406,6 +406,24 @@ function selOpts(arr,val){
   return '<option value=""></option>' + vis.map(o=>'<option value="'+o.id+'" '+(String(val)===String(o.id)?"selected":"")+'>'+esc(o.nombre)+(o.activo?"":" (de baja)")+'</option>').join("");
 }
 function selTxt(arr,val){ return '<option value=""></option>' + arr.map(o=>'<option '+(val===o?"selected":"")+'>'+esc(o)+'</option>').join(""); }
+/* opciones de cuentas de dinero: solo las activas, con la moneda a la vista */
+function optCtas(lista){
+  return (lista||[]).map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("");
+}
+/* aviso cuando todavia no hay ninguna cuenta de dinero creada */
+function avisoSinCuentas(txt){
+  return '<div class="msg err" style="line-height:1.5">'+
+    '<b>Todavía no hay ninguna cuenta de dinero creada.</b><br>'+
+    (txt||'Sin una cuenta el sistema no sabe dónde entra o de dónde sale la plata.')+'<br><br>'+
+    'Andá a <b>Finanzas → Cuentas</b> y tocá «+ Cuenta nueva». Ojo: los <i>tipos de cuenta</i> (Caja, Banco, Mercado Pago…) que ves ahí arriba son solo la clasificación, no son cuentas con plata.'+
+    '</div>'+
+    (P("cuenta-modificar")?'<div class="acciones"><button class="btn" onclick="irACuentas()">Crear la primera cuenta</button></div>':'');
+}
+function irACuentas(){
+  try{ $("dlg").close(); }catch(e){}
+  FIN.tab = "cuentas";
+  ir("finanzas");
+}
 function selPer(arr,val){ return '<option value=""></option>' + arr.map(e=>'<option value="'+e.id+'" '+(val===e.id?"selected":"")+'>'+esc(e.nombre)+'</option>').join(""); }
 
 function formHTML(p, ro){
@@ -1336,13 +1354,22 @@ async function formCobranza(cliId){
     sb.from("v_saldos_cuenta").select("*").order("nombre"),
     sb.from("conceptos_cobranza").select("*").order("id")
   ]);
+  // dejamos las cuentas en la variable global asi monedaCta() funciona aunque
+  // todavia no se haya entrado a Finanzas en esta sesion
+  if ((ct.data||[]).length) CTAS = ct.data;
   const cuentas = (ct.data||[]).filter(x=>x.activo);
   $("dtit").textContent = "Cobranza · " + cli.nombre;
+  if (!cuentas.length){
+    $("dbody").innerHTML = avisoSinCuentas("Para registrar un cobro el sistema necesita saber en qué caja o banco entra la plata.")+
+      '<div class="acciones"><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
   $("dbody").innerHTML = '<div id="cbmsg"></div>'+
    '<div class="sec">Registrar cobranza</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><input type="date" id="k_fecha" value="'+hoy()+'"></div>'+
      '<div class="f"><label>Cuenta corriente</label><select id="k_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
-     '<div class="f"><label>¿En qué cuenta entra la plata?</label><select id="k_cuenta">'+cuentas.map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+' ('+x.moneda+')</option>').join("")+'</select></div>'+
+     '<div class="f"><label>¿En qué cuenta entra la plata?</label><select id="k_cuenta">'+optCtas(cuentas)+'</select></div>'+
      '<div class="f"><label>Importe en la cuenta corriente</label><input type="number" step="0.01" id="k_importe" oninput="calcCobranza()"></div>'+
      '<div class="f" id="k_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="k_tc" oninput="calcCobranza()" placeholder="pesos por dólar"></div>'+
      '<div class="f" id="k_box_pago" style="display:none"><label>Importe que entra en la cuenta</label><input type="number" step="0.01" id="k_pago" oninput="calcCobranzaDesdePago()"></div>'+
@@ -1448,7 +1475,16 @@ function finResumen(){
 function finCuentas(){
   const puede = P("cuenta-modificar");
   $("fbody").innerHTML =
-   '<div class="panel"><h2>Tipos de cuenta</h2><div class="desc">Las familias con las que se agrupa el dinero: caja, banco, fondo de inversión, Mercado Pago, tarjetas, cheques. Agregá los que necesites y el resumen los totaliza solo.</div>'+
+   '<div class="panel"><h2>Cuentas de dinero</h2><div class="desc">Cada caja, banco o billetera real, con su moneda. Acá es donde entra y sale la plata. El saldo lo calcula el sistema con los movimientos, no se escribe a mano.</div>'+
+   '<div id="ctmsg"></div>'+(puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="fichaCuenta(null)">+ Cuenta nueva</button></div>':'')+
+   (CTAS.length
+     ? '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Moneda</th><th>Tope</th><th>Saldo</th><th>Activa</th></tr></thead><tbody>'+
+       CTAS.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
+         '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+(fmtM(c.saldo,c.moneda)||'—')+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")+
+       '</tbody></table></div>'
+     : '<div class="msg err" style="line-height:1.5"><b>Todavía no creaste ninguna cuenta.</b><br>Hasta que exista al menos una, no vas a poder registrar cobranzas, gastos, transferencias ni retiros: el sistema no sabría de dónde sale o entra la plata.<br><br>Tocá <b>«+ Cuenta nueva»</b> acá arriba y creá por ejemplo «Caja Chica» en ARS. Al crearla podés cargarle el saldo con el que arranca.</div>')+
+   '</div>'+
+   '<div class="panel"><h2>Tipos de cuenta</h2><div class="desc">Esto <b>no</b> es plata: es solo la clasificación con la que se agrupan las cuentas en el resumen (caja, banco, fondo de inversión, Mercado Pago, tarjetas, cheques). Agregá los que necesites.</div>'+
    '<div id="tcmsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Orden</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    (puede?'<tr style="background:#f6fbf7"><td><input id="ntc_nombre" placeholder="Ej: Criptomonedas"></td><td><input id="ntc_orden" type="number" style="width:80px" value="9"></td><td>—</td><td><button class="btn btn-sm" onclick="tipoCtaAgregar()">Agregar</button></td></tr>':'')+
    TCTAS.map(t=>'<tr'+(t.activo?'':' style="opacity:.55"')+'>'+
@@ -1456,13 +1492,6 @@ function finCuentas(){
      '<td>'+(puede?'<input id="etc_'+t.id+'_o" type="number" style="width:80px" value="'+t.orden+'">':t.orden)+'</td>'+
      '<td>'+(puede?'<select id="etc_'+t.id+'_a"><option value="1" '+(t.activo?"selected":"")+'>Sí</option><option value="0" '+(!t.activo?"selected":"")+'>No</option></select>':(t.activo?"Sí":"No"))+'</td>'+
      (puede?'<td><button class="btn2 btn-sm" onclick="tipoCtaGuardar('+t.id+')">Guardar</button></td>':'')+'</tr>').join("")+
-   '</tbody></table></div></div>'+
-   '<div class="panel"><h2>Cuentas</h2><div class="desc">Cada caja, banco o billetera con su moneda. El saldo lo calcula el sistema con los movimientos, no se escribe a mano.</div>'+
-   '<div id="ctmsg"></div>'+(puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="fichaCuenta(null)">+ Cuenta nueva</button></div>':'')+
-   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Moneda</th><th>Tope</th><th>Saldo</th><th>Activa</th></tr></thead><tbody>'+
-   (CTAS.length? CTAS.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
-     '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+(fmtM(c.saldo,c.moneda)||'—')+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")
-     : '<tr><td colspan="6" class="muted">Todavía no hay cuentas. Creá la primera con «Cuenta nueva».</td></tr>')+
    '</tbody></table></div></div>';
 }
 async function tipoCtaAgregar(){
@@ -1489,6 +1518,9 @@ function fichaCuenta(id){
     '<div class="f"><label>Activa</label><select id="z_activo" '+d+'><option value="1" '+(!c||c.activo?"selected":"")+'>Sí</option><option value="0" '+(c&&!c.activo?"selected":"")+'>No</option></select></div>'+
    '</div><div class="f"><label>Descripción</label><textarea id="z_desc" rows="2" '+d+'>'+esc(c?c.descripcion:"")+'</textarea></div>'+
    (c?'<div class="muted">Saldo actual: <b>'+(fmtM(c.saldo,c.moneda)||"—")+'</b>. Se calcula con los movimientos y no se puede editar a mano.</div>':'')+
+   (!c&&P("cuenta-ajustar")?'<div class="sec">Saldo con el que arranca</div>'+
+     '<div class="muted" style="margin-bottom:8px">Opcional. Si la caja o el banco ya tienen plata, poné cuánto y queda registrado como el primer movimiento, con tu nombre y la fecha de hoy. Si arranca en cero, dejalo vacío.</div>'+
+     '<div class="f"><label>Saldo inicial</label><input type="number" step="0.01" id="z_inicial" placeholder="0"></div>':'')+
    (c&&P("cuenta-ajustar")?'<div class="sec">Ingresar o sacar dinero</div>'+
      '<div class="muted" style="margin-bottom:8px">Para abrir la cuenta con un saldo inicial, o para corregir una diferencia de arqueo. Queda como un movimiento más, con tu nombre y la fecha. No es un retiro ni un gasto.</div>'+
      '<div id="ajmsg"></div><div class="grid">'+
@@ -1502,8 +1534,13 @@ function fichaCuenta(id){
     const o = {nombre:$("z_nombre").value.trim(), descripcion:$("z_desc").value||null, tipo_cuenta_id:$("z_tipo").value?Number($("z_tipo").value):null,
                moneda:$("z_moneda").value, tope:Number($("z_tope").value||0), activo:$("z_activo").value==="1"};
     if (!o.nombre){ $("fcmsg").innerHTML='<div class="msg err">Falta el nombre.</div>'; return; }
-    const r = id ? await sb.from("cuentas").update(o).eq("id",id) : await sb.from("cuentas").insert(o);
+    const r = id ? await sb.from("cuentas").update(o).eq("id",id) : await sb.from("cuentas").insert(o).select("id").single();
     if (r.error){ $("fcmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+    const ini = Number(($("z_inicial")||{}).value||0);
+    if (!id && ini>0 && r.data && r.data.id){
+      const a = await sb.rpc("ajustar_saldo_cuenta",{p_cuenta:r.data.id, p_fecha:hoy(), p_tipo:"Ingreso", p_importe:ini, p_detalle:"Saldo inicial de la cuenta"});
+      if (a.error){ $("fcmsg").innerHTML='<div class="msg err">La cuenta se creó, pero el saldo inicial no: '+esc(a.error.message)+'</div>'; await cargarFin(); return; }
+    }
     await cargarFin(); $("dlg").close(); if (VISTA==="finanzas") VISTAS.finanzas();
   };
   $("dlg").showModal();
@@ -1590,9 +1627,14 @@ async function finGastos(){
 function formGasto(){
   const cuentas = CTAS.filter(c=>c.activo);
   $("dtit").textContent = "Gasto nuevo";
+  if (!cuentas.length){
+    $("dbody").innerHTML = avisoSinCuentas("Todo gasto sale de una cuenta y le baja el saldo, así que primero tiene que existir la cuenta.");
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
   $("dbody").innerHTML = '<div id="fgmsg"></div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="g_fecha" value="'+hoy()+'"></div>'+
-    '<div class="f"><label>Cuenta de donde sale</label><select id="g_cuenta">'+cuentas.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></div>'+
+    '<div class="f"><label>Cuenta de donde sale</label><select id="g_cuenta">'+optCtas(cuentas)+'</select></div>'+
     '<div class="f"><label>Importe total</label><input type="number" step="0.01" id="g_importe" oninput="calcGasto()"></div>'+
     '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
     '<div class="f"><label>Concepto</label><select id="g_concepto">'+selOpts(CGASTOS,null)+'</select></div>'+
@@ -1651,8 +1693,16 @@ async function finTransf(){
 }
 function formTransf(){
   const cs = CTAS.filter(c=>c.activo);
-  const op = cs.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("");
+  const op = optCtas(cs);
   $("dtit").textContent = "Transferencia entre cuentas";
+  if (cs.length < 2){
+    $("dbody").innerHTML = cs.length
+      ? '<div class="msg err">Para transferir hacen falta al menos <b>dos</b> cuentas activas. Ahora hay una sola.<br><br>Creá la otra en <b>Finanzas → Cuentas</b>.</div>'+
+        (P("cuenta-modificar")?'<div class="acciones"><button class="btn" onclick="irACuentas()">Ir a Cuentas</button></div>':'')
+      : avisoSinCuentas("Una transferencia mueve plata de una cuenta a otra: tienen que existir las dos.");
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
   $("dbody").innerHTML = '<div id="ftmsg"></div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="x_fecha" value="'+hoy()+'"></div>'+
     '<div class="f"><label>Sale de</label><select id="x_origen">'+op+'</select></div>'+
@@ -1699,9 +1749,14 @@ async function finRetiros(){
 function formRetiro(){
   const cs = CTAS.filter(c=>c.activo);
   $("dtit").textContent = "Retiro de dinero";
+  if (!cs.length){
+    $("dbody").innerHTML = avisoSinCuentas("Un retiro saca plata de una cuenta: primero tiene que existir la cuenta.");
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
   $("dbody").innerHTML = '<div id="frmsg"></div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="r_fecha" value="'+hoy()+'"></div>'+
-    '<div class="f"><label>Cuenta</label><select id="r_cuenta">'+cs.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></div>'+
+    '<div class="f"><label>Cuenta</label><select id="r_cuenta">'+optCtas(cs)+'</select></div>'+
     '<div class="f"><label>Importe <span id="r_mon" class="muted"></span></label><input type="number" step="0.01" id="r_importe"></div>'+
     '<div class="f"><label>Quién retira</label><input id="r_quien"></div>'+
    '</div><div class="f"><label>Observaciones</label><input id="r_obs"></div>'+
