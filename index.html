@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-8";
+const VERSION = "v2026.08.02-9";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -425,6 +425,13 @@ function irACuentas(){
   ir("finanzas");
 }
 function selPer(arr,val){ return '<option value=""></option>' + arr.map(e=>'<option value="'+e.id+'" '+(val===e.id?"selected":"")+'>'+esc(e.nombre)+'</option>').join(""); }
+/* detecta si la base ya tiene la migracion de notas de cliente y presupuestos por cliente */
+async function db9(){
+  if (window._db9 !== undefined) return window._db9;
+  const t = await sb.from("notas_cliente").select("id").limit(1);
+  window._db9 = !t.error;
+  return window._db9;
+}
 
 function formHTML(p, ro){
   p = p || {fecha:hoy(), estado:"CONSULTA", resultado:"Sin Visita", moneda:"ARS", vl_id:PERFIL.id};
@@ -966,6 +973,8 @@ async function pintarPresupuestos(){
 }
 
 async function abrirPresupuesto(id){
+  if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
+  await db9();
   if (id){
     const [c,i,a] = await Promise.all([
       sb.from("presupuestos").select("*").eq("id",id).single(),
@@ -1009,6 +1018,7 @@ function pintarFichaPre(){
   $("dtit").textContent = c.codigo ? (c.codigo+" · "+(c.cliente_nombre||"")) : "Presupuesto nuevo";
   $("dbody").innerHTML = '<div id="qmsg"></div>'+
    '<div class="sec">Cliente y obra</div><div class="grid">'+
+     (P("cliente-consultar")?'<div class="f"><label>Cliente registrado</label><select id="w_cliente_id" onchange="presClienteElegido()" '+d+'>'+selPer(CLIS, c.cliente_id?Number(c.cliente_id):null)+'</select></div>':'')+
      '<div class="f"><label>Cliente *</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
      '<div class="f"><label>Teléfono</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
      '<div class="f"><label>Email</label><input id="w_cliente_email" value="'+esc(c.cliente_email)+'" '+d+'></div>'+
@@ -1140,13 +1150,25 @@ function itemProducto(k){
 function adicAgregar(){ sincro(); PRE.adic.push({concepto:"", importe:0, iva_pct:21, aplica_iva:true}); pintarAdic(); pintarTotales(); }
 function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdic.push(x.id); PRE.adic.splice(k,1); pintarAdic(); pintarTotales(); }
 
-const CAMPOS_PRE = ["cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
+const CAMPOS_PRE = ["cliente_id","cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
   "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
-const NUM_PRE = ["localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct"];
+const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct"];
+function presClienteElegido(){
+  const id = $("w_cliente_id").value;
+  const c = CLIS.find(x=>String(x.id)===String(id));
+  if (!c) return;
+  $("w_cliente_nombre").value = c.nombre;
+  $("w_cliente_tel").value = c.celular || c.telefono || "";
+  $("w_cliente_email").value = c.email || "";
+  if (c.localidad_id) $("w_localidad_id").value = c.localidad_id;
+  if (c.lista_id && $("w_lista_id")) $("w_lista_id").value = c.lista_id;
+}
 async function guardarPresupuesto(){
   sincro();
+  await db9();
   const o = {};
   CAMPOS_PRE.forEach(function(c){ const el=$("w_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PRE.indexOf(c)>=0) v=Number(v); o[c]=v; });
+  if (!window._db9) delete o.cliente_id;
   if (!o.cliente_nombre){ $("qmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
   if (o.descuento_pct == null) o.descuento_pct = 0;
   $("w_guardar").disabled = true;
@@ -1277,10 +1299,22 @@ async function fichaCliente(id){
   const puede = c ? P("cliente-modificar") : P("cliente-agregar");
   const d = puede ? "" : "disabled";
   const v = k => c ? (c[k]==null?"":c[k]) : "";
-  let seg = [];
+  let seg = [], notas = [], tnotas = [], pres = [];
   if (c){
     const r = await sb.from("cc_movimientos").select("*").eq("cliente_id",c.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300);
     seg = r.data||[];
+    if (await db9()){
+      const [n,t,p1,p2] = await Promise.all([
+        sb.from("notas_cliente").select("*").eq("cliente_id",c.id).order("id",{ascending:false}).limit(200),
+        sb.from("tipos_nota").select("*").order("id"),
+        sb.from("presupuestos").select("id,codigo,fecha,tipo,estado,total,moneda").eq("cliente_id",c.id).order("id",{ascending:false}),
+        sb.from("presupuestos").select("id,codigo,fecha,tipo,estado,total,moneda").is("cliente_id",null).eq("cliente_nombre",c.nombre).order("id",{ascending:false})
+      ]);
+      notas = n.data||[]; tnotas = t.data||[];
+      const vistos = {};
+      (p1.data||[]).concat(p2.data||[]).forEach(function(p){ if(!vistos[p.id]){ vistos[p.id]=1; pres.push(p); } });
+      pres.sort((a,b)=>b.id-a.id);
+    }
   }
   $("dtit").textContent = c ? (c.codigo+" · "+c.nombre) : "Cliente nuevo";
   $("dbody").innerHTML = '<div id="clmsg"></div>'+
@@ -1299,10 +1333,73 @@ async function fichaCliente(id){
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="y_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
    (puede?'<div class="acciones"><button class="btn" id="y_guardar">'+(c?"Guardar cambios":"Crear cliente")+'</button></div>':'')+
-   (c? seccionCC(c, seg) : '');
+   (c? seccionPresCli(c, pres) : '') +
+   (c? seccionCC(c, seg) : '') +
+   (c? seccionNotas(c, notas, tnotas) : '');
   if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
   if (c) armarAccionesCC(c);
   $("dlg").showModal();
+}
+function seccionPresCli(c, pres){
+  if (!window._db9) return '<div class="sec">Presupuestos, ventas y notas</div><div class="muted">Falta correr la actualización de la base para ver acá los presupuestos y el historial de notas de este cliente.</div>';
+  return '<div class="sec">Presupuestos de este cliente</div>'+
+   (pres.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Fecha</th><th>Tipo</th><th>Estado</th><th>Total</th></tr></thead><tbody>'+
+     pres.map(p=>'<tr style="cursor:pointer" onclick="abrirPresupuesto('+p.id+')"><td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td><td>'+esc(p.tipo)+'</td><td>'+pillE(p.estado)+'</td><td><b>'+fmtM(p.total,p.moneda)+'</b></td></tr>').join("")+
+     '</tbody></table></div>'
+    : '<div class="muted">Todavía no tiene presupuestos.</div>')+
+   (P("presupuesto-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="presupuestoDesdeCliente('+c.id+')">+ Presupuesto para este cliente</button></div>':'')+
+   '<div class="sec">Ventas y remitos</div><div class="muted">Las ventas y los remitos de este cliente van a aparecer acá cuando construyamos ese módulo, que es el próximo de la lista. La cuenta corriente de abajo ya está preparada para recibirlos.</div>';
+}
+function seccionNotas(c, notas, tnotas){
+  if (!window._db9) return '';
+  const puede = P("cliente-modificar");
+  return '<div class="sec">Historial de notas</div>'+
+   '<div class="muted" style="margin-bottom:8px">Seguimientos, reparaciones, reclamos, avisos: todo lo que haya que acordarse de este cliente queda acá, con fecha y quién lo escribió. Las notas no se borran: se anulan y quedan a la vista.</div>'+
+   '<div id="ntmsg"></div>'+
+   (puede? '<div class="grid">'+
+     '<div class="f"><label>Tipo</label><select id="nt_tipo">'+selOpts(tnotas,null)+'</select></div>'+
+     '<div class="f"><label>¿Falta el tipo?</label><div style="display:flex;gap:6px"><input id="nt_tipo_nuevo" placeholder="Tipo nuevo"><button class="btn2 btn-sm" onclick="tipoNotaAgregar('+c.id+')">Agregar</button></div></div>'+
+    '</div>'+
+    '<div class="f"><label>Nota nueva</label><textarea id="nt_texto" rows="2" placeholder="Qué pasó, qué hay que hacer, qué se acordó…"></textarea></div>'+
+    '<div class="acciones" style="margin-bottom:10px"><button class="btn2 btn-sm" onclick="notaAgregar('+c.id+')">Guardar nota</button></div>' : '')+
+   (notas.length? '<div class="tablewrap" style="max-height:280px;overflow:auto"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Nota</th><th>Quién</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+     notas.map(function(x){
+       return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td><td>'+esc(nom(tnotas,x.tipo_id))+'</td>'+
+        '<td style="white-space:normal;min-width:260px">'+esc(x.nota)+(x.anulado?' <span class="pill no">Anulada</span>':'')+'</td>'+
+        '<td>'+esc(x.creado_por_nombre)+'</td>'+
+        (puede?'<td>'+(x.anulado?'':'<button class="btn2 btn-sm" onclick="notaAnular('+x.id+','+c.id+')">Anular</button>')+'</td>':'')+'</tr>';
+     }).join("")+'</tbody></table></div>' : '<div class="muted">Sin notas todavía.</div>');
+}
+async function notaAgregar(cliId){
+  const txt = $("nt_texto").value.trim();
+  if (!txt){ $("ntmsg").innerHTML='<div class="msg err">Escribí la nota antes de guardar.</div>'; return; }
+  const {error} = await sb.from("notas_cliente").insert({cliente_id:cliId, tipo_id:$("nt_tipo").value?Number($("nt_tipo").value):null, nota:txt, creado_por_nombre:PERFIL.nombre});
+  if (error){ $("ntmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  fichaCliente(cliId);
+}
+async function tipoNotaAgregar(cliId){
+  const n = $("nt_tipo_nuevo").value.trim(); if (!n) return;
+  const {error} = await sb.from("tipos_nota").insert({nombre:n, activo:true});
+  if (error){ $("ntmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  fichaCliente(cliId);
+}
+async function notaAnular(id, cliId){
+  const motivo = prompt("¿Por qué se anula esta nota?");
+  if (motivo === null) return;
+  const {error} = await sb.from("notas_cliente").update({anulado:true, anulado_por:PERFIL.nombre, anulado_en:new Date().toISOString(), motivo_anulacion:motivo||"Sin motivo"}).eq("id",id);
+  if (error){ $("ntmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  fichaCliente(cliId);
+}
+async function presupuestoDesdeCliente(cliId){
+  const c = CLIS.find(x=>x.id===cliId); if (!c) return;
+  await abrirPresupuesto(null);
+  PRE.cab.cliente_id = c.id;
+  PRE.cab.cliente_nombre = c.nombre;
+  PRE.cab.cliente_tel = c.celular || c.telefono || "";
+  PRE.cab.cliente_email = c.email || "";
+  if (c.localidad_id) PRE.cab.localidad_id = c.localidad_id;
+  if (c.lista_id) PRE.cab.lista_id = c.lista_id;
+  pintarFichaPre();
 }
 function seccionCC(c, seg){
   const bloque = function(m){
