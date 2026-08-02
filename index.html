@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-17";
+const VERSION = "v2026.08.02-18";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -241,14 +241,22 @@ async function cargarCatalogo(){
   PRECIOS = {}; (pp.data||[]).forEach(x=>{ PRECIOS[x.lista_id+"_"+x.producto_id] = x; });
 }
 // precio de un producto segun lista y moneda: override por lista, si no el de la ficha con el ajuste de la lista
-function precioDe(prod, listaId, moneda){
+/* El precio con instalación es TODO INCLUIDO: ya lleva la mano de obra adentro,
+   no se suma aparte. Es como está en Pirka. */
+function precioDe(prod, listaId, moneda, conInst){
   if (!prod) return 0;
   const ov = PRECIOS[listaId+"_"+prod.id];
-  const campo = moneda === "USD" ? "precio_usd" : "precio_ars";
+  const campo = (conInst ? "precio_inst_" : "precio_") + (moneda === "USD" ? "usd" : "ars");
   if (ov && ov[campo] != null && ov[campo] !== "") return Number(ov[campo]);
   const lista = LISTAS.find(l=>l.id==listaId);
   const aj = lista ? Number(lista.ajuste_pct||0) : 0;
-  return Math.round(Number(prod[campo]||0) * (1 + aj/100) * 100) / 100;
+  const base = Number(prod[campo]||0);
+  return Math.round(base * (1 + aj/100) * 100) / 100;
+}
+/* ¿este producto tiene cargado el precio instalado? */
+function tieneInst(prod, listaId, moneda){
+  if (!prod || !prod.se_instala) return false;
+  return precioDe(prod, listaId, moneda, true) > 0;
 }
 const equipoRol = r => EQUIPO.filter(p=>p.activo && p.rol===r);
 const VLS  = () => equipoRol("VL").length  ? equipoRol("VL")  : EQUIPO.filter(p=>p.activo);
@@ -808,12 +816,14 @@ function fichaProducto(id){
    '</div>'+
    '<div class="sec">Precios e IVA</div><div class="grid">'+
      '<div class="f"><label>IVA %</label><input type="number" step="0.1" id="q_iva_pct" value="'+v("iva_pct",21)+'" '+dp+'></div>'+
-     '<div class="f"><label>Precio ARS</label><input type="number" step="0.01" id="q_precio_ars" value="'+v("precio_ars",0)+'" '+dp+'></div>'+
-     '<div class="f"><label>Precio USD</label><input type="number" step="0.01" id="q_precio_usd" value="'+v("precio_usd",0)+'" '+dp+'></div>'+
+     '<div class="f"><label>Precio ARS <span class="muted">sin instalación</span></label><input type="number" step="0.01" id="q_precio_ars" value="'+v("precio_ars",0)+'" '+dp+'></div>'+
+     '<div class="f"><label>Precio USD <span class="muted">sin instalación</span></label><input type="number" step="0.01" id="q_precio_usd" value="'+v("precio_usd",0)+'" '+dp+'></div>'+
+     '<div class="f"><label>Precio ARS <b>con instalación</b></label><input type="number" step="0.01" id="q_precio_inst_ars" value="'+v("precio_inst_ars",0)+'" '+dp+'></div>'+
+     '<div class="f"><label>Precio USD <b>con instalación</b></label><input type="number" step="0.01" id="q_precio_inst_usd" value="'+v("precio_inst_usd",0)+'" '+dp+'></div>'+
      '<div class="f"><label>Moneda de referencia</label><select id="q_moneda_base" '+dp+'>'+["ARS","USD"].map(x=>'<option '+(v("moneda_base","ARS")===x?"selected":"")+'>'+x+'</option>').join("")+'</select></div>'+
      '<div class="f"><label>Costo USD (landed)</label><input type="number" step="0.01" id="q_costo_usd" value="'+v("costo_usd",0)+'" '+dp+'></div>'+
    '</div>'+
-   '<div class="muted" style="margin-top:-4px">El costo landed lo va a completar solo el módulo de importaciones cuando llegue cada contenedor. Por ahora se carga a mano si querés ver el margen.</div>'+
+   '<div class="muted" style="margin-top:-4px">El <b>precio con instalación es todo incluido</b>: ya lleva la mano de obra adentro, no se suma aparte. Ejemplo: el m² de deck sale $75.000 sin instalación y $150.000 instalado. Al presupuestar elegís por renglón cuál de los dos se usa. Si el producto no se instala, dejá los dos de instalación en cero.<br>El costo landed lo va a completar solo el módulo de importaciones cuando llegue cada contenedor.</div>'+
    '<div class="sec">Operación</div><div class="grid">'+
      '<div class="f"><label>Stock mínimo</label><input type="number" step="0.01" id="q_stock_minimo" value="'+v("stock_minimo",0)+'" '+d+'></div>'+
      '<div class="f"><label>Se vende</label><select id="q_disponible_venta" '+d+'><option value="1" '+(p&&!p.disponible_venta?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.disponible_venta?"selected":"")+'>No</option></select></div>'+
@@ -837,8 +847,8 @@ async function tipoAgregar(){
   $("fpmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y seleccionado.</div>';
 }
 const CAMPOS_PROD = ["codigo","nombre","tipo_id","unidad","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja",
-  "iva_pct","precio_ars","precio_usd","moneda_base","costo_usd","stock_minimo","observaciones"];
-const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","costo_usd","stock_minimo"];
+  "iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","moneda_base","costo_usd","stock_minimo","observaciones"];
+const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","costo_usd","stock_minimo"];
 async function guardarProducto(id){
   const o = {};
   CAMPOS_PROD.forEach(function(c){ const el=$("q_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PROD.indexOf(c)>=0) v=Number(v); o[c]=v; });
@@ -1098,10 +1108,11 @@ function pintarItems(){
   const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
       .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
   $("w_items").innerHTML = !PRE.items.length ? '<div class="muted">Sin renglones todavía. Tocá «Agregar renglón».</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th>Instalación</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    PRE.items.map(function(x,k){
      return '<tr>'+
        '<td><select style="width:100%;min-width:240px" id="it_'+k+'_producto_id" '+d+' onchange="itemProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
+       '<td>'+celdaInst(x,k,d,"it")+'</td>'+
        '<td><input id="it_'+k+'_descripcion" value="'+esc(x.descripcion)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.01" style="width:80px" id="it_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" '+d+' oninput="cantidadCambio('+k+')"></td>'+
        '<td><input style="width:70px" id="it_'+k+'_unidad" value="'+esc(x.unidad)+'" '+d+' oninput="sincro()"></td>'+
@@ -1151,6 +1162,7 @@ function sincro(){
       const el = $("it_"+k+"_"+c); if (!el) return;
       x[c] = (c==="descripcion"||c==="unidad") ? el.value : (el.value===""?null:Number(el.value));
     });
+    const ci = $("it_"+k+"_con_instalacion"); if (ci) x.con_instalacion = ci.value==="1";
   });
   PRE.adic.forEach(function(x,k){
     const c1=$("ad_"+k+"_concepto"), c2=$("ad_"+k+"_importe"), c3=$("ad_"+k+"_iva_pct"), c4=$("ad_"+k+"_aplica_iva");
@@ -1163,7 +1175,7 @@ function sincro(){
   const mo = $("w_moneda"); if (mo) PRE.cab.moneda = mo.value;
   pintarTotales();
 }
-function itemAgregar(){ sincro(); PRE.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"m2", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true}); pintarItems(); pintarTotales(); }
+function itemAgregar(){ sincro(); PRE.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"m2", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, con_instalacion:false}); pintarItems(); pintarTotales(); }
 function itemQuitar(k){ sincro(); const x = PRE.items[k]; if (x.id) PRE.borrarItems.push(x.id); PRE.items.splice(k,1); pintarItems(); pintarTotales(); }
 function itemProducto(k){
   sincro();
@@ -1173,8 +1185,29 @@ function itemProducto(k){
     x.unidad = p.unidad;
     x.iva_pct = Number(p.iva_pct||0);
     x.aplica_iva = Number(p.iva_pct||0) > 0;
-    x.precio_unit = precioDe(p, $("w_lista_id").value, $("w_moneda").value);
+    if (x.con_instalacion && !tieneInst(p, $("w_lista_id").value, $("w_moneda").value)) x.con_instalacion = false;
+    x.precio_unit = precioDe(p, $("w_lista_id").value, $("w_moneda").value, x.con_instalacion);
   }
+  pintarItems(); pintarTotales();
+}
+/* celda del marcador con/sin instalacion, compartida por presupuesto y venta */
+function celdaInst(x, k, d, pref){
+  if (x.es_adicional) return '<span class="muted">—</span>';
+  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  if (!p) return '<span class="muted">—</span>';
+  const lista = pref==="it" ? ($("w_lista_id")||{}).value : listaDeVenta();
+  const mon   = pref==="it" ? ($("w_moneda")||{}).value : VTA.moneda;
+  if (!tieneInst(p, lista, mon)) return '<span class="muted" title="Este producto no tiene cargado el precio con instalación">sin instalar</span>';
+  return '<select style="width:110px" id="'+pref+'_'+k+'_con_instalacion" '+(d||"")+' onchange="'+(pref==="it"?"itemInst":"ventaInst")+'('+k+')">'+
+    '<option value="0" '+(x.con_instalacion?"":"selected")+'>Sin instalar</option>'+
+    '<option value="1" '+(x.con_instalacion?"selected":"")+'>Instalado</option></select>';
+}
+function itemInst(k){
+  sincro();
+  const x = PRE.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const el = $("it_"+k+"_con_instalacion");
+  x.con_instalacion = el ? el.value==="1" : false;
+  if (p) x.precio_unit = precioDe(p, $("w_lista_id").value, $("w_moneda").value, x.con_instalacion);
   pintarItems(); pintarTotales();
 }
 function adicAgregar(){ sincro(); PRE.adic.push({concepto:"", importe:0, iva_pct:21, aplica_iva:true}); pintarAdic(); pintarTotales(); }
@@ -1219,7 +1252,7 @@ async function guardarPresupuesto(){
     const x = PRE.items[k];
     const fila = {presupuesto_id:id, orden:k, producto_id:x.producto_id||null, descripcion:x.descripcion||"(sin descripcion)",
                   cantidad:Number(x.cantidad||0), unidad:x.unidad||null, precio_unit:Number(x.precio_unit||0),
-                  descuento_pct:Number(x.descuento_pct||0), iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false, cantidad_medida:x.cantidad_medida||null, unidad_medida:x.unidad_medida||null};
+                  descuento_pct:Number(x.descuento_pct||0), iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false, cantidad_medida:x.cantidad_medida||null, unidad_medida:x.unidad_medida||null, con_instalacion:!!x.con_instalacion};
     const r = x.id ? await sb.from("presupuesto_items").update(fila).eq("id",x.id)
                    : await sb.from("presupuesto_items").insert(fila).select("id").single();
     if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">Renglón '+(k+1)+': '+esc(r.error.message)+'</div>'; return; }
@@ -1265,7 +1298,7 @@ async function guardarPresupuesto(){
 
 function imprimirPresupuesto(){
   const c = PRE.cab, m = c.moneda||"ARS", t = calcTotales();
-  const fila = x => '<tr><td>'+esc(x.descripcion)+'</td><td class="r">'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
+  const fila = x => '<tr><td>'+esc(x.descripcion)+(x.con_instalacion?' <b>(instalado, todo incluido)</b>':'')+'</td><td class="r">'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
     '<td class="r">'+fmtM(x.precio_unit,m)+'</td><td class="r">'+(Number(x.descuento_pct)?fmtN(x.descuento_pct)+"%":"")+'</td>'+
     '<td class="r">'+fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100),m)+'</td></tr>';
   const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(c.codigo)+'</title><style>'+
@@ -1979,7 +2012,7 @@ async function fichaVenta(id){
    '</div>'+
    '<div class="sec">Renglones</div>'+
    '<div class="tablewrap"><table><thead><tr><th>Descripción</th><th>Cant.</th><th>Un.</th><th>Precio</th><th>IVA %</th><th>Entregado</th></tr></thead><tbody>'+
-   items.map(x=>'<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'><td style="white-space:normal;min-width:220px">'+esc(x.descripcion)+(x.es_adicional?' <span class="muted">(adicional)</span>':'')+'</td>'+
+   items.map(x=>'<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'><td style="white-space:normal;min-width:220px">'+esc(x.descripcion)+(x.es_adicional?' <span class="muted">(adicional)</span>':'')+(x.con_instalacion?' <span class="pill ok">Instalado</span>':'')+'</td>'+
      '<td>'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td><td>'+fmtM(x.precio_unit,ve.moneda)+'</td><td>'+fmtN(x.iva_pct)+'</td><td>'+fmtN(x.entregado)+' de '+fmtN(x.cantidad)+'</td></tr>').join("")+
    '</tbody></table></div>'+
    '<div class="muted" style="margin-top:6px">«Entregado» se va a completar solo con los remitos cuando exista el módulo de stock.</div>'+
@@ -2076,7 +2109,7 @@ function listaDeVenta(){
   const l = LISTAS.filter(x=>x.activo)[0];
   return l ? l.id : null;
 }
-function ventaItemAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:false}); pintarVentaItems(); pintarVentaTotales(); }
+function ventaItemAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:false, con_instalacion:false}); pintarVentaItems(); pintarVentaTotales(); }
 function ventaAdicAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:true}); pintarVentaItems(); pintarVentaTotales(); }
 function ventaItemQuitar(k){ ventaSincro(); VTA.items.splice(k,1); pintarVentaItems(); pintarVentaTotales(); }
 function ventaMoneda(){ VTA.moneda = $("v_moneda").value || "ARS"; ventaSincro(); pintarVentaItems(); pintarVentaTotales(); }
@@ -2086,6 +2119,7 @@ function ventaSincro(){
       const el = $("vi_"+k+"_"+c); if (!el) return;
       x[c] = (c==="descripcion"||c==="unidad") ? el.value : (el.value===""?null:Number(el.value));
     });
+    const ci = $("vi_"+k+"_con_instalacion"); if (ci) x.con_instalacion = ci.value==="1";
   });
   const f = $("v_fecha"); if (f) VTA.fecha = f.value || hoy();
   const o = $("v_obs");   if (o) VTA.obs = o.value;
@@ -2099,8 +2133,17 @@ function ventaProducto(k){
     x.unidad = p.unidad;
     x.iva_pct = Number(p.iva_pct||0);
     x.aplica_iva = Number(p.iva_pct||0) > 0;
-    x.precio_unit = precioDe(p, listaDeVenta(), VTA.moneda);
+    if (x.con_instalacion && !tieneInst(p, listaDeVenta(), VTA.moneda)) x.con_instalacion = false;
+    x.precio_unit = precioDe(p, listaDeVenta(), VTA.moneda, x.con_instalacion);
   }
+  pintarVentaItems(); pintarVentaTotales();
+}
+function ventaInst(k){
+  ventaSincro();
+  const x = VTA.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  const el = $("vi_"+k+"_con_instalacion");
+  x.con_instalacion = el ? el.value==="1" : false;
+  if (p) x.precio_unit = precioDe(p, listaDeVenta(), VTA.moneda, x.con_instalacion);
   pintarVentaItems(); pintarVentaTotales();
 }
 function celdaMedidaVenta(x,k){
@@ -2134,10 +2177,11 @@ function pintarVentaItems(){
   const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
       .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
   $("v_items").innerHTML = !VTA.items.length ? '<div class="muted">Sin renglones todavía. Agregá el primero con «+ Producto».</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th>Instalación</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
    VTA.items.map(function(x,k){
      return '<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'>'+
        '<td>'+(x.es_adicional?'<span class="muted">Adicional</span>':'<select style="width:100%;min-width:240px" id="vi_'+k+'_producto_id" onchange="ventaProducto('+k+')">'+opts(x.producto_id)+'</select>')+'</td>'+
+       '<td>'+celdaInst(x,k,"","vi")+'</td>'+
        '<td><input id="vi_'+k+'_descripcion" value="'+esc(x.descripcion)+'" oninput="ventaSincro()" placeholder="'+(x.es_adicional?"Flete, colocación…":"")+'"></td>'+
        '<td><input type="number" step="0.01" style="width:80px" id="vi_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" oninput="ventaCantidad('+k+')"></td>'+
        '<td><input style="width:70px" id="vi_'+k+'_unidad" value="'+esc(x.unidad)+'" oninput="ventaSincro()"></td>'+
@@ -2183,7 +2227,7 @@ async function guardarVentaDirecta(){
   if (!(t.total>0)) return err("El total tiene que ser mayor a cero. Revisá cantidades y precios.");
   const items = VTA.items.map(x=>({producto_id:x.es_adicional?null:(x.producto_id||null), descripcion:x.descripcion||"", cantidad:Number(x.cantidad||0),
      unidad:x.unidad||"", precio_unit:Number(x.precio_unit||0), descuento_pct:Number(x.descuento_pct||0),
-     iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false, es_adicional:!!x.es_adicional}));
+     iva_pct:Number(x.iva_pct||0), aplica_iva:x.aplica_iva!==false, es_adicional:!!x.es_adicional, con_instalacion:!!x.con_instalacion}));
   $("v_guardar").disabled = true;
   const {data,error} = await sb.rpc("registrar_venta_directa", {p_cliente:Number(VTA.cliente_id), p_fecha:VTA.fecha||hoy(),
      p_moneda:VTA.moneda||"ARS", p_items:items, p_obs:VTA.obs||null});
