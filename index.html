@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-6";
+const VERSION = "v2026.08.02-7";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1343,19 +1343,28 @@ async function formCobranza(cliId){
      '<div class="f"><label>Fecha</label><input type="date" id="k_fecha" value="'+hoy()+'"></div>'+
      '<div class="f"><label>Cuenta corriente</label><select id="k_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
      '<div class="f"><label>¿En qué cuenta entra la plata?</label><select id="k_cuenta">'+cuentas.map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+' ('+x.moneda+')</option>').join("")+'</select></div>'+
-     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="k_importe"></div>'+
+     '<div class="f"><label>Importe en la cuenta corriente</label><input type="number" step="0.01" id="k_importe" oninput="calcCobranza()"></div>'+
+     '<div class="f" id="k_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="k_tc" oninput="calcCobranza()" placeholder="pesos por dólar"></div>'+
+     '<div class="f" id="k_box_pago" style="display:none"><label>Importe que entra en la cuenta</label><input type="number" step="0.01" id="k_pago" oninput="calcCobranzaDesdePago()"></div>'+
      '<div class="f"><label>Concepto</label><select id="k_concepto">'+selOpts(cc.data||[],null)+'</select></div>'+
      '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="k_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concCobAgregar('+cliId+')">Agregar</button></div></div>'+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="k_obs" rows="2"></textarea></div>'+
-   '<div class="muted">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
+   '<div class="muted" id="k_nota">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
    '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+  $("k_moneda").onchange = calcCobranza;
+  $("k_cuenta").onchange = calcCobranza;
+  calcCobranza();
   $("k_guardar").onclick = async function(){
     const imp = Number($("k_importe").value||0);
     if (!(imp>0)){ $("cbmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+    const distinta = $("k_moneda").value !== monedaCta($("k_cuenta").value);
+    const tc = Number(($("k_tc")||{}).value||0);
+    if (distinta && !(tc>0)){ $("cbmsg").innerHTML='<div class="msg err">La cuenta corriente y la cuenta de pago son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
     $("k_guardar").disabled = true;
     const {error} = await sb.rpc("registrar_cobranza", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:$("k_moneda").value,
-      p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null});
+      p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
+      p_importe_pago:Number(($("k_pago")||{}).value||0)||null, p_cotizacion:tc||null});
     $("k_guardar").disabled = false;
     if (error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarClientes();
@@ -1480,6 +1489,14 @@ function fichaCuenta(id){
     '<div class="f"><label>Activa</label><select id="z_activo" '+d+'><option value="1" '+(!c||c.activo?"selected":"")+'>Sí</option><option value="0" '+(c&&!c.activo?"selected":"")+'>No</option></select></div>'+
    '</div><div class="f"><label>Descripción</label><textarea id="z_desc" rows="2" '+d+'>'+esc(c?c.descripcion:"")+'</textarea></div>'+
    (c?'<div class="muted">Saldo actual: <b>'+(fmtM(c.saldo,c.moneda)||"—")+'</b>. Se calcula con los movimientos y no se puede editar a mano.</div>':'')+
+   (c&&P("cuenta-ajustar")?'<div class="sec">Ingresar o sacar dinero</div>'+
+     '<div class="muted" style="margin-bottom:8px">Para abrir la cuenta con un saldo inicial, o para corregir una diferencia de arqueo. Queda como un movimiento más, con tu nombre y la fecha. No es un retiro ni un gasto.</div>'+
+     '<div id="ajmsg"></div><div class="grid">'+
+       '<div class="f"><label>Fecha</label><input type="date" id="aj_fecha" value="'+hoy()+'"></div>'+
+       '<div class="f"><label>Qué hago</label><select id="aj_tipo"><option value="Ingreso">Ingresar dinero</option><option value="Egreso">Sacar dinero</option></select></div>'+
+       '<div class="f"><label>Importe en '+esc(c.moneda)+'</label><input type="number" step="0.01" id="aj_importe"></div>'+
+     '</div><div class="f"><label>Detalle</label><input id="aj_detalle" placeholder="Saldo inicial de la caja, ajuste de arqueo…"></div>'+
+     '<div class="acciones"><button class="btn2" onclick="ajustarCuenta('+c.id+')">Registrar movimiento</button></div>':'')+
    (puede?'<div class="acciones"><button class="btn" id="z_guardar">'+(c?"Guardar":"Crear cuenta")+'</button></div>':'');
   if (puede) $("z_guardar").onclick = async function(){
     const o = {nombre:$("z_nombre").value.trim(), descripcion:$("z_desc").value||null, tipo_cuenta_id:$("z_tipo").value?Number($("z_tipo").value):null,
@@ -1641,14 +1658,20 @@ function formTransf(){
     '<div class="f"><label>Sale de</label><select id="x_origen">'+op+'</select></div>'+
     '<div class="f"><label>Importe que sale</label><input type="number" step="0.01" id="x_io"></div>'+
     '<div class="f"><label>Entra en</label><select id="x_destino">'+op+'</select></div>'+
-    '<div class="f"><label>Importe que entra</label><input type="number" step="0.01" id="x_id" placeholder="dejalo vacío si es la misma moneda"></div>'+
-   '</div><div class="f"><label>Observaciones</label><input id="x_obs"></div>'+
+    '<div class="f" id="x_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="x_tc" oninput="calcTransf()" placeholder="pesos por dólar"></div>'+
+    '<div class="f"><label>Importe que entra</label><input type="number" step="0.01" id="x_id" placeholder="se completa solo con el tipo de cambio"></div>'+
+   '</div><div id="x_nota" class="muted"></div><div class="f"><label>Observaciones</label><input id="x_obs"></div>'+
    '<div class="acciones"><button class="btn" id="x_guardar">Registrar</button></div>';
+  $("x_origen").onchange = calcTransf; $("x_destino").onchange = calcTransf; $("x_io").oninput = calcTransf;
+  calcTransf();
   $("x_guardar").onclick = async function(){
     const io = Number($("x_io").value||0);
     if (!(io>0)){ $("ftmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    const distinta = monedaCta($("x_origen").value) !== monedaCta($("x_destino").value);
+    const tc = Number($("x_tc").value||0);
+    if (distinta && !(tc>0)){ $("ftmsg").innerHTML='<div class="msg err">Las cuentas son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
-      p_imp_origen:io, p_imp_destino:Number($("x_id").value||0), p_obs:$("x_obs").value||null});
+      p_imp_origen:io, p_imp_destino:Number($("x_id").value||0), p_obs:$("x_obs").value||null, p_cotizacion:tc||null});
     if (error){ $("ftmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
   };
@@ -1679,10 +1702,12 @@ function formRetiro(){
   $("dbody").innerHTML = '<div id="frmsg"></div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="r_fecha" value="'+hoy()+'"></div>'+
     '<div class="f"><label>Cuenta</label><select id="r_cuenta">'+cs.map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></div>'+
-    '<div class="f"><label>Importe</label><input type="number" step="0.01" id="r_importe"></div>'+
+    '<div class="f"><label>Importe <span id="r_mon" class="muted"></span></label><input type="number" step="0.01" id="r_importe"></div>'+
     '<div class="f"><label>Quién retira</label><input id="r_quien"></div>'+
    '</div><div class="f"><label>Observaciones</label><input id="r_obs"></div>'+
    '<div class="acciones"><button class="btn" id="r_guardar">Registrar retiro</button></div>';
+  const pintarMonRetiro = function(){ $("r_mon").textContent = "en " + monedaCta($("r_cuenta").value); };
+  $("r_cuenta").onchange = pintarMonRetiro; pintarMonRetiro();
   $("r_guardar").onclick = async function(){
     const imp = Number($("r_importe").value||0);
     if (!(imp>0)){ $("frmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
@@ -1770,6 +1795,61 @@ async function aplicarAjuste(){
   VISTAS.productos();
   $("apmsg").innerHTML = fallos? '<div class="msg err">'+fallos+' productos no se pudieron actualizar.</div>'
     : '<div class="msg ok">Listo: '+afectados.length+' productos actualizados '+(pct>0?"+":"")+pct+' %.</div>';
+}
+
+async function ajustarCuenta(id){
+  const imp = Number($("aj_importe").value||0);
+  if (!(imp>0)){ $("ajmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+  const {error} = await sb.rpc("ajustar_saldo_cuenta",{p_cuenta:id, p_fecha:$("aj_fecha").value||hoy(), p_tipo:$("aj_tipo").value, p_importe:imp, p_detalle:$("aj_detalle").value||null});
+  if (error){ $("ajmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarFin();
+  fichaCuenta(id);
+  $("ajmsg").innerHTML='<div class="msg ok">Listo. El saldo de la cuenta quedó actualizado.</div>';
+}
+function monedaCta(id){ const c = CTAS.find(x=>String(x.id)===String(id)); return c?c.moneda:"ARS"; }
+
+/* cobranza: si la cuenta corriente y la cuenta de pago son de distinta moneda, hace falta el tipo de cambio */
+function calcCobranza(){
+  const mcc = $("k_moneda").value, mcta = monedaCta($("k_cuenta").value);
+  const distinta = mcc !== mcta;
+  $("k_box_tc").style.display = distinta ? "" : "none";
+  $("k_box_pago").style.display = distinta ? "" : "none";
+  if (!distinta){ $("k_nota").innerHTML = "El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación."; return; }
+  const imp = Number($("k_importe").value||0), tc = Number($("k_tc").value||0);
+  if (imp>0 && tc>0){
+    const pago = (mcc === "USD" && mcta === "ARS") ? imp*tc : (mcc === "ARS" && mcta === "USD") ? imp/tc : imp;
+    $("k_pago").value = Math.round(pago*100)/100;
+  }
+  $("k_nota").innerHTML = 'La deuda está en <b>'+mcc+'</b> y el cliente paga en <b>'+mcta+'</b>. Se le descuentan '+
+    (fmtM(Number($("k_importe").value||0), mcc)||"—")+' de la cuenta corriente y entran '+
+    (fmtM(Number(($("k_pago")||{}).value||0), mcta)||"—")+' en la caja.';
+}
+function calcCobranzaDesdePago(){
+  const mcc = $("k_moneda").value, mcta = monedaCta($("k_cuenta").value);
+  const pago = Number($("k_pago").value||0), tc = Number($("k_tc").value||0);
+  if (pago>0 && tc>0){
+    const imp = (mcc === "USD" && mcta === "ARS") ? pago/tc : (mcc === "ARS" && mcta === "USD") ? pago*tc : pago;
+    $("k_importe").value = Math.round(imp*100)/100;
+  }
+  calcCobranza();
+}
+
+/* transferencia: si las cuentas son de distinta moneda, hace falta el tipo de cambio */
+function calcTransf(){
+  const mo = monedaCta($("x_origen").value), md = monedaCta($("x_destino").value);
+  const distinta = mo !== md;
+  $("x_box_tc").style.display = distinta ? "" : "none";
+  const io = Number($("x_io").value||0), tc = Number($("x_tc").value||0);
+  if (!distinta){
+    $("x_id").value = io || "";
+    $("x_nota").innerHTML = "Las dos cuentas están en " + mo + ": entra lo mismo que sale.";
+    return;
+  }
+  if (io>0 && tc>0){
+    const d = (mo === "ARS" && md === "USD") ? io/tc : (mo === "USD" && md === "ARS") ? io*tc : io;
+    $("x_id").value = Math.round(d*100)/100;
+  }
+  $("x_nota").innerHTML = 'Cambio de moneda: salen <b>'+(fmtM(io,mo)||"—")+'</b> y entran <b>'+(fmtM(Number($("x_id").value||0),md)||"—")+'</b>. Los dos movimientos quedan cada uno en la moneda de su cuenta.';
 }
 
 </script>
