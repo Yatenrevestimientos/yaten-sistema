@@ -144,7 +144,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-16";
+const VERSION = "v2026.08.02-17";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -265,6 +265,7 @@ const MENU = [
   {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
+  {id:"compras",  t:"Compras",         perm:"compra-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -1463,6 +1464,466 @@ async function anularPV(movId, provId){
   if (error) return alert(error.message);
   await cargarProveedores();
   fichaProveedor(provId);
+}
+
+/* ═══════════ COMPRAS ═══════════ */
+let COM = {tab:"ordenes", texto:"", desde:"", hasta:"", anulados:false};
+let TIMP = [];
+async function db17(){
+  if (window._db17 !== undefined) return window._db17;
+  const t = await sb.from("facturas_compra").select("id").limit(1);
+  window._db17 = !t.error;
+  return window._db17;
+}
+const nomProv = id => { const p = PROVS.find(x=>x.id===id); return p?p.nombre:("proveedor #"+id); };
+VISTAS.compras = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await db17())){ $("main").innerHTML = '<div class="panel"><h2>Compras</h2><div class="msg err">Falta correr la migración de compras en la base.</div></div>'; return; }
+  if (!PROVS.length) await cargarProveedores();
+  if (!PRODS.length) await cargarCatalogo();
+  if (!CTAS.length) await cargarFin();
+  if (!TIMP.length){ const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[]; }
+  const tabs = [["ordenes","Órdenes de compra"],["facturas","Facturas"],["notas","Notas de crédito y débito"],["pagos","Pagos"]];
+  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
+    '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
+    tabs.map(t=>'<button onclick="COM.tab=\''+t[0]+'\';VISTAS.compras()" style="border:0;border-radius:0;background:'+(COM.tab===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+(COM.tab===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
+    '</div><div id="cbody" style="padding:14px"><div class="muted">Cargando…</div></div></div>';
+  ({ordenes:comOrdenes, facturas:comFacturas, notas:comNotas, pagos:comPagos}[COM.tab]||comOrdenes)();
+};
+function filtrosCompra(id){
+  return '<div class="filtros">'+
+   '<div><label>Desde</label><input type="date" id="'+id+'_desde" value="'+COM.desde+'"></div>'+
+   '<div><label>Hasta</label><input type="date" id="'+id+'_hasta" value="'+COM.hasta+'"></div>'+
+   '<div><label>Anulados</label><select id="'+id+'_anul"><option value="0" '+(COM.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(COM.anulados?"selected":"")+'>Mostrar</option></select></div>'+
+   '<div style="min-width:240px"><label>Buscar</label><input id="'+id+'_txt" placeholder="proveedor, número, observaciones" value="'+esc(COM.texto)+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="'+id+'_btn">Filtrar</button></div>';
+}
+function engancharFiltros(id){
+  $(id+"_btn").onclick = function(){
+    COM.desde=$(id+"_desde").value; COM.hasta=$(id+"_hasta").value;
+    COM.anulados=$(id+"_anul").value==="1"; COM.texto=$(id+"_txt").value.trim(); VISTAS.compras();
+  };
+}
+function aplicaFiltro(x, extra){
+  const t = COM.texto.toLowerCase();
+  if (COM.desde && x.fecha < COM.desde) return false;
+  if (COM.hasta && x.fecha > COM.hasta) return false;
+  if (!COM.anulados && x.anulado) return false;
+  if (t && ((nomProv(x.proveedor_id)+" "+(extra||"")+" "+(x.observaciones||"")).toLowerCase().indexOf(t) < 0)) return false;
+  return true;
+}
+const filaAnul = x => x.anulado ? ' style="opacity:.45;text-decoration:line-through"' : '';
+
+async function comOrdenes(){
+  const puede = P("compra-modificar");
+  const {data} = await sb.from("ordenes_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  const rows = (data||[]).filter(x=>aplicaFiltro(x, x.codigo));
+  $("cbody").innerHTML = '<div class="desc">Lo que le pedimos al proveedor y todavía no llegó. La <b>fecha de recepción</b> es la que alimenta el pendiente de recepción del stock.</div>'+
+   filtrosCompra("oc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formOrdenCompra()">+ Orden de compra</button></div>':'')+'</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Proveedor','Fecha','Recepción','Total','Moneda','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td>'+(x.fecha_recepcion?fmtF(x.fecha_recepcion):'<span class="muted">sin fecha</span>')+'</td>'+
+       '<td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(x.estado)+'</td>'+
+       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularOC('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">No hay órdenes de compra con esos filtros.</div>');
+  engancharFiltros("oc");
+}
+async function comFacturas(){
+  const puede = P("compra-modificar");
+  const {data} = await sb.from("facturas_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  const rows = (data||[]).filter(x=>aplicaFiltro(x, (x.punto_venta||"")+" "+(x.nro_comprobante||"")));
+  const tot = {}; rows.filter(x=>!x.anulado).forEach(x=>{ const m=x.moneda; tot[m]=tot[m]||{n:0,i:0,t:0}; tot[m].n+=Number(x.neto||0); tot[m].i+=Number(x.impuestos||0); tot[m].t+=Number(x.total||0); });
+  $("cbody").innerHTML = '<div class="desc">Cada factura de compra le suma deuda al proveedor. Los <b>impuestos van renglón por renglón</b> —IVA, percepciones, ingresos brutos— y por eso el crédito fiscal queda bien desde el momento de la carga.</div>'+
+   filtrosCompra("fc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formFacturaCompra()">+ Factura de compra</button></div>':'')+'</div>'+
+   (Object.keys(tot).length? '<div class="kpis">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m].t,m)+'</div><div class="muted">neto '+fmtM(tot[m].n,m)+' · impuestos '+fmtM(tot[m].i,m)+'</div></div>').join("")+'</div>':'')+
+   (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
+     ['Tipo','Punto vta.','Número','Proveedor','Fecha','Neto','Impuestos','Total','Moneda',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(x=>'<tr'+filaAnul(x)+' style="cursor:pointer'+(x.anulado?';opacity:.45;text-decoration:line-through':'')+'" onclick="verFactura('+x.id+')">'+
+       '<td>'+esc(x.tipo)+'</td><td>'+esc(x.punto_venta)+'</td><td><b>'+esc(x.nro_comprobante)+'</b></td>'+
+       '<td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td>'+fmtM(x.neto,x.moneda)+'</td><td>'+fmtM(x.impuestos,x.moneda)+'</td><td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td>'+
+       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">No hay facturas de compra con esos filtros.</div>');
+  engancharFiltros("fc");
+}
+async function comNotas(){
+  const puede = P("compra-modificar");
+  const {data} = await sb.from("notas_proveedor").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  const rows = (data||[]).filter(x=>aplicaFiltro(x, (x.punto_venta||"")+" "+(x.nro_comprobante||"")+" "+x.tipo));
+  $("cbody").innerHTML = '<div class="desc">Para corregir una factura sin borrarla. La nota de <b>crédito baja</b> lo que le debemos al proveedor; la de <b>débito lo sube</b>.</div>'+
+   filtrosCompra("np")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formNotaProv()">+ Nota</button></div>':'')+'</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+     ['Tipo','Punto vta.','Número','Proveedor','Fecha','Neto','Impuestos','Total','Moneda',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.tipo)+'</b></td><td>'+esc(x.punto_venta)+'</td><td>'+esc(x.nro_comprobante)+'</td>'+
+       '<td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td>'+fmtM(x.neto,x.moneda)+'</td><td>'+fmtM(x.impuestos,x.moneda)+'</td><td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td>'+
+       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularNota('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">No hay notas con esos filtros.</div>');
+  engancharFiltros("np");
+}
+async function comPagos(){
+  const puede = P("compra-modificar");
+  const {data} = await sb.from("pagos_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  const rows = (data||[]).filter(x=>aplicaFiltro(x, x.codigo));
+  $("cbody").innerHTML = '<div class="desc">La plata que le sale al negocio para pagarle al proveedor. Baja la deuda con él y baja el saldo de la cuenta de donde sale, en una sola operación.</div>'+
+   filtrosCompra("pg")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formPagoCompra()">+ Pago</button></div>':'')+'</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Proveedor','Fecha','Importe','Moneda','Sale de','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td><b>'+fmtM(x.importe,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(nom(CTAS,x.cuenta_id))+'</td>'+
+       '<td style="white-space:normal">'+esc(x.observaciones)+'</td>'+
+       '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularPago('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">No hay pagos con esos filtros.</div>');
+  engancharFiltros("pg");
+}
+function selProv(id){ return '<option value=""></option>'+PROVS.filter(p=>p.activo||String(p.id)===String(id)).map(p=>'<option value="'+p.id+'" '+(String(id)===String(p.id)?"selected":"")+'>'+esc(p.nombre)+'</option>').join(""); }
+function avisoSinProveedores(){
+  return '<div class="msg err"><b>Todavía no hay proveedores cargados.</b><br>Toda compra es a un proveedor, porque genera la deuda en su cuenta corriente. Creá el proveedor primero en la pantalla Proveedores.</div>';
+}
+
+/* ─── Orden de compra ─── */
+let OC = null;
+function formOrdenCompra(){
+  $("dtit").textContent = "Orden de compra";
+  if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
+  OC = {proveedor_id:null, fecha:hoy(), fecha_recepcion:"", moneda:"USD", obs:"", items:[]};
+  pintarOC(); try{ $("dlg").showModal(); }catch(e){}
+}
+function pintarOC(){
+  $("dbody").innerHTML = '<div id="ocmsg"></div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor *</label><select id="oc_prov">'+selProv(OC.proveedor_id)+'</select></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="oc_fecha" value="'+OC.fecha+'"></div>'+
+     '<div class="f"><label>Fecha estimada de recepción</label><input type="date" id="oc_recep" value="'+OC.fecha_recepcion+'"></div>'+
+     '<div class="f"><label>Moneda</label><select id="oc_moneda"><option value="ARS" '+(OC.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(OC.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
+   '</div>'+
+   '<div class="muted" style="margin-bottom:8px">La fecha de recepción es cuándo esperás que llegue. De ahí sale el «pendiente de recepción» cuando armemos el stock.</div>'+
+   '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="ocItemAgregar()">+ Renglón</button></div>'+
+   '<div id="oc_items"></div>'+
+   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="oc_obs" value="'+esc(OC.obs)+'"></div>'+
+   '<div id="oc_tot" style="margin-top:8px"></div>'+
+   '<div class="acciones"><button class="btn" id="oc_guardar" onclick="guardarOC()">Registrar orden</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  pintarOCItems();
+}
+function ocSincro(){
+  OC.items.forEach(function(x,k){
+    ["producto_id","descripcion","cantidad","unidad","precio_unit"].forEach(function(c){
+      const el=$("oi_"+k+"_"+c); if(!el) return;
+      x[c] = (c==="descripcion"||c==="unidad")?el.value:(el.value===""?null:Number(el.value));
+    });
+  });
+  const f=$("oc_fecha"); if(f) OC.fecha=f.value;
+  const r=$("oc_recep"); if(r) OC.fecha_recepcion=r.value;
+  const m=$("oc_moneda"); if(m) OC.moneda=m.value;
+  const o=$("oc_obs"); if(o) OC.obs=o.value;
+  const p=$("oc_prov"); if(p) OC.proveedor_id=p.value||null;
+  pintarOCTot();
+}
+function ocItemAgregar(){ ocSincro(); OC.items.push({producto_id:null,descripcion:"",cantidad:1,unidad:"caja",precio_unit:0}); pintarOCItems(); }
+function ocItemQuitar(k){ ocSincro(); OC.items.splice(k,1); pintarOCItems(); }
+function ocProducto(k){
+  ocSincro();
+  const x = OC.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
+  if (p){ x.descripcion = p.nombre; x.unidad = p.unidad; }
+  pintarOCItems();
+}
+function pintarOCItems(){
+  const opts = v => '<option value=""></option>'+PRODS.filter(p=>p.activo).map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
+  $("oc_items").innerHTML = !OC.items.length ? '<div class="muted">Sin renglones. Agregá el primero.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th>Precio unit.</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
+   OC.items.map(function(x,k){
+     return '<tr><td><select style="width:100%;min-width:240px" id="oi_'+k+'_producto_id" onchange="ocProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
+     '<td><input id="oi_'+k+'_descripcion" value="'+esc(x.descripcion)+'" oninput="ocSincro()"></td>'+
+     '<td><input type="number" step="0.01" style="width:90px" id="oi_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" oninput="ocSincro()"></td>'+
+     '<td><input style="width:70px" id="oi_'+k+'_unidad" value="'+esc(x.unidad)+'" oninput="ocSincro()"></td>'+
+     '<td><input type="number" step="0.01" style="width:110px" id="oi_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" oninput="ocSincro()"></td>'+
+     '<td style="text-align:right"><b id="osub_'+k+'"></b></td>'+
+     '<td><button class="btn2 btn-sm" onclick="ocItemQuitar('+k+')">Quitar</button></td></tr>';
+   }).join("")+'</tbody></table></div>';
+  pintarOCTot();
+}
+function pintarOCTot(){
+  const m = OC.moneda||"ARS";
+  let t = 0;
+  OC.items.forEach(function(x,k){
+    const s = Number(x.cantidad||0)*Number(x.precio_unit||0); t += s;
+    const el = $("osub_"+k); if (el) el.textContent = fmtM(s,m)||"—";
+  });
+  const el = $("oc_tot"); if (el) el.innerHTML = '<div class="tablewrap"><table><tbody><tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(t,m)||"—")+'</b></td></tr></tbody></table></div>';
+  const b = $("oc_guardar"); if (b) b.textContent = t>0 ? ("Registrar orden por "+fmtM(t,m)) : "Registrar orden";
+}
+async function guardarOC(){
+  ocSincro();
+  const err = t => { $("ocmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  if (!OC.proveedor_id) return err("Elegí el proveedor.");
+  if (!OC.items.length) return err("La orden no tiene renglones.");
+  const {error} = await sb.rpc("registrar_orden_compra",{p_proveedor:Number(OC.proveedor_id), p_fecha:OC.fecha||hoy(),
+    p_fecha_recepcion:OC.fecha_recepcion||null, p_moneda:OC.moneda, p_items:OC.items, p_obs:OC.obs||null});
+  if (error) return err(error.message);
+  $("dlg").close(); VISTAS.compras();
+}
+async function anularOC(id){
+  const m = prompt("¿Por qué se anula esta orden de compra?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_orden_compra",{p_id:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  VISTAS.compras();
+}
+
+/* ─── Factura de compra ─── */
+let FAC = null;
+function formFacturaCompra(){
+  $("dtit").textContent = "Factura de compra";
+  if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
+  FAC = {proveedor_id:null, tipo:"Factura A", punto_venta:"", nro:"", fecha:hoy(), moneda:"ARS", neto:0, obs:"", imp:[]};
+  pintarFac(); try{ $("dlg").showModal(); }catch(e){}
+}
+function pintarFac(){
+  $("dbody").innerHTML = '<div id="facmsg"></div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor *</label><select id="fa_prov">'+selProv(FAC.proveedor_id)+'</select></div>'+
+     '<div class="f"><label>Tipo</label><select id="fa_tipo">'+selTxt(["Factura A","Factura B","Factura C","Factura M","Ticket","Despacho de importación","Otro"],FAC.tipo)+'</select></div>'+
+     '<div class="f"><label>Punto de venta</label><input id="fa_pv" value="'+esc(FAC.punto_venta)+'" placeholder="0001"></div>'+
+     '<div class="f"><label>Número</label><input id="fa_nro" value="'+esc(FAC.nro)+'" placeholder="00001234"></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="fa_fecha" value="'+FAC.fecha+'"></div>'+
+     '<div class="f"><label>Moneda</label><select id="fa_moneda"><option value="ARS" '+(FAC.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(FAC.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
+     '<div class="f"><label>Neto gravado *</label><input type="number" step="0.01" id="fa_neto" value="'+(FAC.neto||"")+'" oninput="facSincro()"></div>'+
+   '</div>'+
+   '<div class="sec">Impuestos del comprobante</div>'+
+   '<div class="muted" style="margin-bottom:8px">Cargá cada impuesto por separado, como viene en la factura: IVA, percepciones, ingresos brutos. <b>Esto es lo que hace que el crédito fiscal cierre después.</b></div>'+
+   '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="facImpAgregar()">+ Impuesto</button>'+
+   '<div style="display:flex;gap:6px;align-items:center;margin-left:8px"><input id="fa_imp_nuevo" placeholder="Tipo de impuesto nuevo" style="width:200px"><button class="btn2 btn-sm" onclick="tipoImpAgregar()">Agregar a la lista</button></div></div>'+
+   '<div id="fa_imps"></div>'+
+   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="fa_obs" value="'+esc(FAC.obs)+'"></div>'+
+   '<div id="fa_tot" style="margin-top:8px"></div>'+
+   '<div class="acciones"><button class="btn" id="fa_guardar" onclick="guardarFactura()">Registrar factura</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  pintarFacImp();
+}
+function facSincro(){
+  FAC.imp.forEach(function(x,k){
+    const t=$("fi_"+k+"_tipo"), d=$("fi_"+k+"_detalle"), i=$("fi_"+k+"_importe");
+    if (t) x.tipo_impuesto_id = t.value||null;
+    if (d) x.detalle = d.value;
+    if (i) x.importe = i.value===""?0:Number(i.value);
+  });
+  ["prov","tipo","pv","nro","fecha","moneda","neto","obs"].forEach(function(c){
+    const el=$("fa_"+c); if(!el) return;
+    if (c==="prov") FAC.proveedor_id=el.value||null;
+    else if (c==="pv") FAC.punto_venta=el.value;
+    else if (c==="neto") FAC.neto=el.value===""?0:Number(el.value);
+    else FAC[c==="nro"?"nro":c]=el.value;
+  });
+  pintarFacTot();
+}
+function facImpAgregar(){ facSincro(); FAC.imp.push({tipo_impuesto_id:null, detalle:"", importe:0}); pintarFacImp(); }
+function facImpQuitar(k){ facSincro(); FAC.imp.splice(k,1); pintarFacImp(); }
+async function tipoImpAgregar(){
+  const n = $("fa_imp_nuevo").value.trim(); if (!n) return;
+  const {error} = await sb.from("tipos_impuesto").insert({nombre:n, activo:true});
+  if (error){ $("facmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[];
+  facSincro(); pintarFacImp();
+  $("facmsg").innerHTML='<div class="msg ok">Impuesto «'+esc(n)+'» agregado a la lista.</div>';
+}
+function pintarFacImp(){
+  $("fa_imps").innerHTML = !FAC.imp.length ? '<div class="muted">Sin impuestos. Si la factura es exenta, dejalo así.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Impuesto</th><th style="min-width:160px">Detalle</th><th>Importe</th><th></th></tr></thead><tbody>'+
+   FAC.imp.map(function(x,k){
+     return '<tr><td><select style="width:100%" id="fi_'+k+'_tipo" onchange="facSincro()">'+selOpts(TIMP,x.tipo_impuesto_id)+'</select></td>'+
+     '<td><input id="fi_'+k+'_detalle" value="'+esc(x.detalle)+'" oninput="facSincro()" placeholder="opcional"></td>'+
+     '<td><input type="number" step="0.01" style="width:130px" id="fi_'+k+'_importe" value="'+(x.importe||"")+'" oninput="facSincro()"></td>'+
+     '<td><button class="btn2 btn-sm" onclick="facImpQuitar('+k+')">Quitar</button></td></tr>';
+   }).join("")+'</tbody></table></div>';
+  pintarFacTot();
+}
+function pintarFacTot(){
+  const m = FAC.moneda||"ARS";
+  const imp = FAC.imp.reduce((a,x)=>a+Number(x.importe||0),0);
+  const tot = Number(FAC.neto||0)+imp;
+  const el = $("fa_tot"); if (!el) return;
+  el.innerHTML = '<div class="tablewrap"><table><tbody>'+
+   '<tr><td>Neto gravado</td><td style="text-align:right">'+(fmtM(FAC.neto,m)||"—")+'</td></tr>'+
+   '<tr><td>Impuestos</td><td style="text-align:right">'+(fmtM(imp,m)||"—")+'</td></tr>'+
+   '<tr style="background:#f6f3ee"><td><b>TOTAL de la factura</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(tot,m)||"—")+'</b></td></tr>'+
+   '</tbody></table></div>';
+  const b = $("fa_guardar"); if (b) b.textContent = tot>0 ? ("Registrar factura por "+fmtM(tot,m)) : "Registrar factura";
+}
+async function guardarFactura(){
+  facSincro();
+  const err = t => { $("facmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  if (!FAC.proveedor_id) return err("Elegí el proveedor.");
+  if (!(Number(FAC.neto)>0)) return err("El neto gravado tiene que ser mayor a cero.");
+  const {error} = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
+    p_punto_venta:FAC.punto_venta||null, p_nro:FAC.nro||null, p_fecha:FAC.fecha||hoy(), p_moneda:FAC.moneda,
+    p_neto:Number(FAC.neto), p_impuestos:FAC.imp.filter(x=>Number(x.importe)>0), p_items:[], p_obs:FAC.obs||null, p_orden:null});
+  if (error) return err(error.message);
+  $("dlg").close(); await cargarProveedores(); VISTAS.compras();
+}
+async function verFactura(id){
+  const [f,i] = await Promise.all([
+    sb.from("facturas_compra").select("*").eq("id",id).single(),
+    sb.from("factura_impuestos").select("*").eq("factura_id",id).order("id")
+  ]);
+  if (f.error) return alert(f.error.message);
+  const x = f.data;
+  $("dtit").textContent = "Factura "+(x.punto_venta||"")+"-"+(x.nro_comprobante||"")+" · "+nomProv(x.proveedor_id);
+  $("dbody").innerHTML = (x.anulado?'<div class="msg err">Factura <b>anulada</b> el '+fmtF(x.anulado_en)+'. Motivo: '+esc(x.motivo_anulacion)+'.</div>':'')+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor</label><div>'+esc(nomProv(x.proveedor_id))+'</div></div>'+
+     '<div class="f"><label>Tipo</label><div>'+esc(x.tipo)+'</div></div>'+
+     '<div class="f"><label>Fecha</label><div>'+fmtF(x.fecha)+'</div></div>'+
+     '<div class="f"><label>Total</label><div><b>'+fmtM(x.total,x.moneda)+'</b></div></div>'+
+   '</div>'+
+   '<div class="sec">Impuestos del comprobante</div>'+
+   ((i.data||[]).length? '<div class="tablewrap"><table><thead><tr><th>Impuesto</th><th>Detalle</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
+     i.data.map(t=>'<tr><td>'+esc(nom(TIMP,t.tipo_impuesto_id))+'</td><td>'+esc(t.detalle)+'</td><td style="text-align:right">'+fmtM(t.importe,x.moneda)+'</td></tr>').join("")+
+     '<tr style="background:#f6f3ee"><td colspan="2"><b>Neto gravado</b></td><td style="text-align:right"><b>'+fmtM(x.neto,x.moneda)+'</b></td></tr>'+
+     '</tbody></table></div>' : '<div class="muted">Sin impuestos discriminados.</div>')+
+   '<div class="acciones">'+(!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularFactura('+x.id+')">Anular factura</button>':'')+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function anularFactura(id){
+  const m = prompt("¿Por qué se anula esta factura? La deuda con el proveedor se revierte."); if (m===null) return;
+  const {error} = await sb.rpc("anular_factura_compra",{p_id:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  $("dlg").close(); await cargarProveedores(); VISTAS.compras();
+}
+
+/* ─── Nota de crédito / débito ─── */
+let NOT = null;
+function formNotaProv(){
+  $("dtit").textContent = "Nota de crédito o débito";
+  if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
+  NOT = {proveedor_id:null, tipo:"Credito", punto_venta:"", nro:"", fecha:hoy(), moneda:"ARS", neto:0, obs:"", imp:[]};
+  $("dbody").innerHTML = '<div id="notmsg"></div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor *</label><select id="nt_prov">'+selProv(null)+'</select></div>'+
+     '<div class="f"><label>Tipo *</label><select id="nt_tipo"><option value="Credito">Crédito — le debemos menos</option><option value="Debito">Débito — le debemos más</option></select></div>'+
+     '<div class="f"><label>Punto de venta</label><input id="nt_pv"></div>'+
+     '<div class="f"><label>Número</label><input id="nt_nro"></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="nt_fecha" value="'+hoy()+'"></div>'+
+     '<div class="f"><label>Moneda</label><select id="nt_moneda"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>'+
+     '<div class="f"><label>Neto *</label><input type="number" step="0.01" id="nt_neto"></div>'+
+     '<div class="f"><label>IVA u otros impuestos</label><input type="number" step="0.01" id="nt_imp" placeholder="0"></div>'+
+   '</div>'+
+   '<div class="f"><label>Observaciones</label><input id="nt_obs" placeholder="Por qué se emite"></div>'+
+   '<div class="acciones"><button class="btn" onclick="guardarNota()">Registrar nota</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function guardarNota(){
+  const err = t => { $("notmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const prov = $("nt_prov").value; if (!prov) return err("Elegí el proveedor.");
+  const neto = Number($("nt_neto").value||0); if (!(neto>0)) return err("El neto tiene que ser mayor a cero.");
+  const imp = Number($("nt_imp").value||0);
+  const {error} = await sb.rpc("registrar_nota_proveedor",{p_proveedor:Number(prov), p_tipo:$("nt_tipo").value,
+    p_punto_venta:$("nt_pv").value||null, p_nro:$("nt_nro").value||null, p_fecha:$("nt_fecha").value||hoy(),
+    p_moneda:$("nt_moneda").value, p_neto:neto,
+    p_impuestos: imp>0 ? [{tipo_impuesto_id:null, detalle:"Impuestos", importe:imp}] : [], p_obs:$("nt_obs").value||null});
+  if (error) return err(error.message);
+  $("dlg").close(); await cargarProveedores(); VISTAS.compras();
+}
+async function anularNota(id){
+  const m = prompt("¿Por qué se anula esta nota?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_nota_proveedor",{p_id:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarProveedores(); VISTAS.compras();
+}
+
+/* ─── Pago a proveedor ─── */
+let PAG = null;
+async function formPagoCompra(){
+  $("dtit").textContent = "Pago a proveedor";
+  if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
+  if (!CTAS.filter(c=>c.activo).length){ $("dbody").innerHTML = avisoSinCuentas("Un pago sale de una cuenta: primero tiene que existir la cuenta."); try{$("dlg").showModal();}catch(e){} return; }
+  PAG = {proveedor_id:null, fecha:hoy(), moneda:"ARS", cuenta_id:null, importe:0, cotizacion:null, obs:"", facturas:[]};
+  pintarPago(); try{ $("dlg").showModal(); }catch(e){}
+}
+function pintarPago(){
+  const cs = CTAS.filter(c=>c.activo);
+  $("dbody").innerHTML = '<div id="pagmsg"></div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor *</label><select id="pa_prov" onchange="pagoProveedor()">'+selProv(PAG.proveedor_id)+'</select></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="pa_fecha" value="'+PAG.fecha+'"></div>'+
+     '<div class="f"><label>Moneda de la deuda</label><select id="pa_moneda" onchange="pagoCalc()"><option value="ARS" '+(PAG.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(PAG.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
+     '<div class="f"><label>¿De qué cuenta sale?</label><select id="pa_cuenta" onchange="pagoCalc()">'+optCtas(cs)+'</select></div>'+
+     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="pa_importe" oninput="pagoCalc()"></div>'+
+     '<div class="f" id="pa_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="pa_tc" oninput="pagoCalc()" placeholder="pesos por dólar"></div>'+
+   '</div>'+
+   '<div class="muted" id="pa_nota" style="margin-bottom:8px"></div>'+
+   '<div class="sec">Imputar a facturas</div>'+
+   '<div class="muted" style="margin-bottom:8px">Elegí a qué facturas se aplica este pago. Si dejás todo en cero, el pago igual baja la deuda general del proveedor.</div>'+
+   '<div id="pa_facturas"><div class="muted">Elegí el proveedor.</div></div>'+
+   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="pa_obs"></div>'+
+   '<div class="acciones"><button class="btn" id="pa_guardar" onclick="guardarPago()">Registrar pago</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  pagoCalc();
+}
+async function pagoProveedor(){
+  PAG.proveedor_id = $("pa_prov").value||null;
+  if (!PAG.proveedor_id){ $("pa_facturas").innerHTML='<div class="muted">Elegí el proveedor.</div>'; return; }
+  const f = await sb.from("facturas_compra").select("*").eq("proveedor_id",Number(PAG.proveedor_id)).eq("anulado",false).order("fecha");
+  const pi = await sb.from("pago_imputaciones").select("factura_id,importe,pago_id");
+  const pagados = {};
+  (pi.data||[]).forEach(x=>{ pagados[x.factura_id] = (pagados[x.factura_id]||0) + Number(x.importe||0); });
+  PAG.facturas = (f.data||[]).map(x=>({id:x.id, rot:(x.punto_venta||"")+"-"+(x.nro_comprobante||""), fecha:x.fecha, moneda:x.moneda,
+    total:Number(x.total||0), saldo:Number(x.total||0)-(pagados[x.id]||0)})).filter(x=>x.saldo>0.009);
+  $("pa_facturas").innerHTML = !PAG.facturas.length ? '<div class="muted">Este proveedor no tiene facturas pendientes.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th>Factura</th><th>Fecha</th><th>Moneda</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th></tr></thead><tbody>'+
+   PAG.facturas.map((x,k)=>'<tr><td><b>'+esc(x.rot)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+esc(x.moneda)+'</td>'+
+     '<td>'+fmtM(x.total,x.moneda)+'</td><td><b>'+fmtM(x.saldo,x.moneda)+'</b></td>'+
+     '<td><input type="number" step="0.01" style="width:130px" id="pf_'+k+'" oninput="pagoImputar()"></td></tr>').join("")+
+   '</tbody></table></div><div class="muted" id="pa_imputado" style="margin-top:6px"></div>';
+}
+function pagoImputar(){
+  let s = 0;
+  PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); if(el) s += Number(el.value||0); });
+  const el = $("pa_imputado");
+  const imp = Number(($("pa_importe")||{}).value||0);
+  if (el) el.innerHTML = 'Imputado: <b>'+fmtM(s,PAG.moneda||"ARS")+'</b>'+(imp>0 && Math.abs(s-imp)>0.009 ? ' — <span style="color:#7a2415">no coincide con el importe del pago</span>' : '');
+}
+function pagoCalc(){
+  const cta = $("pa_cuenta"), mo = $("pa_moneda");
+  PAG.moneda = mo?mo.value:"ARS";
+  PAG.cuenta_id = cta?cta.value:null;
+  const mcta = monedaCta(PAG.cuenta_id);
+  const distinta = PAG.moneda !== mcta;
+  const box = $("pa_box_tc"); if (box) box.style.display = distinta ? "" : "none";
+  const imp = Number(($("pa_importe")||{}).value||0);
+  const tc = Number(($("pa_tc")||{}).value||0);
+  const nota = $("pa_nota");
+  if (nota){
+    if (distinta && imp>0 && tc>0) nota.innerHTML = 'La deuda está en '+PAG.moneda+' y la cuenta es en '+mcta+'. Se le descuentan <b>'+fmtM(imp,PAG.moneda)+'</b> de la deuda y salen <b>'+fmtM(imp*tc,mcta)+'</b> de la cuenta.';
+    else if (distinta) nota.innerHTML = 'La deuda y la cuenta son de distinta moneda: cargá el tipo de cambio.';
+    else nota.innerHTML = 'El pago baja la deuda con el proveedor y baja el saldo de la cuenta, en una sola operación.';
+  }
+  pagoImputar();
+  const b = $("pa_guardar"); if (b) b.textContent = imp>0 ? ("Registrar pago por "+fmtM(imp,PAG.moneda)) : "Registrar pago";
+}
+async function guardarPago(){
+  const err = t => { $("pagmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const prov = $("pa_prov").value; if (!prov) return err("Elegí el proveedor.");
+  const imp = Number($("pa_importe").value||0); if (!(imp>0)) return err("El importe tiene que ser mayor a cero.");
+  const cta = $("pa_cuenta").value; if (!cta) return err("Elegí de qué cuenta sale la plata.");
+  const tc = Number(($("pa_tc")||{}).value||0);
+  const imputaciones = [];
+  PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0; if (v>0) imputaciones.push({factura_id:x.id, importe:v}); });
+  $("pa_guardar").disabled = true;
+  const {error} = await sb.rpc("registrar_pago_compra",{p_proveedor:Number(prov), p_fecha:$("pa_fecha").value||hoy(),
+    p_moneda:$("pa_moneda").value, p_cuenta:Number(cta), p_importe:imp, p_cotizacion:tc||null,
+    p_imputaciones:imputaciones, p_obs:$("pa_obs").value||null});
+  $("pa_guardar").disabled = false;
+  if (error) return err(error.message);
+  $("dlg").close(); await cargarProveedores(); await cargarFin(); VISTAS.compras();
+}
+async function anularPago(id){
+  const m = prompt("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta."); if (m===null) return;
+  const {error} = await sb.rpc("anular_pago_compra",{p_id:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarProveedores(); await cargarFin(); VISTAS.compras();
 }
 
 /* ═══════════ VENTAS ═══════════ */
