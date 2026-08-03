@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-25";
+const VERSION = "v2026.08.03-26";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -279,6 +279,7 @@ const MENU = [
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
   {id:"compras",  t:"Compras",         perm:"compra-consultar"},
+  {id:"import",   t:"Importaciones",   perm:"compra-consultar"},
   {id:"stock",    t:"Stock",           perm:"stock-consultar"},
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
@@ -310,6 +311,11 @@ const SUBMENU = {
     {id:"cerradas", t:"Cerradas"},
     {id:"pendientes", t:"Pendientes a cerrar"},
     {id:"nueva", t:"Nueva", perm:"venta-agregar"}
+  ],
+  import: [
+    {id:"", t:"Historial"},
+    {id:"encurso", t:"En curso"},
+    {id:"nuevo", t:"Nuevo embarque", perm:"compra-modificar"}
   ],
   stock: [
     {id:"", t:"Planeamiento"},
@@ -364,6 +370,11 @@ function ir(v, sub){
   if (SUBVISTA === "nueva"){
     SUBVISTA = ""; pintarNav(); (VISTAS[v]||VISTAS.tablero)();
     setTimeout(function(){ if (v==="ventas") formVentaNueva(null); }, 350);
+    return;
+  }
+  if (v === "import" && SUBVISTA === "nuevo"){
+    SUBVISTA = ""; pintarNav(); VISTAS.import();
+    setTimeout(function(){ nuevoEmbarque(); }, 400);
     return;
   }
   if (v === "gastos" && SUBVISTA === "nuevo"){
@@ -1552,6 +1563,206 @@ async function guardarRecepcion(ordenId){
   const {error} = await sb.rpc("registrar_recepcion_oc",{p_orden:ordenId, p_items:items});
   if (error){ $("rcpmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   $("dlg").close(); VISTAS.compras();
+}
+
+
+/* ═══════════ IMPORTACIONES · landed cost ═══════════ */
+let EMB = null, CEMB = [];
+async function db24(){
+  if (window._db24 !== undefined) return window._db24;
+  const t = await sb.from("embarques").select("id").limit(1);
+  window._db24 = !t.error; return window._db24;
+}
+VISTAS.import = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await db24())){ $("main").innerHTML = '<div class="panel"><h2>Importaciones</h2><div class="msg err">Falta correr la migración de importaciones en la base.</div></div>'; return; }
+  if (!PROVS.length) await cargarProveedores();
+  if (!CEMB.length){ const c = await sb.from("conceptos_embarque").select("*").order("id"); CEMB = c.data||[]; }
+  let q = sb.from("embarques").select("*").eq("anulado",false).order("id",{ascending:false}).limit(300);
+  if (SUBVISTA === "encurso") q = q.neq("estado","Cerrado");
+  const {data,error} = await q;
+  if (error){ $("main").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const rot = SUBVISTA === "encurso" ? "Embarques en curso" : "Historial de embarques";
+  $("main").innerHTML = '<div class="panel"><h2>'+rot+'</h2>'+
+   '<div class="desc">Un embarque agrupa lo que viene en un envío y le suma los costos que no vienen en la factura del chino: flete, seguro, derechos, despachante. El sistema los prorratea y saca el <b>costo landed real</b> de cada producto, que es el que define tu precio de venta.<br>'+
+   'Dos reglas que el sistema aplica solo: el <b>IVA y las percepciones no entran al costo</b> porque los recuperás, y el <b>flete se reparte por metro cúbico</b>, porque en LCL se paga por volumen y no por peso.</div>'+
+   (P("compra-modificar")?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="nuevoEmbarque()">+ Nuevo embarque</button></div>':'')+
+   ((data||[]).length? '<div class="tablewrap"><table><thead><tr>'+
+     ['Código','Proveedor','Fecha','Arribo estimado','Modalidad','Cotización','Estado'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     data.map(x=>'<tr style="cursor:pointer" onclick="fichaEmbarque('+x.id+')"><td><b>'+esc(x.codigo)+'</b></td>'+
+       '<td>'+esc(x.proveedor_id?nomProv(x.proveedor_id):"—")+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td>'+(x.fecha_arribo?fmtF(x.fecha_arribo):'<span class="muted">—</span>')+'</td>'+
+       '<td>'+esc(x.modalidad)+'</td><td>'+(x.cotizacion_usd?fmtN(x.cotizacion_usd):'—')+'</td>'+
+       '<td>'+esc(x.estado)+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Todavía no hay embarques. Creá el primero cuando tengas la factura del proveedor y la cotización del flete.</div>')+
+   '</div>';
+};
+async function nuevoEmbarque(){
+  if (!PROVS.length) await cargarProveedores();
+  $("dtit").textContent = "Nuevo embarque";
+  $("dbody").innerHTML = '<div id="nemsg"></div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor</label><select id="ne_prov">'+selProv(null)+'</select></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="ne_fecha" value="'+hoy()+'"></div>'+
+     '<div class="f"><label>Arribo estimado</label><input type="date" id="ne_arribo"></div>'+
+     '<div class="f"><label>Modalidad</label><select id="ne_mod"><option>LCL</option><option>FCL</option><option>Courier</option></select></div>'+
+     '<div class="f"><label>Incoterm</label><select id="ne_inco">'+selTxt(["FOB","CIF","EXW","FCA","DDP"],"FOB")+'</select></div>'+
+     '<div class="f"><label>Cotización del dólar</label><input type="number" step="0.01" id="ne_cot" placeholder="pesos por dólar"></div>'+
+   '</div>'+
+   '<div class="muted">La cotización se usa para pasar a dólares los costos que pagás en pesos, como el despachante o el flete interno.</div>'+
+   '<div class="f"><label>Observaciones</label><input id="ne_obs"></div>'+
+   '<div class="acciones"><button class="btn" onclick="guardarEmbarque()">Crear embarque</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function guardarEmbarque(){
+  const o = {proveedor_id:$("ne_prov").value?Number($("ne_prov").value):null, fecha:$("ne_fecha").value||hoy(),
+    fecha_arribo:$("ne_arribo").value||null, modalidad:$("ne_mod").value, incoterm:$("ne_inco").value,
+    cotizacion_usd:$("ne_cot").value?Number($("ne_cot").value):null, observaciones:$("ne_obs").value||null};
+  const r = await sb.from("embarques").insert(o).select("id").single();
+  if (r.error){ $("nemsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  fichaEmbarque(r.data.id);
+}
+async function fichaEmbarque(id){
+  if (!PRODS.length) await cargarCatalogo();
+  if (!CEMB.length){ const c = await sb.from("conceptos_embarque").select("*").order("id"); CEMB = c.data||[]; }
+  const [e,i,c,l] = await Promise.all([
+    sb.from("embarques").select("*").eq("id",id).single(),
+    sb.from("embarque_items").select("*").eq("embarque_id",id).order("id"),
+    sb.from("embarque_costos").select("*").eq("embarque_id",id).order("id"),
+    sb.from("v_landed").select("*").eq("embarque_id",id)
+  ]);
+  if (e.error) return alert(e.error.message);
+  EMB = {cab:e.data, items:i.data||[], costos:c.data||[], landed:l.data||[]};
+  pintarEmbarque();
+  try{ $("dlg").showModal(); }catch(e2){}
+}
+function pintarEmbarque(){
+  const x = EMB.cab, puede = P("compra-modificar") && x.estado !== "Cerrado";
+  const land = {}; EMB.landed.forEach(y=>{ land[y.item_id] = y; });
+  const totFob = EMB.landed.reduce((a,y)=>a+Number(y.fob_total||0),0);
+  const totCost = EMB.landed.reduce((a,y)=>a+Number(y.costos_asignados||0),0);
+  const recup = EMB.costos.filter(y=>y.recuperable).reduce((a,y)=>a+(y.moneda==="USD"?Number(y.importe||0):Number(y.importe||0)/(Number(x.cotizacion_usd)||1)),0);
+  const totM3 = EMB.items.reduce((a,y)=>a+Number(y.cantidad||0)*Number(y.m3_unit||0),0);
+  $("dtit").textContent = x.codigo + (x.estado==="Cerrado"?" · CERRADO":"");
+  $("dbody").innerHTML = '<div id="embmsg"></div>'+
+   (x.estado==="Cerrado"?'<div class="msg ok">Embarque cerrado: el costo landed ya quedó escrito en cada producto.</div>':'')+
+   '<div class="grid">'+
+     '<div class="f"><label>Proveedor</label><div>'+esc(x.proveedor_id?nomProv(x.proveedor_id):"—")+'</div></div>'+
+     '<div class="f"><label>Modalidad</label><div>'+esc(x.modalidad)+' · '+esc(x.incoterm)+'</div></div>'+
+     '<div class="f"><label>Arribo estimado</label><div>'+(x.fecha_arribo?fmtF(x.fecha_arribo):"—")+'</div></div>'+
+     '<div class="f"><label>Cotización</label><div>'+(x.cotizacion_usd?fmtN(x.cotizacion_usd)+' $/US$':'<span style="color:#7a2415">sin cargar</span>')+'</div></div>'+
+   '</div>'+
+   '<div class="kpis" style="margin:10px 0">'+
+     '<div class="kpi"><div class="t">FOB de la mercadería</div><div class="n">'+fmtM(totFob,"USD")+'</div></div>'+
+     '<div class="kpi"><div class="t">Costos que van al producto</div><div class="n">'+fmtM(totCost,"USD")+'</div><div class="muted">flete, seguro, derechos, despachante</div></div>'+
+     '<div class="kpi" style="border-left-color:#1d5b2c"><div class="t">Recuperable, no va al costo</div><div class="n">'+fmtM(recup,"USD")+'</div><div class="muted">IVA y percepciones</div></div>'+
+     '<div class="kpi"><div class="t">Volumen total</div><div class="n">'+fmtN(totM3)+' m³</div></div>'+
+   '</div>'+
+   '<div class="sec">Qué viene en el embarque</div>'+
+   (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embItemAgregar()">+ Renglón</button></div>':'')+
+   '<div id="emb_items"></div>'+
+   '<div class="sec">Costos del embarque</div>'+
+   '<div class="muted" style="margin-bottom:8px">Cargá cada costo con su concepto. El sistema ya sabe cuáles son recuperables y cómo se reparten, pero lo podés cambiar renglón por renglón.</div>'+
+   (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embCostoAgregar()">+ Costo</button></div>':'')+
+   '<div id="emb_costos"></div>'+
+   '<div class="acciones">'+
+     (puede?'<button class="btn" onclick="guardarEmbarqueDetalle()">Guardar y recalcular</button>':'')+
+     (puede&&EMB.items.length?'<button class="btn2" onclick="cerrarEmbarque('+x.id+')">Cerrar embarque y pasar el costo a los productos</button>':'')+
+     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+  pintarEmbItems(land); pintarEmbCostos();
+}
+function pintarEmbItems(land){
+  const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado";
+  const opts = v => '<option value=""></option>'+PRODS.filter(p=>p.activo).map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
+  $("emb_items").innerHTML = !EMB.items.length ? '<div class="muted">Sin renglones. Agregá lo que viene en el envío.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Producto</th><th style="min-width:130px">Descripción</th><th>Cantidad</th><th>FOB unit. US$</th><th>m³ por unidad</th><th>Peso kg</th><th>FOB total</th><th>Costos</th><th>Landed unit.</th><th>× FOB</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   EMB.items.map(function(y,k){ const L = land[y.id]||{};
+     return '<tr>'+
+      '<td><select style="width:100%;min-width:220px" id="ei_'+k+'_producto_id" '+(puede?'':'disabled')+'>'+opts(y.producto_id)+'</select></td>'+
+      '<td><input id="ei_'+k+'_descripcion" value="'+esc(y.descripcion)+'" '+(puede?'':'disabled')+'></td>'+
+      '<td><input type="number" step="0.01" style="width:90px" id="ei_'+k+'_cantidad" value="'+(y.cantidad||"")+'" '+(puede?'':'disabled')+'></td>'+
+      '<td><input type="number" step="0.0001" style="width:100px" id="ei_'+k+'_precio_fob_unit" value="'+(y.precio_fob_unit||"")+'" '+(puede?'':'disabled')+'></td>'+
+      '<td><input type="number" step="0.0001" style="width:100px" id="ei_'+k+'_m3_unit" value="'+(y.m3_unit==null?"":y.m3_unit)+'" placeholder="clave en LCL" '+(puede?'':'disabled')+'></td>'+
+      '<td><input type="number" step="0.01" style="width:90px" id="ei_'+k+'_peso_unit" value="'+(y.peso_unit==null?"":y.peso_unit)+'" '+(puede?'':'disabled')+'></td>'+
+      '<td>'+(L.fob_total!=null?fmtM(L.fob_total,"USD"):"—")+'</td>'+
+      '<td>'+(L.costos_asignados!=null?fmtM(L.costos_asignados,"USD"):"—")+'</td>'+
+      '<td style="background:#f6f3ee"><b>'+(L.landed_unit_usd!=null?("US$ "+fmtN(L.landed_unit_usd)):"—")+'</b></td>'+
+      '<td>'+(L.multiplicador!=null?fmtN(L.multiplicador)+"×":"—")+'</td>'+
+      (puede?'<td><button class="btn2 btn-sm" onclick="embItemQuitar('+k+')">Quitar</button></td>':'')+'</tr>';
+   }).join("")+'</tbody></table></div>'+
+   '<div class="muted" style="margin-top:6px">El <b>m³ por unidad</b> es el dato que más falta hace y el que las fábricas más suelen omitir. Sin él, el flete se reparte por valor y el costo del producto voluminoso queda subestimado.</div>';
+}
+function pintarEmbCostos(){
+  const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado";
+  $("emb_costos").innerHTML = !EMB.costos.length ? '<div class="muted">Sin costos cargados. Mientras no cargues nada, el landed es igual al FOB.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Concepto</th><th style="min-width:140px">Detalle</th><th>Importe</th><th>Moneda</th><th>¿Se recupera?</th><th>Se reparte por</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   EMB.costos.map(function(y,k){
+     return '<tr'+(y.recuperable?' style="background:#f1f7f2"':'')+'>'+
+      '<td><select style="width:100%" id="ec_'+k+'_concepto_id" onchange="embConceptoElegido('+k+')" '+(puede?'':'disabled')+'>'+selOpts(CEMB,y.concepto_id)+'</select></td>'+
+      '<td><input id="ec_'+k+'_detalle" value="'+esc(y.detalle)+'" '+(puede?'':'disabled')+'></td>'+
+      '<td><input type="number" step="0.01" style="width:120px" id="ec_'+k+'_importe" value="'+(y.importe||"")+'" '+(puede?'':'disabled')+'></td>'+
+      '<td><select style="width:80px" id="ec_'+k+'_moneda" '+(puede?'':'disabled')+'><option value="USD" '+(y.moneda==="USD"?"selected":"")+'>USD</option><option value="ARS" '+(y.moneda==="ARS"?"selected":"")+'>ARS</option></select></td>'+
+      '<td><select style="width:110px" id="ec_'+k+'_recuperable" '+(puede?'':'disabled')+'><option value="0" '+(y.recuperable?"":"selected")+'>Va al costo</option><option value="1" '+(y.recuperable?"selected":"")+'>Se recupera</option></select></td>'+
+      '<td><select style="width:110px" id="ec_'+k+'_prorrateo" '+(puede?'':'disabled')+'>'+
+        ['valor','volumen','peso'].map(o=>'<option value="'+o+'" '+(y.prorrateo===o?"selected":"")+'>'+(o==="valor"?"Valor FOB":(o==="volumen"?"Metro cúbico":"Peso"))+'</option>').join("")+'</select></td>'+
+      (puede?'<td><button class="btn2 btn-sm" onclick="embCostoQuitar('+k+')">Quitar</button></td>':'')+'</tr>';
+   }).join("")+'</tbody></table></div>';
+}
+function embConceptoElegido(k){
+  embSincro();
+  const c = CEMB.find(x=>String(x.id)===String(EMB.costos[k].concepto_id));
+  if (c){ EMB.costos[k].recuperable = c.recuperable; EMB.costos[k].prorrateo = c.prorrateo; }
+  pintarEmbCostos();
+}
+function embSincro(){
+  EMB.items.forEach(function(y,k){
+    ["producto_id","descripcion","cantidad","precio_fob_unit","m3_unit","peso_unit"].forEach(function(c){
+      const el=$("ei_"+k+"_"+c); if(!el) return;
+      y[c] = (c==="descripcion") ? el.value : (el.value===""?null:Number(el.value));
+    });
+  });
+  EMB.costos.forEach(function(y,k){
+    const ci=$("ec_"+k+"_concepto_id"); if(ci) y.concepto_id = ci.value?Number(ci.value):null;
+    const d=$("ec_"+k+"_detalle"); if(d) y.detalle = d.value;
+    const i=$("ec_"+k+"_importe"); if(i) y.importe = i.value===""?0:Number(i.value);
+    const m=$("ec_"+k+"_moneda"); if(m) y.moneda = m.value;
+    const r=$("ec_"+k+"_recuperable"); if(r) y.recuperable = r.value==="1";
+    const pr=$("ec_"+k+"_prorrateo"); if(pr) y.prorrateo = pr.value;
+  });
+}
+function embItemAgregar(){ embSincro(); EMB.items.push({producto_id:null, descripcion:"", cantidad:0, precio_fob_unit:0, m3_unit:null, peso_unit:null}); pintarEmbItems({}); }
+function embItemQuitar(k){ embSincro(); const y=EMB.items[k]; if(y.id) (EMB.borrarI=EMB.borrarI||[]).push(y.id); EMB.items.splice(k,1); pintarEmbItems({}); }
+function embCostoAgregar(){ embSincro(); EMB.costos.push({concepto_id:null, detalle:"", importe:0, moneda:"USD", recuperable:false, prorrateo:"valor"}); pintarEmbCostos(); }
+function embCostoQuitar(k){ embSincro(); const y=EMB.costos[k]; if(y.id) (EMB.borrarC=EMB.borrarC||[]).push(y.id); EMB.costos.splice(k,1); pintarEmbCostos(); }
+async function guardarEmbarqueDetalle(){
+  embSincro();
+  const id = EMB.cab.id;
+  if (EMB.borrarI && EMB.borrarI.length) await sb.from("embarque_items").delete().in("id", EMB.borrarI);
+  if (EMB.borrarC && EMB.borrarC.length) await sb.from("embarque_costos").delete().in("id", EMB.borrarC);
+  EMB.borrarI = []; EMB.borrarC = [];
+  for (const y of EMB.items){
+    const fila = {embarque_id:id, producto_id:y.producto_id||null, descripcion:y.descripcion||"(sin detalle)",
+      cantidad:Number(y.cantidad||0), precio_fob_unit:Number(y.precio_fob_unit||0),
+      m3_unit:y.m3_unit==null?null:Number(y.m3_unit), peso_unit:y.peso_unit==null?null:Number(y.peso_unit)};
+    const r = y.id ? await sb.from("embarque_items").update(fila).eq("id",y.id) : await sb.from("embarque_items").insert(fila);
+    if (r.error){ $("embmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  }
+  for (const y of EMB.costos){
+    const fila = {embarque_id:id, concepto_id:y.concepto_id||null, detalle:y.detalle||null,
+      importe:Number(y.importe||0), moneda:y.moneda||"USD", recuperable:!!y.recuperable, prorrateo:y.prorrateo||"valor"};
+    const r = y.id ? await sb.from("embarque_costos").update(fila).eq("id",y.id) : await sb.from("embarque_costos").insert(fila);
+    if (r.error){ $("embmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  }
+  fichaEmbarque(id);
+}
+async function cerrarEmbarque(id){
+  if (!confirm("Al cerrar el embarque, el costo landed calculado se escribe en cada producto y reemplaza el costo anterior. ¿Seguimos?")) return;
+  const {data,error} = await sb.rpc("cerrar_embarque",{p_embarque:id});
+  if (error){ $("embmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCatalogo();
+  $("embmsg").innerHTML='<div class="msg ok">Embarque cerrado. Se actualizó el costo de '+data+' producto'+(data===1?"":"s")+'.</div>';
+  fichaEmbarque(id);
 }
 
 /* ═══════════ STOCK ═══════════ */
