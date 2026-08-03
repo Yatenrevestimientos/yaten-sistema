@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-30";
+const VERSION = "v2026.08.03-31";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -182,7 +182,7 @@ $("lbtn").onclick = async () => {
 };
 $("lreg").onclick = async () => {
   const em = $("lemail").value.trim(), pw = $("lpass").value;
-  if (!em || pw.length < 8) return lmsg("Escribí el correo y una contraseña de 8 caracteres o más, después tocá Crear mi usuario.");
+  if (!em || pw.length < 12) return lmsg("Escribí el correo y una contraseña de 12 caracteres o más, después tocá Crear mi usuario.");
   const nombre = prompt("Nombre y apellido para mostrar en el sistema:");
   if (!nombre) return;
   const {error} = await sb.auth.signUp({email:em, password:pw, options:{data:{nombre}}});
@@ -816,7 +816,7 @@ VISTAS.equipo = async function(){
   const GENTE = pf.error ? EQUIPO : (pf.data||[]);
   const verComision = !pf.error;
   $("main").innerHTML = '<div class="panel"><h2>Equipo</h2>'+
-    '<div class="desc">Cada persona se da de alta sola desde la pantalla de entrada con “Crear mi usuario”. Acá se le asigna el rol.</div>'+
+    '<div class="desc">Cada persona se da de alta sola desde la pantalla de entrada con “Crear mi usuario”, pero <b>nace desactivada y sin rol: no ve un solo dato hasta que vos la actives acá</b>. Es a propósito: cualquiera que conozca la dirección del sistema puede registrarse, así que la puerta la abrís vos.</div>'+
     '<div id="emsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Comisión %</th><th>Activo</th>'+(puede?"<th></th>":"")+'</tr></thead><tbody>'+
     GENTE.map(p=>'<tr><td><b>'+esc(p.nombre)+'</b></td>'+
       '<td>'+(puede?'<select id="r_'+p.id+'">'+(roles||[]).map(r=>'<option value="'+esc(r.nombre)+'" '+(p.rol===r.nombre?"selected":"")+'>'+esc(r.nombre)+'</option>').join("")+'</select>':esc(p.rol))+'</td>'+
