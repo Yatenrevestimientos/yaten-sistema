@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-21";
+const VERSION = "v2026.08.03-22";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -279,6 +279,7 @@ const MENU = [
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
   {id:"compras",  t:"Compras",         perm:"compra-consultar"},
+  {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -307,6 +308,14 @@ const SUBMENU = {
     {id:"cerradas", t:"Cerradas"},
     {id:"pendientes", t:"Pendientes a cerrar"},
     {id:"nueva", t:"Nueva", perm:"venta-agregar"}
+  ],
+  cheques: [
+    {id:"", t:"Historial"},
+    {id:"disponibles", t:"Disponibles"},
+    {id:"chequeras", t:"Chequeras"},
+    {id:"propios", t:"Cheques propios"},
+    {id:"avencer", t:"Cheques a vencer"},
+    {id:"vencidos", t:"Cheques vencidos"}
   ],
   provee: [
     {id:"", t:"Listado"},
@@ -1400,6 +1409,111 @@ function imprimirPresupuesto(){
   setTimeout(function(){ w.print(); }, 400);
 }
 
+
+
+/* ═══════════ CHEQUES ═══════════ */
+let BANCOS = [], SUCS = [], CHEQUERAS = [], FCHQ = "";
+async function cargarCheques(){
+  const [b,su,cq] = await Promise.all([
+    sb.from("bancos").select("*").order("nombre"),
+    sb.from("sucursales").select("*").order("nombre"),
+    sb.from("chequeras").select("*").order("nombre")
+  ]);
+  BANCOS = b.data||[]; SUCS = su.data||[]; CHEQUERAS = cq.data||[];
+}
+VISTAS.cheques = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  await cargarCheques();
+  if (!CTAS.length) await cargarFin();
+  if (!CLIS.length) await cargarClientes();
+  if (SUBVISTA === "chequeras") return pintarChequeras();
+  const hoyS = hoy();
+  let q = sb.from("cheques").select("*").order("vencimiento",{ascending:true}).limit(500);
+  if (SUBVISTA === "propios") q = q.eq("tipo","Propios"); else q = q.eq("tipo","Terceros");
+  if (SUBVISTA === "disponibles") q = q.eq("estado","Disponible");
+  if (SUBVISTA === "avencer")  q = q.gte("vencimiento", hoyS).eq("estado","Disponible");
+  if (SUBVISTA === "vencidos") q = q.lt("vencimiento", hoyS).eq("estado","Disponible");
+  const {data,error} = await q;
+  if (error){ $("main").innerHTML = '<div class="panel"><h2>Cheques</h2><div class="msg err">'+esc(error.message)+'</div></div>'; return; }
+  const t = FCHQ.toLowerCase();
+  const rows = (data||[]).filter(x=> !t || ((x.librador||"")+" "+(x.numero||"")+" "+nom(BANCOS,x.banco_id)+" "+(x.comentarios||"")).toLowerCase().indexOf(t)>=0);
+  const rot = {disponibles:"Cheques disponibles", propios:"Cheques propios", avencer:"Cheques a vencer", vencidos:"Cheques vencidos"}[SUBVISTA] || "Historial de cheques";
+  const desc = {
+    disponibles:"Los cheques de terceros que están en cartera, todavía sin depositar ni entregar.",
+    propios:"Los cheques que emitimos nosotros desde una chequera.",
+    avencer:"Los que todavía no vencieron. Es la alarma de lo que hay que cubrir.",
+    vencidos:"Los que ya se pasaron de fecha y siguen en cartera. Revisalos."
+  }[SUBVISTA] || "Todos los cheques de terceros que pasaron por el negocio. Los cheques entran por la cobranza del cliente y salen por el pago al proveedor.";
+  const tot = {};
+  rows.filter(x=>!x.anulado).forEach(x=>{ const m=x.moneda||"ARS"; tot[m]=(tot[m]||0)+Number(x.importe||0); });
+  $("main").innerHTML = '<div class="panel"><h2>'+rot+'</h2><div class="desc">'+desc+'</div>'+
+   '<div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="ch_txt" placeholder="librador, número, banco o comentario" value="'+esc(FCHQ)+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="ch_btn">Buscar</button></div></div>'+
+   (Object.keys(tot).length? '<div class="kpis" style="margin-bottom:10px">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m],m)+'</div><div class="muted">'+rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length+' cheque'+(rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length===1?"":"s")+'</div></div>').join("")+'</div>':'')+
+   (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
+     ['Librador','Número','Banco','Sucursal','Importe','Moneda','Fecha','Vencimiento','Cuenta','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(function(x){
+       const venc = x.vencimiento && x.vencimiento < hoyS && x.estado==="Disponible";
+       return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'">'+
+        '<td><b>'+esc(x.librador)+'</b></td><td>'+esc(x.numero)+'</td><td>'+esc(nom(BANCOS,x.banco_id))+'</td>'+
+        '<td>'+esc(x.sucursal_id?nom(SUCS,x.sucursal_id):x.sucursal)+'</td>'+
+        '<td><b>'+fmtM(x.importe,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+fmtF(x.fecha)+'</td>'+
+        '<td style="'+(venc?'color:#7a2415;font-weight:600':'')+'">'+fmtF(x.vencimiento)+'</td>'+
+        '<td>'+esc(nom(CTAS,x.cuenta_id))+'</td><td>'+esc(x.estado)+'</td>'+
+        '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-modificar")?'<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>':''))+'</td></tr>';
+     }).join("")+'</tbody></table></div>'
+    : '<div class="muted">No hay cheques con esos filtros. Los cheques de terceros entran cuando registrás una cobranza pagada con cheque.</div>')+
+   '</div>';
+  $("ch_btn").onclick = function(){ FCHQ = $("ch_txt").value.trim(); VISTAS.cheques(); };
+};
+async function estadoCheque(id){
+  const e = prompt("Nuevo estado del cheque: Disponible, Depositado, Entregado, Cobrado o Rechazado");
+  if (e === null) return;
+  const {error} = await sb.rpc("cambiar_estado_cheque",{p_id:id, p_estado:e.trim(), p_motivo:null});
+  if (error) return alert(error.message);
+  VISTAS.cheques();
+}
+function pintarChequeras(){
+  const puede = P("finanzas-modificar");
+  $("main").innerHTML = '<div class="panel"><h2>Chequeras</h2>'+
+   '<div class="desc">Las chequeras propias, con su banco, sucursal y número de cuenta. De acá salen los cheques propios que le entregamos a un proveedor.</div>'+
+   '<div id="cqmsg"></div>'+
+   '<div class="sec">Sucursales de banco</div>'+
+   '<div class="muted" style="margin-bottom:8px">Pirka tiene la sucursal como maestra propia colgada del banco. Agregá las que uses.</div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Banco</th><th>Sucursal</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   (puede?'<tr style="background:#f6fbf7"><td><select id="nsu_banco">'+selOpts(BANCOS,null)+'</select></td>'+
+     '<td><input id="nsu_nombre" placeholder="Centro, Casa Central…"></td><td>—</td>'+
+     '<td><button class="btn btn-sm" onclick="sucursalAgregar()">Agregar</button></td></tr>':'')+
+   SUCS.map(x=>'<tr'+(x.activo?'':' style="opacity:.55"')+'><td>'+esc(nom(BANCOS,x.banco_id))+'</td><td>'+esc(x.nombre)+'</td><td>'+(x.activo?"Sí":"No")+'</td>'+(puede?'<td></td>':'')+'</tr>').join("")+
+   '</tbody></table></div>'+
+   '<div class="sec">Chequeras</div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>N° de cuenta</th><th>Banco</th><th>Sucursal</th><th>Activa</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   (puede?'<tr style="background:#f6fbf7"><td><input id="ncq_nombre" placeholder="Chequera Galicia 1"></td>'+
+     '<td><input id="ncq_cuenta" placeholder="N° de cuenta"></td>'+
+     '<td><select id="ncq_banco">'+selOpts(BANCOS,null)+'</select></td>'+
+     '<td><select id="ncq_suc">'+selOpts(SUCS,null)+'</select></td><td>—</td>'+
+     '<td><button class="btn btn-sm" onclick="chequeraAgregar()">Agregar</button></td></tr>':'')+
+   (CHEQUERAS.length? CHEQUERAS.map(x=>'<tr'+(x.activo?'':' style="opacity:.55"')+'><td><b>'+esc(x.nombre)+'</b></td><td>'+esc(x.nro_cuenta)+'</td>'+
+     '<td>'+esc(nom(BANCOS,x.banco_id))+'</td><td>'+esc(nom(SUCS,x.sucursal_id))+'</td><td>'+(x.activo?"Sí":"No")+'</td>'+(puede?'<td></td>':'')+'</tr>').join("")
+     : '<tr><td colspan="6" class="muted">Todavía no hay chequeras cargadas.</td></tr>')+
+   '</tbody></table></div></div>';
+}
+async function sucursalAgregar(){
+  const b = $("nsu_banco").value, n = $("nsu_nombre").value.trim();
+  if (!b || !n){ $("cqmsg").innerHTML='<div class="msg err">Elegí el banco y poné el nombre de la sucursal.</div>'; return; }
+  const {error} = await sb.from("sucursales").insert({banco_id:Number(b), nombre:n, activo:true});
+  if (error){ $("cqmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCheques(); pintarChequeras();
+}
+async function chequeraAgregar(){
+  const n = $("ncq_nombre").value.trim();
+  if (!n){ $("cqmsg").innerHTML='<div class="msg err">Poné un nombre para la chequera.</div>'; return; }
+  const {error} = await sb.from("chequeras").insert({nombre:n, nro_cuenta:$("ncq_cuenta").value||null,
+    banco_id:$("ncq_banco").value?Number($("ncq_banco").value):null,
+    sucursal_id:$("ncq_suc").value?Number($("ncq_suc").value):null, activo:true});
+  if (error){ $("cqmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCheques(); pintarChequeras();
+}
 
 /* ═══════════ PROVEEDORES ═══════════ */
 let PROVS = [], SALPROV = {}, FPROV = "";
@@ -2585,6 +2699,7 @@ async function anularCC(movId, cliId){
 /* ─────────── COBRANZA ─────────── */
 async function formCobranza(cliId){
   const cli = CLIS.find(x=>x.id===cliId);
+  if (!BANCOS.length) await cargarCheques();
   const [ct,cc] = await Promise.all([
     sb.from("v_saldos_cuenta").select("*").order("nombre"),
     sb.from("conceptos_cobranza").select("*").order("id")
@@ -2613,6 +2728,18 @@ async function formCobranza(cliId){
      '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="k_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concCobAgregar('+cliId+')">Agregar</button></div></div>'+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="k_obs" rows="2"></textarea></div>'+
+   '<div class="sec">¿Paga con cheque?</div>'+
+   '<div class="muted" style="margin-bottom:8px">Si el cliente paga con un cheque de terceros, cargalo acá y entra a la cartera en la misma operación. Si paga en efectivo o por transferencia, dejalo vacío.</div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Librador</label><input id="k_ch_librador" placeholder="a nombre de quién está el cheque"></div>'+
+     '<div class="f"><label>Banco</label><select id="k_ch_banco">'+selOpts(BANCOS,null)+'</select></div>'+
+     '<div class="f"><label>Sucursal</label><select id="k_ch_suc">'+selOpts(SUCS,null)+'</select></div>'+
+     '<div class="f"><label>Número</label><input id="k_ch_numero"></div>'+
+     '<div class="f"><label>N° de cuenta corriente</label><input id="k_ch_cta"></div>'+
+     '<div class="f"><label>Fecha del cheque</label><input type="date" id="k_ch_fecha" value="'+hoy()+'"></div>'+
+     '<div class="f"><label>Fecha de vencimiento</label><input type="date" id="k_ch_venc"></div>'+
+   '</div>'+
+   '<div class="f"><label>Comentarios del cheque</label><input id="k_ch_obs"></div>'+
    '<div class="sec">Imputar a ventas</div>'+
    '<div class="muted" style="margin-bottom:8px">A qué ventas se aplica este cobro. Si dejás todo en cero, el cobro igual baja la deuda general del cliente.</div>'+
    '<div id="k_ventas"><div class="muted">Cargando ventas…</div></div>'+
@@ -2632,10 +2759,25 @@ async function formCobranza(cliId){
     $("k_guardar").disabled = true;
     const imputa = [];
     (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0; if (v>0) imputa.push({venta_id:x.venta_id, importe:v}); });
-    const {error} = await sb.rpc("registrar_cobranza", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:$("k_moneda").value,
-      p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
-      p_imputaciones:imputa,
-      p_importe_pago:Number(($("k_pago")||{}).value||0)||null, p_cotizacion:tc||null});
+    const nroCh = ($("k_ch_numero")||{}).value || "";
+    let error;
+    if (nroCh.trim()){
+      const cheque = {librador:$("k_ch_librador").value||null, banco_id:$("k_ch_banco").value||null,
+        sucursal_id:$("k_ch_suc").value||null, numero:nroCh.trim(), nro_cta_cte:$("k_ch_cta").value||null,
+        importe:imp, moneda:$("k_moneda").value, fecha:$("k_ch_fecha").value||hoy(),
+        vencimiento:$("k_ch_venc").value||null, comentarios:$("k_ch_obs").value||null};
+      const r = await sb.rpc("registrar_cobranza_cheque", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(),
+        p_moneda_cc:$("k_moneda").value, p_cuenta:Number($("k_cuenta").value), p_importe:imp,
+        p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
+        p_imputaciones:imputa, p_cotizacion:tc||null, p_cheque:cheque});
+      error = r.error;
+    } else {
+      const r = await sb.rpc("registrar_cobranza", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:$("k_moneda").value,
+        p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
+        p_imputaciones:imputa,
+        p_importe_pago:Number(($("k_pago")||{}).value||0)||null, p_cotizacion:tc||null});
+      error = r.error;
+    }
     $("k_guardar").disabled = false;
     if (error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarClientes();
