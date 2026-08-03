@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-29";
+const VERSION = "v2026.08.03-30";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -186,7 +186,7 @@ $("lreg").onclick = async () => {
   const nombre = prompt("Nombre y apellido para mostrar en el sistema:");
   if (!nombre) return;
   const {error} = await sb.auth.signUp({email:em, password:pw, options:{data:{nombre}}});
-  lmsg(error ? error.message : "Usuario creado. Si pide confirmar por correo, confirmá y después entrá.", error?"err":"ok");
+  lmsg(error ? error.message : "Usuario creado. Todavía no podés entrar: administración tiene que activarte y asignarte el rol. Avisales.", error?"err":"ok");
 };
 $("lrec").onclick = async () => {
   const em = $("lemail").value.trim();
@@ -226,7 +226,9 @@ async function cargarMaestras(){
     sb.from("origenes").select("id,nombre,tipo,activo").order("nombre"),
     sb.from("objeciones").select("id,nombre,etapa,activo").order("id"),
     sb.from("motivos").select("id,nombre,aplica_a,activo").order("id"),
-    sb.from("perfiles").select("id,nombre,rol,activo,comision_pct").order("nombre"),
+    /* La lista del equipo sale de una vista que muestra solo id, nombre, rol y activo.
+       La comisión de cada uno vive en perfiles y solo la lee quien tiene usuario-consultar. */
+    sb.from("equipo_visible").select("id,nombre,rol,activo").order("nombre"),
     sb.from("conceptos_gasto").select("id,nombre,activo").order("nombre"),
     sb.from("conceptos_cobranza").select("id,nombre,activo").order("nombre"),
     sb.from("tipos_nota").select("id,nombre,activo").order("id")
@@ -809,12 +811,16 @@ VISTAS.equipo = async function(){
   await cargarMaestras();
   const puede = P("usuario-modificar");
   const {data:roles} = await sb.from("roles").select("id,nombre,descripcion").order("id");
+  /* la comisión solo se puede leer con usuario-consultar; si no, la pantalla muestra el resto */
+  const pf = await sb.from("perfiles").select("id,nombre,rol,activo,comision_pct").order("nombre");
+  const GENTE = pf.error ? EQUIPO : (pf.data||[]);
+  const verComision = !pf.error;
   $("main").innerHTML = '<div class="panel"><h2>Equipo</h2>'+
     '<div class="desc">Cada persona se da de alta sola desde la pantalla de entrada con “Crear mi usuario”. Acá se le asigna el rol.</div>'+
     '<div id="emsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Comisión %</th><th>Activo</th>'+(puede?"<th></th>":"")+'</tr></thead><tbody>'+
-    EQUIPO.map(p=>'<tr><td><b>'+esc(p.nombre)+'</b></td>'+
+    GENTE.map(p=>'<tr><td><b>'+esc(p.nombre)+'</b></td>'+
       '<td>'+(puede?'<select id="r_'+p.id+'">'+(roles||[]).map(r=>'<option value="'+esc(r.nombre)+'" '+(p.rol===r.nombre?"selected":"")+'>'+esc(r.nombre)+'</option>').join("")+'</select>':esc(p.rol))+'</td>'+
-      '<td>'+(puede?'<input id="k_'+p.id+'" type="number" step="0.1" style="width:90px" value="'+(p.comision_pct==null?0:p.comision_pct)+'">':fmtN(p.comision_pct))+'</td>'+
+      '<td>'+(!verComision?'<span class="muted">—</span>':(puede?'<input id="k_'+p.id+'" type="number" step="0.1" style="width:90px" value="'+(p.comision_pct==null?0:p.comision_pct)+'">':fmtN(p.comision_pct)))+'</td>'+
       '<td>'+(puede?'<select id="a_'+p.id+'"><option value="1" '+(p.activo?"selected":"")+'>Sí</option><option value="0" '+(!p.activo?"selected":"")+'>No</option></select>':(p.activo?"Sí":"No"))+'</td>'+
       (puede?'<td><button class="btn btn-sm" onclick="guardarPerfil(\''+p.id+'\')">Guardar</button></td>':'')+'</tr>').join("")+
     '</tbody></table></div>'+
@@ -826,7 +832,7 @@ async function guardarPerfil(id){
   const rolNombre = $("r_"+id).value;
   const {data:rr} = await sb.from("roles").select("id").eq("nombre",rolNombre).single();
   const {error} = await sb.from("perfiles").update({rol:rolNombre, rol_id:rr?rr.id:null,
-    comision_pct:Number($("k_"+id).value||0), activo:$("a_"+id).value==="1"}).eq("id",id);
+    comision_pct:($("k_"+id)?Number($("k_"+id).value||0):undefined), activo:$("a_"+id).value==="1"}).eq("id",id);
   $("emsg").innerHTML = error?'<div class="msg err">'+esc(error.message)+'</div>':'<div class="msg ok">Guardado.</div>';
   if (!error) await cargarMaestras();
 }
