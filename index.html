@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-22";
+const VERSION = "v2026.08.03-23";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -279,6 +279,7 @@ const MENU = [
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
   {id:"compras",  t:"Compras",         perm:"compra-consultar"},
+  {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
@@ -308,6 +309,11 @@ const SUBMENU = {
     {id:"cerradas", t:"Cerradas"},
     {id:"pendientes", t:"Pendientes a cerrar"},
     {id:"nueva", t:"Nueva", perm:"venta-agregar"}
+  ],
+  gastos: [
+    {id:"", t:"Listado"},
+    {id:"anulados", t:"Anulados"},
+    {id:"nuevo", t:"Nuevo", perm:"finanzas-modificar"}
   ],
   cheques: [
     {id:"", t:"Historial"},
@@ -352,6 +358,11 @@ function ir(v, sub){
   if (SUBVISTA === "nueva"){
     SUBVISTA = ""; pintarNav(); (VISTAS[v]||VISTAS.tablero)();
     setTimeout(function(){ if (v==="ventas") formVentaNueva(null); }, 350);
+    return;
+  }
+  if (v === "gastos" && SUBVISTA === "nuevo"){
+    SUBVISTA = ""; pintarNav(); VISTAS.gastos();
+    setTimeout(function(){ formGasto(); try{ $("dlg").showModal(); }catch(e){} }, 400);
     return;
   }
   pintarNav();
@@ -1411,6 +1422,15 @@ function imprimirPresupuesto(){
 
 
 
+/* ═══════════ GASTOS (seccion propia, como en Pirka) ═══════════ */
+VISTAS.gastos = async function(){
+  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden"><div id="fbody" style="padding:14px"><div class="muted">Cargando…</div></div></div>';
+  if (!CTAS.length) await cargarFin();
+  FG.anulados = (SUBVISTA === "anulados");
+  FG.soloAnulados = (SUBVISTA === "anulados");
+  await finGastos();
+};
+
 /* ═══════════ CHEQUES ═══════════ */
 let BANCOS = [], SUCS = [], CHEQUERAS = [], FCHQ = "";
 async function cargarCheques(){
@@ -2133,9 +2153,25 @@ async function guardarPago(){
   const imputaciones = [];
   PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0; if (v>0) imputaciones.push({factura_id:x.id, importe:v}); });
   $("pa_guardar").disabled = true;
-  const {error} = await sb.rpc("registrar_pago_compra",{p_proveedor:Number(prov), p_fecha:$("pa_fecha").value||hoy(),
-    p_moneda:$("pa_moneda").value, p_cuenta:Number(cta), p_importe:imp, p_cotizacion:tc||null,
-    p_imputaciones:imputaciones, p_obs:$("pa_obs").value||null});
+  const nroCh = ($("pa_ch_numero")||{}).value || "";
+  let error;
+  if (nroCh.trim()){
+    const chq = CHEQUERAS.find(x=>String(x.id)===String($("pa_ch_chequera").value));
+    const cheque = {chequera_id:$("pa_ch_chequera").value||null, banco_id:chq?chq.banco_id:null,
+      sucursal_id:chq?chq.sucursal_id:null, nro_cta_cte:chq?chq.nro_cuenta:null,
+      numero:nroCh.trim(), importe:imp, moneda:$("pa_moneda").value,
+      fecha:$("pa_ch_fecha").value||hoy(), vencimiento:$("pa_ch_venc").value||null,
+      comentarios:$("pa_ch_obs").value||null};
+    const r = await sb.rpc("registrar_pago_compra_cheque",{p_proveedor:Number(prov), p_fecha:$("pa_fecha").value||hoy(),
+      p_moneda:$("pa_moneda").value, p_cuenta:Number(cta), p_importe:imp, p_cotizacion:tc||null,
+      p_imputaciones:imputaciones, p_obs:$("pa_obs").value||null, p_cheque:cheque});
+    error = r.error;
+  } else {
+    const r = await sb.rpc("registrar_pago_compra",{p_proveedor:Number(prov), p_fecha:$("pa_fecha").value||hoy(),
+      p_moneda:$("pa_moneda").value, p_cuenta:Number(cta), p_importe:imp, p_cotizacion:tc||null,
+      p_imputaciones:imputaciones, p_obs:$("pa_obs").value||null});
+    error = r.error;
+  }
   $("pa_guardar").disabled = false;
   if (error) return err(error.message);
   $("dlg").close(); await cargarProveedores(); await cargarFin(); VISTAS.compras();
@@ -3074,7 +3110,8 @@ async function finGastos(){
   const {data,error} = await q;
   if (error){ $("glista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const t = FG.texto.toLowerCase();
-  const rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")+" "+nom(CGASTOS,g.concepto_id)+" "+nom(CTAS,g.cuenta_id)).toLowerCase().indexOf(t)>=0);
+  let rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")+" "+nom(CGASTOS,g.concepto_id)+" "+nom(CTAS,g.cuenta_id)).toLowerCase().indexOf(t)>=0);
+  if (FG.soloAnulados) rows = rows.filter(g=>g.anulado);
   if (!rows.length){ $("glista").innerHTML='<div class="muted">No hay gastos con esos filtros.</div>'; return; }
   const vivos = rows.filter(g=>!g.anulado);
   const tot = m => vivos.filter(g=>g.moneda===m);
