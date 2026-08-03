@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-24";
+const VERSION = "v2026.08.03-25";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1429,6 +1429,131 @@ function imprimirPresupuesto(){
 
 
 
+
+/* ─── Remitos: se hacen desde la venta y descuentan stock ─── */
+let REM = null;
+async function formRemito(ventaId){
+  const [v,i,r] = await Promise.all([
+    sb.from("ventas").select("*").eq("id",ventaId).single(),
+    sb.from("venta_items").select("*").eq("venta_id",ventaId).order("id"),
+    sb.from("remitos").select("*").eq("venta_id",ventaId).order("id",{ascending:false})
+  ]);
+  if (v.error) return alert(v.error.message);
+  if (!CLIS.length) await cargarClientes();
+  const cli = CLIS.find(x=>x.id===v.data.cliente_id);
+  const pend = (i.data||[]).filter(x=>!x.es_adicional && (Number(x.cantidad||0) - Number(x.entregado||0)) > 0.0001);
+  REM = {venta:v.data, items:pend, remitos:r.data||[]};
+  $("dtit").textContent = "Remitos · " + v.data.codigo;
+  $("dbody").innerHTML = '<div id="remmsg"></div>'+
+   ((r.data||[]).length? '<div class="sec">Remitos ya hechos de esta venta</div>'+
+     '<div class="tablewrap"><table><thead><tr><th>Número</th><th>Fecha</th><th>Dirección</th><th></th></tr></thead><tbody>'+
+     r.data.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td style="white-space:normal">'+esc(x.direccion)+'</td>'+
+       '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="verRemito('+x.id+')">Ver e imprimir</button> <button class="btn2 btn-sm" onclick="anularRemito('+x.id+','+ventaId+')">Anular</button>')+'</td></tr>').join("")+
+     '</tbody></table></div>' : '')+
+   '<div class="sec">Nuevo remito</div>'+
+   (pend.length? '<div class="muted" style="margin-bottom:8px">Poné cuánto entregás de cada renglón. Podés hacer entregas parciales: el sistema lleva la cuenta de lo que falta. <b>Lo que entregás descuenta stock.</b></div>'+
+     '<div class="grid">'+
+       '<div class="f"><label>Fecha</label><input type="date" id="rm_fecha" value="'+hoy()+'"></div>'+
+       '<div class="f"><label>Dirección de entrega</label><input id="rm_dir" value="'+esc(cli?cli.direccion:"")+'"></div>'+
+     '</div>'+
+     '<div class="tablewrap"><table><thead><tr><th>Producto</th><th>Vendido</th><th>Entregado</th><th>Falta</th><th>Entregar ahora</th></tr></thead><tbody>'+
+     pend.map(function(x,k){ const falta = Number(x.cantidad||0)-Number(x.entregado||0);
+       return '<tr><td><b>'+esc(x.descripcion)+'</b>'+(x.con_instalacion?' <span class="pill ok">Instalado</span>':'')+'</td>'+
+        '<td>'+fmtN(x.cantidad)+' '+esc(x.unidad)+'</td><td>'+fmtN(x.entregado)+'</td><td><b>'+fmtN(falta)+'</b></td>'+
+        '<td><input type="number" step="0.01" style="width:120px" id="rm_'+k+'" value="'+falta+'"></td></tr>';
+     }).join("")+'</tbody></table></div>'+
+     '<div class="f" style="margin-top:8px"><label>Observaciones</label><input id="rm_obs"></div>'+
+     '<div class="acciones"><button class="btn" onclick="guardarRemito('+ventaId+')">Registrar remito</button>'+
+     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>'
+    : '<div class="muted">Está todo entregado. No queda nada pendiente de esta venta.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>');
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function guardarRemito(ventaId){
+  const items = [];
+  REM.items.forEach(function(x,k){ const el=$("rm_"+k); const v = el?Number(el.value||0):0; if (v>0) items.push({venta_item_id:x.id, cantidad:v}); });
+  if (!items.length){ $("remmsg").innerHTML='<div class="msg err">Poné al menos un renglón con cantidad.</div>'; return; }
+  const {error} = await sb.rpc("registrar_remito",{p_venta:ventaId, p_fecha:$("rm_fecha").value||hoy(),
+    p_direccion:$("rm_dir").value||null, p_items:items, p_obs:$("rm_obs").value||null});
+  if (error){ $("remmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  formRemito(ventaId);
+}
+async function anularRemito(id, ventaId){
+  const m = prompt("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado."); if (m===null) return;
+  const {error} = await sb.rpc("anular_remito",{p_id:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  formRemito(ventaId);
+}
+async function verRemito(id){
+  const [r,i] = await Promise.all([
+    sb.from("remitos").select("*").eq("id",id).single(),
+    sb.from("remito_items").select("*").eq("remito_id",id).order("id")
+  ]);
+  if (r.error) return alert(r.error.message);
+  const x = r.data, items = i.data||[];
+  const peso = items.reduce((a,y)=>a+Number(y.peso||0),0);
+  if (!CLIS.length) await cargarClientes();
+  const cli = CLIS.find(c=>c.id===x.cliente_id);
+  const html = '<html><head><meta charset="utf-8"><title>'+esc(x.codigo)+'</title><style>'+
+   'body{font-family:Helvetica,Arial,sans-serif;padding:26px;color:#232b2d;font-size:13px}'+
+   'h1{font-family:Georgia,serif;font-size:22px;letter-spacing:.5px}'+
+   '.sub{color:#6b7679;margin-bottom:14px}'+
+   'table{width:100%;border-collapse:collapse;margin:10px 0}'+
+   'th,td{border-bottom:1px solid #ddd;padding:7px 5px;text-align:left}'+
+   'th{background:#f4f0ea;font-size:11px;text-transform:uppercase}'+
+   '.r{text-align:right}.caja{border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;margin:12px 0;background:#faf8f4}'+
+   '.firma{margin-top:50px;display:flex;gap:60px}.firma div{border-top:1px solid #999;padding-top:6px;flex:1;text-align:center;font-size:11px}'+
+   '</style></head><body>'+
+   '<h1>YATEN REVESTIMIENTOS</h1><div class="sub">Remito de entrega '+esc(x.codigo)+' · '+fmtF(x.fecha)+'</div>'+
+   '<div class="caja"><b>'+esc(cli?cli.nombre:"")+'</b>'+(cli&&cli.celular?' · '+esc(cli.celular):'')+
+   '<br>Entrega en: '+esc(x.direccion||"")+'</div>'+
+   '<table><thead><tr><th>Producto</th><th class="r">Cantidad</th><th class="r">Peso kg</th></tr></thead><tbody>'+
+   items.map(y=>'<tr><td>'+esc(y.descripcion)+'</td><td class="r">'+fmtN(y.cantidad)+'</td><td class="r">'+fmtN(y.peso)+'</td></tr>').join("")+
+   '<tr><td><b>Peso total</b></td><td></td><td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>'+
+   '</tbody></table>'+
+   (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
+   '<div class="firma"><div>Firma del transportista</div><div>Firma y aclaración de quien recibe</div></div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
+/* ─── Recepción de mercadería de una orden de compra ─── */
+let RCP = null;
+async function formRecepcion(ordenId){
+  const [o,i] = await Promise.all([
+    sb.from("ordenes_compra").select("*").eq("id",ordenId).single(),
+    sb.from("oc_items").select("*").eq("orden_id",ordenId).order("id")
+  ]);
+  if (o.error) return alert(o.error.message);
+  const pend = (i.data||[]).filter(x=>(Number(x.cantidad||0)-Number(x.recibido||0)) > 0.0001);
+  RCP = {orden:o.data, items:pend};
+  $("dtit").textContent = "Recepción · " + o.data.codigo;
+  $("dbody").innerHTML = '<div id="rcpmsg"></div>'+
+   '<div class="muted" style="margin-bottom:10px">Marcá cuánto llegó de cada renglón. <b>Lo que recibís entra al stock</b> con motivo «Recepción de importación». Podés recibir en partes.</div>'+
+   (pend.length? '<div class="tablewrap"><table><thead><tr><th>Producto</th><th>Pedido</th><th>Recibido</th><th>Falta</th><th>Recibir ahora</th></tr></thead><tbody>'+
+     pend.map(function(x,k){ const falta = Number(x.cantidad||0)-Number(x.recibido||0);
+       return '<tr><td><b>'+esc(x.descripcion)+'</b></td><td>'+fmtN(x.cantidad)+' '+esc(x.unidad)+'</td>'+
+        '<td>'+fmtN(x.recibido)+'</td><td><b>'+fmtN(falta)+'</b></td>'+
+        '<td><input type="number" step="0.01" style="width:120px" id="rc_'+k+'" value="'+falta+'"></td></tr>';
+     }).join("")+'</tbody></table></div>'+
+     '<div class="acciones"><button class="btn" onclick="guardarRecepcion('+ordenId+')">Registrar recepción</button>'+
+     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>'
+    : '<div class="muted">Esta orden ya está recibida por completo.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>');
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function guardarRecepcion(ordenId){
+  const items = [];
+  RCP.items.forEach(function(x,k){ const el=$("rc_"+k); const v = el?Number(el.value||0):0; if (v>0) items.push({oc_item_id:x.id, cantidad:v}); });
+  if (!items.length){ $("rcpmsg").innerHTML='<div class="msg err">Poné al menos un renglón con cantidad.</div>'; return; }
+  const {error} = await sb.rpc("registrar_recepcion_oc",{p_orden:ordenId, p_items:items});
+  if (error){ $("rcpmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  $("dlg").close(); VISTAS.compras();
+}
+
 /* ═══════════ STOCK ═══════════ */
 let STK = [], MOTSTK = [], FSTK = "";
 async function cargarStock(){
@@ -1885,7 +2010,9 @@ async function comOrdenes(){
      rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
        '<td>'+(x.fecha_recepcion?fmtF(x.fecha_recepcion):'<span class="muted">sin fecha</span>')+'</td>'+
        '<td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(x.estado)+'</td>'+
-       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularOC('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
+       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':
+         ((P("stock-modificar")&&x.estado!=="Recibida"?'<button class="btn2 btn-sm" onclick="formRecepcion('+x.id+')">Recibir</button> ':'')+
+          (P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularOC('+x.id+')">Anular</button>':'')))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">No hay órdenes de compra con esos filtros.</div>');
   engancharFiltros("oc");
 }
@@ -2387,6 +2514,7 @@ async function fichaVenta(id){
    '<div class="acciones">'+
      (ve.presupuesto_id?'<button class="btn2" onclick="abrirPresupuesto('+ve.presupuesto_id+')">Ver el presupuesto</button>':'')+
      (cli?'<button class="btn2" onclick="fichaCliente('+cli.id+')">Ver el cliente</button>':'')+
+     (!ve.anulado && P("venta-remito")?'<button class="btn2" onclick="formRemito('+ve.id+')">Remito de entrega</button>':'')+
      (!ve.anulado && P("venta-anular")?'<button class="btn2" onclick="anularVenta('+ve.id+')">Anular venta</button>':'')+
    '</div>';
   try{ $("dlg").showModal(); }catch(e){}
@@ -2707,10 +2835,15 @@ async function fichaCliente(id){
       pres.sort((a,b)=>b.id-a.id);
     }
   }
-  let ventasCli = [];
+  let ventasCli = [], remitosCli = [], saldoVenta = {};
   if (c && (await db12()) && P("venta-consultar")){
-    const vv = await sb.from("ventas").select("id,codigo,fecha,total,moneda,anulado").eq("cliente_id",c.id).order("id",{ascending:false});
-    ventasCli = vv.data||[];
+    const [vv, rr, sv] = await Promise.all([
+      sb.from("ventas").select("id,codigo,fecha,total,moneda,anulado,estado,fecha_entrega").eq("cliente_id",c.id).order("id",{ascending:false}),
+      sb.from("remitos").select("*").eq("cliente_id",c.id).order("id",{ascending:false}),
+      sb.from("v_saldos_venta").select("venta_id,saldo").eq("cliente_id",c.id)
+    ]);
+    ventasCli = vv.data||[]; remitosCli = rr.data||[];
+    (sv.data||[]).forEach(x=>{ saldoVenta[x.venta_id] = Number(x.saldo||0); });
   }
   $("dtit").textContent = c ? (c.codigo+" · "+c.nombre) : "Cliente nuevo";
   $("dbody").innerHTML = '<div id="clmsg"></div>'+
@@ -2730,7 +2863,8 @@ async function fichaCliente(id){
    '<div class="f"><label>Observaciones</label><textarea id="y_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
    (puede?'<div class="acciones"><button class="btn" id="y_guardar">'+(c?"Guardar cambios":"Crear cliente")+'</button></div>':'')+
    (c? seccionPresCli(c, pres) : '') +
-   (c? seccionVentasCli(c, ventasCli) : '') +
+   (c? seccionVentasCli(c, ventasCli, saldoVenta) : '') +
+   (c? seccionRemitosCli(c, remitosCli) : '') +
    (c? seccionCC(c, seg) : '') +
    (c? seccionNotas(c, notas, tnotas) : '');
   if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
@@ -2746,16 +2880,33 @@ function seccionPresCli(c, pres){
     : '<div class="muted">Todavía no tiene presupuestos.</div>')+
    (P("presupuesto-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="presupuestoDesdeCliente('+c.id+')">+ Presupuesto para este cliente</button></div>':'');
 }
-function seccionVentasCli(c, ventas){
+function seccionVentasCli(c, ventas, saldoVenta){
   if (!window._db12 || !P("venta-consultar")) return '';
+  saldoVenta = saldoVenta || {};
   return '<div class="sec">Ventas</div>'+
-   (ventas.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Fecha</th><th>Total</th><th></th></tr></thead><tbody>'+
-     ventas.map(v=>'<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')"><td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td><td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
-       '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
+   (ventas.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Fecha</th><th>Entrega</th><th>Total</th><th>Saldo</th><th>Estado</th><th></th></tr></thead><tbody>'+
+     ventas.map(function(v){ const sal = saldoVenta[v.id];
+       return '<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
+       '<td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td>'+
+       '<td>'+(v.fecha_entrega?fmtF(v.fecha_entrega):'<span class="muted">—</span>')+'</td>'+
+       '<td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
+       '<td style="'+(sal>0?'color:#7a2415;font-weight:600':'color:#1d5b2c')+'">'+(sal==null?'—':(sal>0?fmtM(sal,v.moneda):'Pagada'))+'</td>'+
+       '<td>'+esc(v.estado)+'</td>'+
+       '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>';
+     }).join("")+
      '</tbody></table></div>'
     : '<div class="muted">Todavía no tiene ventas. Se le puede vender de dos formas: pasando un presupuesto a estado «Vendido», o cargando la venta directo acá.</div>')+
-   (P("venta-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="formVentaNueva('+c.id+')">+ Venta para este cliente</button></div>':'')+
-   '<div class="muted" style="margin-top:4px">Los remitos de entrega van a aparecer acá cuando construyamos stock y remitos.</div>';
+   (P("venta-agregar")?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="formVentaNueva('+c.id+')">+ Venta para este cliente</button></div>':'');
+}
+function seccionRemitosCli(c, remitos){
+  if (!window._db12 || !P("venta-consultar")) return '';
+  return '<div class="sec">Remitos</div>'+
+   (remitos.length? '<div class="tablewrap" style="max-height:200px;overflow:auto"><table><thead><tr><th>Número</th><th>Fecha</th><th>Dirección</th><th></th></tr></thead><tbody>'+
+     remitos.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td style="white-space:normal">'+esc(x.direccion)+'</td>'+
+       '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="verRemito('+x.id+')">Ver e imprimir</button>')+'</td></tr>').join("")+
+     '</tbody></table></div>'
+    : '<div class="muted">Sin remitos. Se hacen desde la ficha de la venta, con el botón «Remito de entrega».</div>');
 }
 function seccionNotas(c, notas, tnotas){
   if (!window._db9) return '';
