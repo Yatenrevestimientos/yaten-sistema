@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-27";
+const VERSION = "v2026.08.03-28";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -208,6 +208,7 @@ async function arrancar(){
   PERFIL = perf;
   if (!PERFIL.activo){ await sb.auth.signOut(); PERFIL=null; lmsg("Tu usuario está desactivado. Hablá con administración."); arrancando=false; return; }
   await cargarMaestras();
+  await cargarConfig();
   await cargarCatalogo();
   $("login").classList.add("hide");
   $("app").classList.remove("hide");
@@ -233,6 +234,36 @@ async function cargarMaestras(){
   M = {loc:loc.data||[], can:can.data||[], ori:ori.data||[], obj:obj.data||[], mot:mot.data||[],
        cga:cga.data||[], cco:cco.data||[], tno:tno.data||[]};
   EQUIPO = per.data||[];
+  await cargarMaestrasExtra();
+}
+/* Las tablas basicas que se fueron sumando se cargan aparte y toleran que la tabla
+   todavia no exista en la base: si falta la migracion, ese bloque no se muestra y
+   el resto del sistema anda igual. */
+async function cargarMaestrasExtra(){
+  const extras = MAESTRAS.filter(m=>m.extra);
+  const res = await Promise.all(extras.map(m => sb.from(m.tabla).select("*").order(m.orden||"nombre")));
+  extras.forEach(function(m,i){ M[m.k] = res[i].error ? null : (res[i].data||[]); });
+}
+
+/* ─────────── CONFIGURACION (clave/valor) ─────────── */
+let CFG = {};
+async function cargarConfig(){
+  const r = await sb.from("config").select("clave,valor");
+  if (r.error){ CFG = null; return; }          // todavia no se corrio la migracion
+  CFG = {}; (r.data||[]).forEach(function(x){ CFG[x.clave] = x.valor; });
+}
+function cfg(clave, porDefecto){
+  const v = CFG ? CFG[clave] : null;
+  return (v == null || v === "") ? (porDefecto == null ? "" : porDefecto) : v;
+}
+/* El membrete de todo lo que se imprime sale de Configuracion > Datos de impresion.
+   Antes estaba escrito a mano adentro del codigo y no se podia cambiar. */
+function membrete(subtitulo){
+  const linea = [cfg("direccion"), cfg("localidad"), cfg("telefono"), cfg("email"), cfg("web"),
+                 cfg("cuit") ? "CUIT " + cfg("cuit") : "", cfg("cat_iva")].filter(Boolean).join(" · ");
+  return '<h1>' + esc(cfg("razon_social","YATEN REVESTIMIENTOS")) + '</h1>' +
+         (linea ? '<div class="sub">' + esc(linea) + '</div>' : '') +
+         '<div class="sub">' + subtitulo + '</div>';
 }
 async function cargarCatalogo(){
   if (!P("producto-consultar")) return;
@@ -274,6 +305,8 @@ const MENU = [
   {id:"nuevo",    t:"Nuevo prospecto", perm:"prospecto-agregar"},
   {id:"agenda",   t:"Agenda ATO",      perm:"visita-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
+  {id:"docs",     t:"Documentos",      perm:"cliente-consultar"},
+  {id:"tags",     t:"Tags",            perm:"maestra-consultar"},
   {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
   {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
@@ -283,11 +316,13 @@ const MENU = [
   {id:"stock",    t:"Stock",           perm:"stock-consultar"},
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
+  {id:"leads",    t:"Leads",           perm:"prospecto-agregar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
   {id:"equipo",   t:"Equipo",          perm:"usuario-consultar"},
-  {id:"maestras", t:"Maestras",        perm:"maestra-consultar"}
+  {id:"maestras", t:"Tablas básicas",  perm:"maestra-consultar"},
+  {id:"config",   t:"Configuración",   perm:"maestra-consultar"}
 ];
 const VISTAS = {};
 /* Submenús copiados literal del sistema de Pirka, para que la gente encuentre
@@ -339,6 +374,18 @@ const SUBMENU = {
     {id:"", t:"Listado"},
     {id:"deuda", t:"Proveedores a los que debemos"},
     {id:"nuevo", t:"Nuevo", perm:"compra-modificar"}
+  ],
+  docs: [
+    {id:"", t:"Catálogo"},
+    {id:"listado", t:"Listado"},
+    {id:"nuevo", t:"Nuevo", perm:"cliente-modificar"}
+  ],
+  config: [
+    {id:"", t:"Roles"},
+    {id:"usuarios", t:"Usuarios"},
+    {id:"horarios", t:"Horarios"},
+    {id:"generales", t:"Configuraciones generales"},
+    {id:"impresion", t:"Datos de impresión"}
   ]
 };
 let SUBVISTA = "";
@@ -364,6 +411,7 @@ function ir(v, sub){
       if (v==="clientes") fichaCliente(null);
       else if (v==="presup") abrirPresupuesto(null);
       else if (v==="provee") fichaProveedor(null);
+      else if (v==="docs") formDocumento(null);
     }, 350);
     return;
   }
@@ -988,14 +1036,56 @@ const MAESTRAS = [
    cols:[]},
   {k:"tno", tabla:"tipos_nota",       titulo:"Tipos de nota del cliente",
    ayuda:"Las familias del historial de notas: seguimiento, reparación, reclamo, aviso. También se agregan desde la ficha del cliente.",
-   cols:[]}
+   cols:[]},
+
+  /* ── Las que faltaban del listado de Tablas básicas de Pirka ──
+     Pirka tiene CINCO listas de conceptos separadas, no una. Cada una alimenta
+     un formulario distinto, por eso no se pueden mezclar. */
+  {k:"cpa", extra:true, tabla:"conceptos_pago", titulo:"Concepto de Pago",
+   ayuda:"Con qué criterio le pagás al proveedor: pago a cuenta, cancelación de factura, anticipo, seña. Aparece en el formulario de pago de compras.",
+   cols:[]},
+  {k:"cin", extra:true, tabla:"conceptos_ingreso", titulo:"Concepto de Ingresos",
+   ayuda:"Plata que entra y no es cobranza de un cliente: aporte de socio, devolución, venta de un bien, intereses. Sin esta lista todo ingreso raro termina cargado como cobranza y ensucia la cuenta corriente.",
+   cols:[]},
+  {k:"ctr", extra:true, tabla:"conceptos_transferencia", titulo:"Concepto de Transferencias",
+   ayuda:"Por qué movés plata de una cuenta propia a otra: reposición de caja chica, depósito de efectivo, compra de dólares. No es ni ingreso ni egreso, la plata sigue siendo tuya.",
+   cols:[]},
+  {k:"tcl", extra:true, tabla:"tipos_cliente", titulo:"Tipo de clientes",
+   ayuda:"Consumidor final, arquitecto, constructora, revendedor. Si le ponés un descuento, se sugiere solo cuando le hagas un presupuesto.",
+   cols:[{c:"descuento_pct", t:"Descuento %", num:true, ph:"0"}]},
+  {k:"ase", extra:true, tabla:"asesores", titulo:"Asesores",
+   ayuda:"Quién asesora al cliente. Es distinto del usuario del sistema: un asesor puede no tener acceso y aun así cobrar comisión.",
+   cols:[{c:"telefono", t:"Teléfono", ph:""},{c:"email", t:"Email", ph:""},
+         {c:"comision_pct", t:"Comisión %", num:true, ph:"0"}]},
+  {k:"ins", extra:true, tabla:"instaladores", titulo:"Instaladores",
+   ayuda:"La cuadrilla que coloca. El costo por m² es lo que le pagás a él, no lo que le cobrás al cliente: sirve para saber cuánto te queda de la venta instalada.",
+   cols:[{c:"telefono", t:"Teléfono", ph:""},{c:"email", t:"Email", ph:""},
+         {c:"costo_m2", t:"Costo por m²", num:true, ph:"0"}]},
+  {k:"man", extra:true, tabla:"motivos_anulacion", titulo:"Motivos de anulación", orden:"aplica_a",
+   ayuda:"Nada se borra en el sistema: se anula con un motivo, y queda quién lo anuló y cuándo. En «Aplica a» ponés a qué documento corresponde el motivo (Remito, Presupuesto, Prospecto, Pago, Factura de compra, Orden de compra) o «Todos» si sirve para cualquiera.",
+   cols:[{c:"aplica_a", t:"Aplica a", ph:"Todos"}]},
+  {k:"tim", extra:true, tabla:"tipos_impuesto", titulo:"Impuestos facturas",
+   ayuda:"Los impuestos que pueden venir en una factura de compra: IVA 21%, IVA 10,5%, percepciones. Cada factura arma su propia tabla eligiendo de acá.",
+   cols:[]},
+  {k:"mst", extra:true, tabla:"motivos_stock", titulo:"Motivos Modificación Stock",
+   ayuda:"Por qué se ajustó el stock a mano: rotura, faltante de inventario, muestra, devolución. Todo ajuste queda con su motivo.",
+   cols:[]},
+  {k:"suc", extra:true, tabla:"sucursales", titulo:"Sucursales",
+   ayuda:"Los depósitos o locales donde puede estar la mercadería. Las chequeras también se asignan a una sucursal.",
+   cols:[]},
+  {k:"tpr", extra:true, tabla:"tipos_producto", titulo:"Tipos de producto",
+   ayuda:"La familia del producto: deck, panel, zócalo, accesorio. Los reportes de productos por tipo se arman con esto.",
+   cols:[]},
+  /* Esta vive en Configuración > Horarios, igual que en Pirka */
+  {k:"fho", extra:true, donde:"config", tabla:"franjas_horarias", titulo:"Horarios", orden:"desde",
+   ayuda:"Las franjas en las que se agenda una visita, una entrega o una instalación. Poné las que uses de verdad: si nunca entregás después de las 18, no la cargues.",
+   cols:[{c:"desde", t:"Desde", ph:"09:00"},{c:"hasta", t:"Hasta", ph:"13:00"}]}
 ];
 
-VISTAS.maestras = function(){
-  const puede = P("maestra-modificar");
-  const bloque = function(m){
+/* Un bloque de tabla basica: se usa en Tablas básicas y también en Configuración > Horarios */
+function maestraBloque(m){
+    const puede = P("maestra-modificar");
     const arr = M[m.k]||[];
-    const anchos = m.cols.length;
     const filaNueva = puede ? '<tr style="background:#f6fbf7">'+
         '<td><input id="n_'+m.k+'_nombre" placeholder="Escribí el nombre nuevo"></td>'+
         m.cols.map(c=>'<td><input id="n_'+m.k+'_'+c.c+'" '+(c.num?'type="number" step="0.01"':'')+' placeholder="'+esc(c.ph||"")+'"></td>').join("")+
@@ -1015,14 +1105,22 @@ VISTAS.maestras = function(){
         m.cols.map(c=>'<th>'+c.t+'</th>').join("")+'<th>Activo</th>'+(puede?'<th></th>':'')+
       '</tr></thead><tbody>'+filaNueva+filas+'</tbody></table></div>'+
       '<div class="muted" style="margin-top:8px">'+arr.length+' registros · '+arr.filter(o=>o.activo).length+' activos</div></div>';
-  };
+}
+
+VISTAS.maestras = function(){
+  const puede = P("maestra-modificar");
+  const bloque = maestraBloque;
   $("main").innerHTML =
-    '<div class="panel"><h2>Tablas maestras</h2><div class="desc">Estas son las listas que después aparecen en los desplegables de toda la carga. '+
+    '<div class="panel"><h2>Tablas básicas</h2><div class="desc">Estas son las listas que después aparecen en los desplegables de toda la carga. '+
     (puede
       ? 'Podés agregar los que hagan falta cuando hagan falta: una localidad nueva, una campaña de publicidad nueva, una objeción que empezaste a escuchar. Se usan en el acto, sin esperar a nadie.'
       : 'Tu rol las consulta pero no las modifica.')+
     '</div><div class="muted">Nada se borra. Si algo deja de usarse se pone Activo en <b>No</b>: desaparece de los desplegables pero los registros viejos que lo referencian siguen enteros. Borrar dejaría huérfano todo lo cargado.</div></div>'
-    + MAESTRAS.map(bloque).join("");
+    + MAESTRAS.filter(m => !m.donde && (!m.extra || Array.isArray(M[m.k]))).map(bloque).join("")
+    + (MAESTRAS.some(m => m.extra && !Array.isArray(M[m.k]))
+        ? '<div class="panel"><div class="msg err">Faltan tablas en la base: '+
+          MAESTRAS.filter(m=>m.extra && !Array.isArray(M[m.k])).map(m=>esc(m.titulo)).join(" · ")+
+          '. Hay que correr la migración pendiente para que aparezcan.</div></div>' : '');
 };
 
 function maestraVal(prefijo, m, incluirActivo, id){
@@ -1047,7 +1145,8 @@ async function maestraAgregar(k){
   const {error} = await sb.from(m.tabla).insert(o);
   if (error) return maestraMsg(k, error.message.indexOf("duplicate")>=0 ? "Ya existe uno con ese nombre." : error.message, "err");
   await cargarMaestras();
-  VISTAS.maestras();
+  if (m.tabla === "tipos_producto") await cargarCatalogo();
+  (VISTAS[VISTA]||VISTAS.maestras)();
   maestraMsg(k, "Agregado: "+o.nombre+". Ya está disponible en los desplegables.", "ok");
 }
 async function maestraGuardar(k, id){
@@ -1057,8 +1156,167 @@ async function maestraGuardar(k, id){
   const {error} = await sb.from(m.tabla).update(o).eq("id", id);
   if (error) return maestraMsg(k, error.message, "err");
   await cargarMaestras();
-  VISTAS.maestras();
+  if (m.tabla === "tipos_producto") await cargarCatalogo();
+  (VISTAS[VISTA]||VISTAS.maestras)();
   maestraMsg(k, "Guardado.", "ok");
+}
+
+
+/* ═══════════ CONFIGURACIÓN ═══════════
+   Copiado del menú de Pirka: Roles · Usuarios · Horarios · Configuraciones generales · Datos de impresión */
+
+/* Las claves de configuración se declaran acá, no en la base: para agregar una
+   opción nueva se agrega una línea y listo, sin migrar nada. */
+const CFG_IMPRESION = [
+  {k:"razon_social",    t:"Razón social",        ay:"Como sale arriba de todo en el presupuesto y el remito."},
+  {k:"nombre_fantasia", t:"Nombre de fantasía",  ay:"El nombre con el que te conoce el cliente, si es distinto de la razón social."},
+  {k:"cuit",            t:"CUIT",                ay:""},
+  {k:"cat_iva",         t:"Condición frente al IVA", ay:"Responsable Inscripto, Monotributo, Exento."},
+  {k:"direccion",       t:"Dirección",           ay:""},
+  {k:"localidad",       t:"Localidad y provincia", ay:""},
+  {k:"telefono",        t:"Teléfono",            ay:""},
+  {k:"email",           t:"Email",               ay:""},
+  {k:"web",             t:"Web o Instagram",     ay:""},
+  {k:"pie_presupuesto", t:"Pie del presupuesto", ay:"Las condiciones que salen abajo de todo presupuesto.", area:true},
+  {k:"pie_remito",      t:"Pie del remito",      ay:"Lo que firma el cliente cuando recibe la mercadería.", area:true}
+];
+const CFG_GENERALES = [
+  {k:"validez_dias",   t:"Validez del presupuesto (días)", ay:"Cuántos días vale un presupuesto nuevo. Se puede cambiar en cada uno.", num:true},
+  {k:"iva_default",    t:"IVA por defecto (%)",  ay:"El que se propone al hacer un presupuesto. 21 o 10,5 según el producto.", num:true},
+  {k:"moneda_default", t:"Moneda por defecto",   ay:"ARS o USD.", opciones:["ARS","USD"]},
+  {k:"dias_moroso",    t:"Días para considerar moroso a un cliente", ay:"Pasados estos días desde la venta sin cobrar, el cliente aparece en «Clientes morosos».", num:true},
+  {k:"cotizacion_usd", t:"Cotización del dólar", ay:"La que se usa para pasar a pesos lo que está en dólares. Dejala vacía si preferís cargarla en cada operación.", num:true}
+];
+
+VISTAS.config = async function(){
+  if (CFG === null) await cargarConfig();
+  if (SUBVISTA === "usuarios") return VISTAS.equipo();
+  if (SUBVISTA === "horarios") return configHorarios();
+  if (SUBVISTA === "generales")  return configClaves("generales");
+  if (SUBVISTA === "impresion")  return configClaves("impresion");
+  return configRoles();
+};
+
+function configHorarios(){
+  const m = MAESTRAS.find(x=>x.k==="fho");
+  $("main").innerHTML = Array.isArray(M.fho)
+    ? maestraBloque(m)
+    : '<div class="panel"><h2>Horarios</h2><div class="msg err">Falta la tabla de horarios en la base. Hay que correr la migración pendiente.</div></div>';
+}
+
+/* ── Configuraciones generales y Datos de impresión: las dos son la misma pantalla
+      con distinta lista de claves ── */
+function configClaves(cual){
+  const esImp = cual === "impresion";
+  const lista = esImp ? CFG_IMPRESION : CFG_GENERALES;
+  const puede = P("maestra-modificar");
+  if (CFG === null){
+    $("main").innerHTML = '<div class="panel"><h2>'+(esImp?"Datos de impresión":"Configuraciones generales")+'</h2>'+
+      '<div class="msg err">Falta la tabla de configuración en la base. Hay que correr la migración pendiente.</div></div>';
+    return;
+  }
+  const campo = function(c){
+    const v = CFG[c.k] == null ? "" : CFG[c.k];
+    const input = !puede
+      ? '<div style="padding:6px 0"><b>'+(v ? esc(v) : '<span class="muted">sin cargar</span>')+'</b></div>'
+      : c.area  ? '<textarea id="cf_'+c.k+'" rows="3">'+esc(v)+'</textarea>'
+      : c.opciones ? '<select id="cf_'+c.k+'">'+c.opciones.map(o=>'<option '+(v===o?"selected":"")+'>'+esc(o)+'</option>').join("")+'</select>'
+      : '<input id="cf_'+c.k+'" '+(c.num?'type="number" step="0.01"':'')+' value="'+esc(v)+'">';
+    return '<div class="f" style="'+(c.area?'grid-column:1/-1':'')+'"><label>'+esc(c.t)+'</label>'+input+
+           (c.ay?'<div class="muted" style="margin-top:3px">'+esc(c.ay)+'</div>':'')+'</div>';
+  };
+  $("main").innerHTML =
+    '<div class="panel"><h2>'+(esImp?"Datos de impresión":"Configuraciones generales")+'</h2>'+
+    '<div class="desc">'+(esImp
+      ? 'Esto es el membrete y el pie de todo lo que se imprime: presupuestos y remitos. Antes estaba escrito adentro del programa y no se podía cambiar; ahora lo cambiás acá y sale en el próximo que imprimas.'
+      : 'Los valores que el sistema propone solo cuando cargás algo nuevo. Son sugerencias: en cada presupuesto o venta los podés pisar.')+
+    '</div><div id="cfmsg"></div>'+
+    '<div class="grid">'+lista.map(campo).join("")+'</div>'+
+    (puede?'<div style="margin-top:12px"><button class="btn" onclick="guardarConfig(\''+cual+'\')">Guardar</button>'+
+      (esImp?' <button class="btn2" onclick="previsualizarMembrete()">Ver cómo queda impreso</button>':'')+'</div>':
+      '<div class="muted" style="margin-top:10px">Tu rol la consulta pero no la modifica.</div>')+
+    '</div>';
+}
+
+async function guardarConfig(cual){
+  const lista = cual === "impresion" ? CFG_IMPRESION : CFG_GENERALES;
+  const filas = [];
+  lista.forEach(function(c){
+    const el = $("cf_"+c.k);
+    if (el) filas.push({clave:c.k, valor:(el.value||"").trim(), actualizado_en:new Date().toISOString()});
+  });
+  const {error} = await sb.from("config").upsert(filas, {onConflict:"clave"});
+  if (error){ $("cfmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarConfig();
+  $("cfmsg").innerHTML = '<div class="msg ok">Guardado. Ya sale así en lo próximo que imprimas.</div>';
+}
+
+function previsualizarMembrete(){
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vista previa</title><style>'+
+   'body{font:13px Georgia,serif;color:#1b2426;margin:34px;max-width:760px}'+
+   'h1{font-size:22px;color:#24393C;margin:0;letter-spacing:1px}.sub{color:#6b7679;font-size:12px}'+
+   '.pie{margin-top:26px;font-size:11px;color:#6b7679;border-top:1px solid #ddd;padding-top:10px}'+
+   '</style></head><body>'+membrete("Presupuesto PRE-2026-0000 · vista previa")+
+   '<p style="margin-top:24px;color:#6b7679">— acá van los renglones del presupuesto —</p>'+
+   '<div class="pie">'+esc(cfg("pie_presupuesto"))+'</div></body></html>';
+  const w = window.open("", "_blank");
+  if (!w) return alert("El navegador bloqueó la ventana. Permití las ventanas emergentes para este sitio.");
+  w.document.write(html); w.document.close();
+}
+
+/* ── Roles: la matriz de permisos. Es la pantalla que decide qué ve cada uno. ── */
+async function configRoles(){
+  const puede = P("usuario-modificar");
+  const [rr, pp, rp] = await Promise.all([
+    sb.from("roles").select("id,nombre,descripcion,activo").order("id"),
+    sb.from("permisos").select("codigo,modulo,verbo,descripcion").order("modulo").order("verbo"),
+    sb.from("rol_permisos").select("rol_id,permiso")
+  ]);
+  if (rr.error) return $("main").innerHTML = '<div class="panel"><div class="msg err">'+esc(rr.error.message)+'</div></div>';
+  const roles = rr.data||[], permisos = pp.data||[], tiene = {};
+  (rp.data||[]).forEach(function(x){ tiene[x.rol_id+"|"+x.permiso] = true; });
+  const modulos = [];
+  permisos.forEach(function(p){ if (modulos.indexOf(p.modulo)<0) modulos.push(p.modulo); });
+
+  const filaPerm = function(p){
+    return '<tr><td style="white-space:normal"><b>'+esc(p.verbo)+'</b>'+
+      (p.descripcion?'<div class="muted">'+esc(p.descripcion)+'</div>':'')+'</td>'+
+      roles.map(function(r){
+        const on = !!tiene[r.id+"|"+p.codigo];
+        return '<td style="text-align:center">'+(puede
+          ? '<input type="checkbox" '+(on?"checked":"")+' onchange="togglePermiso('+r.id+',\''+p.codigo+'\',this.checked,this)">'
+          : (on?"✓":"·"))+'</td>';
+      }).join("")+'</tr>';
+  };
+  const bloqueMod = function(mod){
+    return '<div class="sec">'+esc(mod)+'</div>'+
+      '<div class="tablewrap"><table><thead><tr><th>Puede…</th>'+
+      roles.map(r=>'<th style="text-align:center">'+esc(r.nombre)+'</th>').join("")+'</tr></thead><tbody>'+
+      permisos.filter(p=>p.modulo===mod).map(filaPerm).join("")+'</tbody></table></div>';
+  };
+
+  $("main").innerHTML =
+    '<div class="panel"><h2>Roles</h2>'+
+    '<div class="desc">Cada persona tiene un rol y el rol decide qué ve y qué puede tocar. Si a alguien le falta una pantalla, no es un problema del sistema: es que su rol no tiene ese permiso. Se destilda o se tilda acá y toma efecto la próxima vez que la persona entra.</div>'+
+    '<div id="rolmsg"></div>'+
+    '<div class="tablewrap"><table><thead><tr><th>Rol</th><th>Qué hace</th><th style="text-align:center">Permisos</th></tr></thead><tbody>'+
+    roles.map(r=>'<tr><td><b>'+esc(r.nombre)+'</b></td><td style="white-space:normal">'+esc(r.descripcion)+'</td>'+
+      '<td style="text-align:center">'+permisos.filter(p=>tiene[r.id+"|"+p.codigo]).length+' de '+permisos.length+'</td></tr>').join("")+
+    '</tbody></table></div></div>'+
+    '<div class="panel"><h2>Qué puede hacer cada rol</h2>'+
+    '<div class="desc">'+(puede
+      ? 'Tildá o destildá y se guarda solo. Cuidado con sacarle permisos a tu propio rol: te podés dejar afuera de una pantalla.'
+      : 'Tu rol consulta esta matriz pero no la modifica.')+'</div>'+
+    modulos.map(bloqueMod).join("")+'</div>';
+}
+
+async function togglePermiso(rolId, codigo, on, el){
+  const msg = t => { $("rolmsg").innerHTML = t; };
+  const r = on
+    ? await sb.from("rol_permisos").insert({rol_id:rolId, permiso:codigo})
+    : await sb.from("rol_permisos").delete().eq("rol_id",rolId).eq("permiso",codigo);
+  if (r.error){ el.checked = !on; msg('<div class="msg err">'+esc(r.error.message)+'</div>'); return; }
+  msg('<div class="msg ok">Guardado: '+esc(codigo)+(on?" activado":" desactivado")+'.</div>');
 }
 
 /* ═══════════ PRESUPUESTOS ═══════════ */
@@ -1129,9 +1387,11 @@ async function abrirPresupuesto(id){
     PRE = {cab:c.data, items:(i.data||[]), adic:(a.data||[]), borrarItems:[], borrarAdic:[]};
   } else {
     const listaDef = LISTAS.filter(l=>l.activo)[0];
-    PRE = {cab:{fecha:hoy(), validez_dias:15, moneda:"ARS", estado:"Abierto", descuento_pct:0, vl_id:PERFIL.id,
+    /* los valores por defecto salen de Configuración > Configuraciones generales */
+    PRE = {cab:{fecha:hoy(), validez_dias:Number(cfg("validez_dias",15)), moneda:cfg("moneda_default","ARS"),
+                estado:"Abierto", descuento_pct:0, vl_id:PERFIL.id,
                 lista_id: listaDef?listaDef.id:null, tipo:"Producto suelto",
-                condiciones:"Precios sujetos a confirmación de stock. Validez del presupuesto: 15 días."},
+                condiciones:cfg("pie_presupuesto","Precios sujetos a confirmación de stock.")},
            items:[], adic:[], borrarItems:[], borrarAdic:[]};
   }
   pintarFichaPre();
@@ -1415,7 +1675,7 @@ function imprimirPresupuesto(){
    '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;margin:14px 0;background:#faf8f4}'+
    '.pie{margin-top:26px;font-size:11px;color:#6b7679;border-top:1px solid #ddd;padding-top:10px}'+
    '</style></head><body>'+
-   '<h1>YATEN REVESTIMIENTOS</h1><div class="sub">Presupuesto '+esc(c.codigo)+' · '+fmtF(c.fecha)+' · válido por '+(c.validez_dias||15)+' días</div>'+
+   membrete('Presupuesto '+esc(c.codigo)+' · '+fmtF(c.fecha)+' · válido por '+(c.validez_dias||cfg("validez_dias",15))+' días')+
    '<div class="caja"><b>'+esc(c.cliente_nombre)+'</b>'+
      (c.cliente_tel?' · '+esc(c.cliente_tel):'')+(c.cliente_email?' · '+esc(c.cliente_email):'')+
      ((c.direccion_obra||c.localidad_id)?'<br>Obra: '+esc(c.direccion_obra)+' '+esc(nom(M.loc,c.localidad_id)):'')+
@@ -1431,7 +1691,7 @@ function imprimirPresupuesto(){
      '<tr class="g"><td class="r">TOTAL</td><td class="r">'+fmtM(t.total,m)+'</td></tr>'+
    '</tbody></table>'+
    (c.notas? '<div class="caja"><b>Notas</b><br>'+esc(c.notas).replace(/\n/g,"<br>")+'</div>' : '')+
-   '<div class="pie">'+esc(c.condiciones||"")+'</div>'+
+   '<div class="pie">'+esc(c.condiciones||cfg("pie_presupuesto"))+'</div>'+
    '</body></html>';
   const w = window.open("", "_blank");
   if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes para este sitio y volvé a intentar."); return; }
@@ -1518,7 +1778,7 @@ async function verRemito(id){
    '.r{text-align:right}.caja{border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;margin:12px 0;background:#faf8f4}'+
    '.firma{margin-top:50px;display:flex;gap:60px}.firma div{border-top:1px solid #999;padding-top:6px;flex:1;text-align:center;font-size:11px}'+
    '</style></head><body>'+
-   '<h1>YATEN REVESTIMIENTOS</h1><div class="sub">Remito de entrega '+esc(x.codigo)+' · '+fmtF(x.fecha)+'</div>'+
+   membrete('Remito de entrega '+esc(x.codigo)+' · '+fmtF(x.fecha))+
    '<div class="caja"><b>'+esc(cli?cli.nombre:"")+'</b>'+(cli&&cli.celular?' · '+esc(cli.celular):'')+
    '<br>Entrega en: '+esc(x.direccion||"")+'</div>'+
    '<table><thead><tr><th>Producto</th><th class="r">Cantidad</th><th class="r">Peso kg</th></tr></thead><tbody>'+
@@ -1526,6 +1786,7 @@ async function verRemito(id){
    '<tr><td><b>Peso total</b></td><td></td><td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>'+
    '</tbody></table>'+
    (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
+   (cfg("pie_remito")?'<div style="margin-top:14px;font-size:11px;color:#6b7679">'+esc(cfg("pie_remito"))+'</div>':'')+
    '<div class="firma"><div>Firma del transportista</div><div>Firma y aclaración de quien recibe</div></div>'+
    '</body></html>';
   const w = window.open("", "_blank");
@@ -2971,6 +3232,392 @@ async function guardarVentaDirecta(){
   if (VISTA==="ventas") VISTAS.ventas();
 }
 
+
+/* ═══════════ DOCUMENTOS Y TAGS ═══════════
+   Copiado de Pirka: Documentos (Catálogo · Listado · Nuevo) y Tags (Listado · Nuevo).
+   Un documento puede ser un archivo subido o un enlace. Los tags lo cruzan con todo. */
+
+let DOCS = [], TAGS = [], DOCTAGS = {}, FDOC = {texto:"", tag:"", ambito:""};
+async function db27(){
+  if (window._db27 !== undefined) return window._db27;
+  const t = await sb.from("documentos").select("id").limit(1);
+  window._db27 = !t.error;
+  return window._db27;
+}
+async function cargarDocs(){
+  if (!(await db27())) return false;
+  const [d,t,dt] = await Promise.all([
+    sb.from("documentos").select("*").order("id",{ascending:false}),
+    sb.from("tags").select("*").order("nombre"),
+    sb.from("documento_tags").select("*")
+  ]);
+  DOCS = d.data||[]; TAGS = t.data||[]; DOCTAGS = {};
+  (dt.data||[]).forEach(function(x){ (DOCTAGS[x.documento_id] = DOCTAGS[x.documento_id] || []).push(x.tag_id); });
+  return true;
+}
+function tagsDe(docId){
+  return (DOCTAGS[docId]||[]).map(id=>TAGS.find(t=>t.id===id)).filter(Boolean);
+}
+function pillTag(t){
+  return '<span class="pill" style="background:'+esc(t.color||"#24393C")+';color:#fff;border:0">'+esc(t.nombre)+'</span>';
+}
+const avisoFaltaDoc = '<div class="panel"><h2>Documentos</h2><div class="msg err">Falta la tabla de documentos en la base. Hay que correr la migración pendiente.</div></div>';
+
+VISTAS.docs = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await cargarDocs())) return $("main").innerHTML = avisoFaltaDoc;
+  if (SUBVISTA === "listado") return pintarDocsListado();
+  return pintarCatalogo();
+};
+
+/* Catálogo: lo que el vendedor abre delante del cliente. Grande, con imagen, sin tabla. */
+function pintarCatalogo(){
+  const puede = P("producto-modificar") || P("cliente-modificar");
+  const t = FDOC.texto.toLowerCase();
+  let rows = DOCS.filter(d => d.en_catalogo && !d.anulado && d.activo);
+  if (FDOC.tag) rows = rows.filter(d => (DOCTAGS[d.id]||[]).indexOf(Number(FDOC.tag)) >= 0);
+  if (t) rows = rows.filter(d => ((d.nombre||"")+" "+(d.descripcion||"")+" "+tagsDe(d.id).map(x=>x.nombre).join(" ")).toLowerCase().indexOf(t)>=0);
+  const tarjeta = function(d){
+    return '<div class="panel" style="margin:0;cursor:pointer" onclick="abrirDocumento('+d.id+')">'+
+      '<div style="font-size:30px;line-height:1">'+iconoDoc(d)+'</div>'+
+      '<div style="font-weight:600;margin-top:6px">'+esc(d.nombre)+'</div>'+
+      (d.descripcion?'<div class="muted" style="white-space:normal;margin-top:3px">'+esc(d.descripcion)+'</div>':'')+
+      '<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">'+tagsDe(d.id).map(pillTag).join("")+'</div>'+
+      '<div class="muted" style="margin-top:8px">'+(d.archivo_path?esc(d.archivo_nombre||"archivo"):'enlace')+'</div>'+
+    '</div>';
+  };
+  $("main").innerHTML =
+   '<div class="panel"><h2>Catálogo</h2>'+
+   '<div class="desc">Lo que mostrás en la casa del cliente: catálogos, fichas técnicas, fotos de obras terminadas. Se abre de una y se ve bien en el celular. Para que algo aparezca acá hay que marcarlo como «Mostrar en el catálogo» cuando lo cargás.</div>'+
+   '<div class="filtros"><div style="min-width:260px"><label>Buscar</label><input id="dc_txt" placeholder="nombre, descripción o tag" value="'+esc(FDOC.texto)+'"></div>'+
+   '<div><label>Tag</label><select id="dc_tag"><option value="">Todos</option>'+
+     TAGS.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" '+(String(FDOC.tag)===String(x.id)?"selected":"")+'>'+esc(x.nombre)+'</option>').join("")+'</select></div>'+
+   '<div style="min-width:auto"><button class="btn" id="dc_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formDocumento(null)">+ Documento nuevo</button></div>':'')+
+   '</div></div>'+
+   (rows.length
+     ? '<div style="display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">'+rows.map(tarjeta).join("")+'</div>'
+     : '<div class="panel"><div class="muted">'+(FDOC.texto||FDOC.tag?'Nada en el catálogo con ese filtro.':'Todavía no marcaste ningún documento para el catálogo.')+'</div></div>');
+  $("dc_btn").onclick = function(){ FDOC.texto = $("dc_txt").value.trim(); FDOC.tag = $("dc_tag").value; VISTAS.docs(); };
+  $("dc_tag").onchange = function(){ FDOC.texto = $("dc_txt").value.trim(); FDOC.tag = this.value; VISTAS.docs(); };
+}
+
+function iconoDoc(d){
+  const n = (d.archivo_nombre || d.enlace || "").toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|heic)$/.test(n)) return "🖼️";
+  if (/\.pdf$/.test(n)) return "📕";
+  if (/\.(xlsx?|csv)$/.test(n)) return "📊";
+  if (/\.(docx?)$/.test(n)) return "📄";
+  if (!d.archivo_path) return "🔗";
+  return "📎";
+}
+
+function pintarDocsListado(){
+  const puede = P("producto-modificar") || P("cliente-modificar");
+  const t = FDOC.texto.toLowerCase();
+  let rows = DOCS.filter(d=>!d.anulado);
+  if (FDOC.tag) rows = rows.filter(d => (DOCTAGS[d.id]||[]).indexOf(Number(FDOC.tag)) >= 0);
+  if (FDOC.ambito === "cliente")  rows = rows.filter(d=>d.cliente_id);
+  if (FDOC.ambito === "producto") rows = rows.filter(d=>d.producto_id);
+  if (FDOC.ambito === "proveedor")rows = rows.filter(d=>d.proveedor_id);
+  if (FDOC.ambito === "general")  rows = rows.filter(d=>!d.cliente_id && !d.producto_id && !d.proveedor_id);
+  if (t) rows = rows.filter(d => ((d.codigo||"")+" "+(d.nombre||"")+" "+(d.descripcion||"")+" "+(d.archivo_nombre||"")+" "+tagsDe(d.id).map(x=>x.nombre).join(" ")).toLowerCase().indexOf(t)>=0);
+  const aQue = function(d){
+    if (d.cliente_id){ const c = CLIS.find(x=>x.id===d.cliente_id); return "Cliente: "+(c?c.nombre:("#"+d.cliente_id)); }
+    if (d.producto_id){ const p = PRODS.find(x=>x.id===d.producto_id); return "Producto: "+(p?p.nombre:("#"+d.producto_id)); }
+    if (d.proveedor_id){ const p = PROVS.find(x=>x.id===d.proveedor_id); return "Proveedor: "+(p?p.nombre:("#"+d.proveedor_id)); }
+    return "General";
+  };
+  $("main").innerHTML =
+   '<div class="panel"><h2>Documentos</h2>'+
+   '<div class="desc">Todo lo que hay guardado: catálogos, fichas técnicas, certificados, contratos, fotos. Cada uno se puede colgar de un cliente, de un producto o de un proveedor, y se le ponen los tags que quieras para encontrarlo después.</div>'+
+   '<div id="docmsg"></div>'+
+   '<div class="filtros"><div style="min-width:260px"><label>Buscar</label><input id="dl_txt" placeholder="nombre, descripción, archivo o tag" value="'+esc(FDOC.texto)+'"></div>'+
+   '<div><label>Tag</label><select id="dl_tag"><option value="">Todos</option>'+
+     TAGS.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" '+(String(FDOC.tag)===String(x.id)?"selected":"")+'>'+esc(x.nombre)+'</option>').join("")+'</select></div>'+
+   '<div><label>Colgado de</label><select id="dl_amb">'+
+     [["","Todo"],["general","Nada en particular"],["cliente","Un cliente"],["producto","Un producto"],["proveedor","Un proveedor"]]
+       .map(o=>'<option value="'+o[0]+'" '+(FDOC.ambito===o[0]?"selected":"")+'>'+o[1]+'</option>').join("")+'</select></div>'+
+   '<div style="min-width:auto"><button class="btn" id="dl_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formDocumento(null)">+ Documento nuevo</button></div>':'')+
+   '</div>'+
+   (rows.length? '<div class="tablewrap"><table><thead><tr>'+
+     ['Código','Nombre','Tags','Colgado de','En catálogo','Archivo',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(d=>'<tr'+(d.activo?'':' style="opacity:.55"')+'><td><b>'+esc(d.codigo)+'</b></td>'+
+       '<td style="white-space:normal">'+esc(d.nombre)+(d.descripcion?'<div class="muted">'+esc(d.descripcion)+'</div>':'')+'</td>'+
+       '<td style="white-space:normal">'+tagsDe(d.id).map(pillTag).join(" ")+'</td>'+
+       '<td>'+esc(aQue(d))+'</td>'+
+       '<td>'+(d.en_catalogo?'Sí':'—')+'</td>'+
+       '<td>'+iconoDoc(d)+' '+esc(d.archivo_nombre||(d.enlace?"enlace":"—"))+'</td>'+
+       '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="abrirDocumento('+d.id+')">Abrir</button>'+
+         (puede?' <button class="btn2 btn-sm" onclick="formDocumento('+d.id+')">Editar</button>'+
+                ' <button class="btn2 btn-sm" onclick="anularDocumento('+d.id+')">Anular</button>':'')+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">'+(FDOC.texto||FDOC.tag||FDOC.ambito?'Ningún documento con ese filtro.':'Todavía no hay documentos cargados.')+'</div>')+
+   '</div>';
+  $("dl_btn").onclick = function(){ FDOC.texto=$("dl_txt").value.trim(); FDOC.tag=$("dl_tag").value; FDOC.ambito=$("dl_amb").value; VISTAS.docs(); };
+  $("dl_tag").onchange = $("dl_btn").onclick;
+  $("dl_amb").onchange = $("dl_btn").onclick;
+}
+
+/* Abrir: si es archivo, se pide un enlace firmado que vale una hora; si es enlace, se abre derecho. */
+async function abrirDocumento(id){
+  const d = DOCS.find(x=>x.id===id);
+  if (!d) return;
+  if (d.enlace && !d.archivo_path){ window.open(d.enlace, "_blank"); return; }
+  const {data, error} = await sb.storage.from("documentos").createSignedUrl(d.archivo_path, 3600);
+  if (error) return alert("No pude abrir el archivo: "+error.message);
+  window.open(data.signedUrl, "_blank");
+}
+
+async function formDocumento(id){
+  const d = id ? DOCS.find(x=>x.id===id) : null;
+  const v = k => d ? (d[k]==null?"":d[k]) : "";
+  if (!CLIS.length) await cargarClientes();
+  if (!PROVS.length && typeof cargarProveedores === "function") { try{ await cargarProveedores(); }catch(e){} }
+  const mios = d ? (DOCTAGS[d.id]||[]) : [];
+  $("dtit").textContent = d ? ("Documento "+d.codigo) : "Documento nuevo";
+  $("dbody").innerHTML = '<div id="fdmsg"></div><div class="grid">'+
+    '<div class="f" style="grid-column:1/-1"><label>Nombre</label><input id="d_nombre" value="'+esc(v("nombre"))+'" placeholder="Catálogo Deck WPC 2026"></div>'+
+    '<div class="f" style="grid-column:1/-1"><label>Descripción</label><input id="d_desc" value="'+esc(v("descripcion"))+'" placeholder="opcional"></div>'+
+    '<div class="f"><label>Cliente</label><select id="d_cli">'+selOpts(CLIS, v("cliente_id"))+'</select></div>'+
+    '<div class="f"><label>Producto</label><select id="d_prod">'+selOpts(PRODS, v("producto_id"))+'</select></div>'+
+    '<div class="f"><label>Proveedor</label><select id="d_prov">'+selOpts(PROVS, v("proveedor_id"))+'</select></div>'+
+    '<div class="f"><label>¿Mostrar en el catálogo?</label><select id="d_cat"><option value="0" '+(d&&d.en_catalogo?"":"selected")+'>No</option><option value="1" '+(d&&d.en_catalogo?"selected":"")+'>Sí</option></select></div>'+
+   '</div>'+
+   '<div class="muted" style="margin:2px 0 10px">Cliente, producto y proveedor son opcionales: si dejás los tres vacíos el documento queda como general, disponible para todos.</div>'+
+   '<div class="sec">Tags</div>'+
+   '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">'+
+     TAGS.filter(x=>x.activo || mios.indexOf(x.id)>=0).map(x=>
+       '<label style="display:flex;align-items:center;gap:5px;border:1px solid #d9d2c8;border-radius:14px;padding:4px 10px;cursor:pointer">'+
+       '<input type="checkbox" id="d_tag_'+x.id+'" '+(mios.indexOf(x.id)>=0?"checked":"")+'>'+esc(x.nombre)+'</label>').join("")+
+   '</div>'+
+   '<div style="display:flex;gap:6px;margin-bottom:10px"><input id="d_tag_nuevo" placeholder="¿Falta un tag? Escribilo acá"><button class="btn2 btn-sm" onclick="tagAgregarRapido()">Agregar tag</button></div>'+
+   '<div class="sec">El archivo</div>'+
+   (d && d.archivo_path ? '<div class="muted" style="margin-bottom:6px">Ya tiene subido: <b>'+esc(d.archivo_nombre)+'</b>. Si elegís otro archivo, lo reemplaza.</div>' : '')+
+   '<div class="grid">'+
+     '<div class="f"><label>Subir un archivo</label><input type="file" id="d_file"></div>'+
+     '<div class="f"><label>…o pegar un enlace</label><input id="d_enlace" value="'+esc(v("enlace"))+'" placeholder="https://drive.google.com/…"></div>'+
+   '</div>'+
+   '<div class="muted">Podés usar cualquiera de los dos. El enlace sirve para lo que ya está en Drive y no querés duplicar; el archivo subido queda adentro del sistema y se abre aunque no tengas la carpeta compartida.</div>'+
+   '<div class="acciones"><button class="btn" id="d_guardar">Guardar</button></div>';
+  $("d_guardar").onclick = () => guardarDocumento(id);
+  $("dlg").showModal();
+}
+
+async function tagAgregarRapido(){
+  const n = $("d_tag_nuevo").value.trim(); if (!n) return;
+  const {error} = await sb.from("tags").insert({nombre:n, activo:true});
+  if (error) return alert(error.message.indexOf("duplicate")>=0 ? "Ese tag ya existe." : error.message);
+  await cargarDocs();
+  $("d_tag_nuevo").value = "";
+  alert("Tag agregado: "+n+". Volvé a abrir el documento para tildarlo.");
+}
+
+async function guardarDocumento(id){
+  const msg = (t,k) => $("fdmsg").innerHTML = '<div class="msg '+(k||"err")+'">'+esc(t)+'</div>';
+  const nombre = $("d_nombre").value.trim();
+  if (!nombre) return msg("Ponele un nombre al documento.");
+  const file = $("d_file").files[0];
+  const o = {
+    nombre: nombre,
+    descripcion: $("d_desc").value.trim() || null,
+    cliente_id:   $("d_cli").value  ? Number($("d_cli").value)  : null,
+    producto_id:  $("d_prod").value ? Number($("d_prod").value) : null,
+    proveedor_id: $("d_prov").value ? Number($("d_prov").value) : null,
+    en_catalogo:  $("d_cat").value === "1",
+    enlace: $("d_enlace").value.trim() || null,
+    activo: true
+  };
+  if (file){
+    if (file.size > 25*1024*1024) return msg("El archivo pesa más de 25 MB. Subilo a Drive y pegá el enlace.");
+    msg("Subiendo "+file.name+"…","ok");
+    const ext = (file.name.split(".").pop()||"bin").toLowerCase();
+    const path = "doc/" + Date.now() + "-" + Math.random().toString(36).slice(2,8) + "." + ext;
+    const up = await sb.storage.from("documentos").upload(path, file, {contentType:file.type||undefined});
+    if (up.error) return msg("No pude subir el archivo: "+up.error.message);
+    o.archivo_path = path; o.archivo_nombre = file.name;
+    o.archivo_tipo = file.type || null; o.archivo_bytes = file.size;
+  }
+  const r = id ? await sb.from("documentos").update(o).eq("id",id).select("id").single()
+               : await sb.from("documentos").insert(o).select("id").single();
+  if (r.error) return msg(r.error.message);
+  const docId = r.data.id;
+  const elegidos = TAGS.filter(x => { const el = $("d_tag_"+x.id); return el && el.checked; }).map(x=>x.id);
+  await sb.from("documento_tags").delete().eq("documento_id", docId);
+  if (elegidos.length){
+    const ins = await sb.from("documento_tags").insert(elegidos.map(t=>({documento_id:docId, tag_id:t})));
+    if (ins.error) return msg("Se guardó el documento pero no los tags: "+ins.error.message);
+  }
+  await cargarDocs();
+  $("dlg").close();
+  if (VISTA === "docs") VISTAS.docs();
+}
+
+async function anularDocumento(id){
+  const m = prompt("¿Por qué anulás este documento?"); if (m===null) return;
+  const {error} = await sb.from("documentos").update({anulado:true, anulado_en:new Date().toISOString(),
+    motivo_anulacion:m||"Sin motivo"}).eq("id",id);
+  if (error) return alert(error.message);
+  await cargarDocs(); VISTAS.docs();
+}
+
+/* ── Tags: menú propio, igual que en Pirka ── */
+VISTAS.tags = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await cargarDocs())) return $("main").innerHTML = '<div class="panel"><h2>Tags</h2><div class="msg err">Falta la tabla de tags en la base. Hay que correr la migración pendiente.</div></div>';
+  const puede = P("maestra-modificar");
+  const cuantos = id => DOCS.filter(d=>!d.anulado && (DOCTAGS[d.id]||[]).indexOf(id)>=0).length;
+  $("main").innerHTML = '<div class="panel"><h2>Tags</h2>'+
+   '<div class="desc">Las etiquetas con las que clasificás los documentos. Un documento puede tener varios: un PDF puede ser a la vez «Ficha técnica» y «Deck». Es la forma de encontrar algo dentro de un año sin acordarte cómo se llamaba el archivo.</div>'+
+   '<div id="msg_tg"></div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Color</th><th>Documentos</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   (puede?'<tr style="background:#f6fbf7"><td><input id="n_tg_nombre" placeholder="Nombre del tag nuevo"></td>'+
+     '<td><input type="color" id="n_tg_color" value="#24393C"></td><td>—</td><td>—</td>'+
+     '<td><button class="btn btn-sm" onclick="tagAgregar()">Agregar</button></td></tr>':'')+
+   TAGS.map(x=>'<tr'+(x.activo?'':' style="opacity:.55"')+'>'+
+     (puede
+       ? '<td><input id="e_tg_'+x.id+'_nombre" value="'+esc(x.nombre)+'"></td>'+
+         '<td><input type="color" id="e_tg_'+x.id+'_color" value="'+esc(x.color||"#24393C")+'"></td>'+
+         '<td>'+cuantos(x.id)+'</td>'+
+         '<td><select id="e_tg_'+x.id+'_activo"><option value="1" '+(x.activo?"selected":"")+'>Sí</option><option value="0" '+(!x.activo?"selected":"")+'>No</option></select></td>'+
+         '<td><button class="btn2 btn-sm" onclick="tagGuardar('+x.id+')">Guardar</button></td>'
+       : '<td>'+pillTag(x)+'</td><td>'+esc(x.color)+'</td><td>'+cuantos(x.id)+'</td><td>'+(x.activo?"Sí":"No")+'</td>')+
+     '</tr>').join("")+
+   '</tbody></table></div>'+
+   '<div class="muted" style="margin-top:8px">Un tag no se borra: se pone Activo en No. Los documentos que ya lo tienen lo conservan.</div></div>';
+};
+async function tagAgregar(){
+  const n = $("n_tg_nombre").value.trim();
+  if (!n) return $("msg_tg").innerHTML = '<div class="msg err">Escribí un nombre.</div>';
+  const {error} = await sb.from("tags").insert({nombre:n, color:$("n_tg_color").value, activo:true});
+  if (error) return $("msg_tg").innerHTML = '<div class="msg err">'+esc(error.message.indexOf("duplicate")>=0?"Ya existe un tag con ese nombre.":error.message)+'</div>';
+  await cargarDocs(); VISTAS.tags();
+}
+async function tagGuardar(id){
+  const {error} = await sb.from("tags").update({nombre:$("e_tg_"+id+"_nombre").value.trim(),
+    color:$("e_tg_"+id+"_color").value, activo:$("e_tg_"+id+"_activo").value==="1"}).eq("id",id);
+  if (error) return $("msg_tg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>';
+  await cargarDocs(); VISTAS.tags();
+}
+
+/* ═══════════ LEADS ═══════════
+   El contacto que todavía no es prospecto: entró por Instagram, por la web, por una
+   recomendación, y alguien lo tiene que llamar. Cuando lo llamás, se convierte en prospecto. */
+
+const ESTADOS_LEAD = ["Nuevo","Contactado","Convertido","Descartado"];
+let LEADS = [], FLEAD = {texto:"", estado:"Nuevo"};
+async function cargarLeads(){
+  const r = await sb.from("leads").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(1000);
+  if (r.error) return false;
+  LEADS = r.data||[];
+  return true;
+}
+VISTAS.leads = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (!(await cargarLeads())) return $("main").innerHTML = '<div class="panel"><h2>Leads</h2><div class="msg err">Falta la tabla de leads en la base. Hay que correr la migración pendiente.</div></div>';
+  const puede = P("prospecto-agregar");
+  const t = FLEAD.texto.toLowerCase();
+  let rows = LEADS.filter(l=>!l.anulado);
+  if (FLEAD.estado) rows = rows.filter(l=>l.estado===FLEAD.estado);
+  if (t) rows = rows.filter(l=>((l.codigo||"")+" "+(l.nombre||"")+" "+(l.telefono||"")+" "+(l.celular||"")+" "+(l.email||"")+" "+(l.mensaje||"")).toLowerCase().indexOf(t)>=0);
+  const cuenta = e => LEADS.filter(l=>!l.anulado && l.estado===e).length;
+  const pillL = e => '<span class="pill '+(e==="Convertido"?"ok":e==="Descartado"?"no":e==="Contactado"?"sen":"esp")+'">'+esc(e)+'</span>';
+  const dias = f => Math.round((new Date(hoy()+"T00:00:00") - new Date(f+"T00:00:00"))/86400000);
+  $("main").innerHTML = '<div class="panel"><h2>Leads</h2>'+
+   '<div class="desc">Los contactos que entraron y todavía nadie llamó. Un lead no es un prospecto: es más arriba en el embudo. Cuando lo llamás y hay interés real, tocás «Convertir en prospecto» y sigue el circuito de siempre, sin recargar los datos.</div>'+
+   '<div id="lemsg"></div>'+
+   '<div class="kpis" style="margin-bottom:10px">'+
+     ESTADOS_LEAD.map(e=>'<div class="kpi" style="cursor:pointer" onclick="filtrarLeads(\''+e+'\')"><div class="t">'+e+'</div><div class="n">'+cuenta(e)+'</div></div>').join("")+
+   '</div>'+
+   '<div class="filtros"><div style="min-width:260px"><label>Buscar</label><input id="le_txt" placeholder="nombre, teléfono, email o mensaje" value="'+esc(FLEAD.texto)+'"></div>'+
+   '<div><label>Estado</label><select id="le_est"><option value="">Todos</option>'+
+     ESTADOS_LEAD.map(e=>'<option '+(FLEAD.estado===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
+   '<div style="min-width:auto"><button class="btn" id="le_btn">Buscar</button></div>'+
+   (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formLead(null)">+ Lead nuevo</button></div>':'')+
+   '</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Fecha','Espera','Nombre','Teléfono','Canal','Cómo nos conoció','Qué pidió','Estado',''].map(h=>'<th>'+h+'</th>').join("")+
+     '</tr></thead><tbody>'+rows.map(function(l){
+       const d = dias(l.fecha), viejo = l.estado==="Nuevo" && d>=3;
+       return '<tr>'+
+        '<td><b>'+esc(l.codigo)+'</b></td><td>'+fmtF(l.fecha)+'</td>'+
+        '<td style="'+(viejo?'color:#7a2415;font-weight:600':'')+'">'+(l.estado==="Nuevo"?d+' d':'—')+'</td>'+
+        '<td>'+esc(l.nombre)+'</td><td>'+esc(l.celular||l.telefono||"")+'</td>'+
+        '<td>'+esc(nom(M.can,l.canal_id))+'</td><td>'+esc(nom(M.ori,l.origen_id))+'</td>'+
+        '<td style="white-space:normal;max-width:280px">'+esc(l.mensaje||"")+'</td>'+
+        '<td>'+pillL(l.estado)+'</td>'+
+        '<td style="white-space:nowrap">'+(puede
+          ? '<button class="btn2 btn-sm" onclick="formLead('+l.id+')">Abrir</button>'+
+            (l.estado!=="Convertido"?' <button class="btn btn-sm" onclick="convertirLead('+l.id+')">Convertir</button>':'')
+          : '')+'</td></tr>';
+     }).join("")+'</tbody></table></div>'
+    : '<div class="muted">'+(FLEAD.texto||FLEAD.estado?'Ningún lead con ese filtro.':'Todavía no hay leads cargados.')+'</div>')+
+   '</div>';
+  $("le_btn").onclick = function(){ FLEAD.texto=$("le_txt").value.trim(); FLEAD.estado=$("le_est").value; VISTAS.leads(); };
+  $("le_est").onchange = $("le_btn").onclick;
+};
+function filtrarLeads(e){ FLEAD.estado = (FLEAD.estado===e?"":e); VISTAS.leads(); }
+
+function formLead(id){
+  const l = id ? LEADS.find(x=>x.id===id) : null;
+  const v = k => l ? (l[k]==null?"":l[k]) : "";
+  $("dtit").textContent = l ? ("Lead "+l.codigo) : "Lead nuevo";
+  $("dbody").innerHTML = '<div id="flmsg"></div><div class="grid">'+
+    '<div class="f"><label>Fecha</label><input type="date" id="l_fecha" value="'+(v("fecha")||hoy())+'"></div>'+
+    '<div class="f"><label>Nombre</label><input id="l_nombre" value="'+esc(v("nombre"))+'"></div>'+
+    '<div class="f"><label>Celular</label><input id="l_celular" value="'+esc(v("celular"))+'"></div>'+
+    '<div class="f"><label>Teléfono</label><input id="l_telefono" value="'+esc(v("telefono"))+'"></div>'+
+    '<div class="f"><label>Email</label><input id="l_email" value="'+esc(v("email"))+'"></div>'+
+    '<div class="f"><label>Canal de contacto</label><select id="l_canal">'+selOpts(M.can, v("canal_id"))+'</select></div>'+
+    '<div class="f"><label>Cómo nos conoció</label><select id="l_origen">'+selOpts(M.ori, v("origen_id"))+'</select></div>'+
+    '<div class="f"><label>Localidad</label><select id="l_loc">'+selOpts(M.loc, v("localidad_id"))+'</select></div>'+
+    '<div class="f"><label>Estado</label><select id="l_estado">'+ESTADOS_LEAD.map(e=>'<option '+(v("estado")===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
+    '<div class="f"><label>A quién se le asigna</label><select id="l_asig">'+
+      '<option value=""></option>'+EQUIPO.filter(p=>p.activo).map(p=>'<option value="'+p.id+'" '+(v("asignado_a")===p.id?"selected":"")+'>'+esc(p.nombre)+'</option>').join("")+'</select></div>'+
+    '<div class="f" style="grid-column:1/-1"><label>Qué pidió</label><input id="l_mensaje" value="'+esc(v("mensaje"))+'" placeholder="Consultó por deck para una galería de 30 m²"></div>'+
+    '<div class="f" style="grid-column:1/-1"><label>Observaciones</label><input id="l_obs" value="'+esc(v("observaciones"))+'"></div>'+
+   '</div>'+
+   (l && l.prospecto_id ? '<div class="msg ok" style="margin-top:8px">Ya se convirtió en el prospecto #'+l.prospecto_id+'.</div>' : '')+
+   '<div class="acciones"><button class="btn" id="l_guardar">Guardar</button>'+
+     (l && l.estado!=="Convertido" ? ' <button class="btn2" onclick="convertirLead('+l.id+')">Convertir en prospecto</button>' : '')+
+     (l ? ' <button class="btn2" onclick="anularLead('+l.id+')">Anular</button>' : '')+'</div>';
+  $("l_guardar").onclick = async function(){
+    const nombre = $("l_nombre").value.trim();
+    if (!nombre) return $("flmsg").innerHTML = '<div class="msg err">Poné al menos el nombre.</div>';
+    const o = {fecha:$("l_fecha").value||hoy(), nombre:nombre,
+      celular:$("l_celular").value.trim()||null, telefono:$("l_telefono").value.trim()||null,
+      email:$("l_email").value.trim()||null,
+      canal_id:$("l_canal").value?Number($("l_canal").value):null,
+      origen_id:$("l_origen").value?Number($("l_origen").value):null,
+      localidad_id:$("l_loc").value?Number($("l_loc").value):null,
+      estado:$("l_estado").value, asignado_a:$("l_asig").value||null,
+      mensaje:$("l_mensaje").value.trim()||null, observaciones:$("l_obs").value.trim()||null};
+    const r = id ? await sb.from("leads").update(o).eq("id",id) : await sb.from("leads").insert(o);
+    if (r.error) return $("flmsg").innerHTML = '<div class="msg err">'+esc(r.error.message)+'</div>';
+    $("dlg").close(); VISTAS.leads();
+  };
+  $("dlg").showModal();
+}
+
+async function convertirLead(id){
+  if (!confirm("Se crea un prospecto con estos datos y el lead queda marcado como convertido. ¿Vamos?")) return;
+  const {data, error} = await sb.rpc("convertir_lead", {p_lead:id});
+  if (error) return alert(error.message);
+  try{ $("dlg").close(); }catch(e){}
+  await cargarLeads();
+  VISTAS.leads();
+  $("lemsg").innerHTML = '<div class="msg ok">Listo: se creó el prospecto #'+data+'. Lo ves en Planilla.</div>';
+}
+
+async function anularLead(id){
+  const m = prompt("¿Por qué anulás este lead?"); if (m===null) return;
+  const {error} = await sb.from("leads").update({anulado:true, anulado_en:new Date().toISOString(),
+    motivo_anulacion:m||"Sin motivo"}).eq("id",id);
+  if (error) return alert(error.message);
+  try{ $("dlg").close(); }catch(e){}
+  VISTAS.leads();
+}
+
 /* ═══════════ CLIENTES Y CUENTA CORRIENTE ═══════════ */
 let CLIS = [], SALDOS = {}, FCLI = "", FDEUDA = false;
 async function cargarClientes(){
@@ -2984,6 +3631,23 @@ async function cargarClientes(){
   (s.data||[]).forEach(function(x){ if(!x.moneda) return; SALDOS[x.cliente_id+"_"+x.moneda] = Number(x.saldo||0); });
 }
 const saldoCli = (id,m) => SALDOS[id+"_"+m] || 0;
+
+/* Antigüedad de la deuda: de cada cliente, la venta impaga más vieja.
+   Es lo que decide si entra o no en «Clientes morosos». */
+let ATRASO = {};
+async function cargarAtrasos(){
+  const r = await sb.from("v_saldos_venta").select("cliente_id,codigo,fecha,saldo");
+  ATRASO = {};
+  if (r.error) return;
+  const ahora = new Date(hoy()+"T00:00:00").getTime();
+  (r.data||[]).forEach(function(v){
+    if (Number(v.saldo||0) <= 0.009) return;
+    const dias = Math.round((ahora - new Date(v.fecha+"T00:00:00").getTime())/86400000);
+    const a = ATRASO[v.cliente_id];
+    if (!a || dias > a.dias) ATRASO[v.cliente_id] = {dias:dias, codigo:v.codigo, fecha:v.fecha};
+  });
+}
+let DIAS_MORA = null;   // null = todavía no se tocó, se toma el de Configuración
 
 VISTAS.clientes = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
@@ -3000,6 +3664,25 @@ VISTAS.clientes = async function(){
   } else if (FDEUDA || SUBVISTA === "morosos"){
     rows = rows.filter(c => saldoCli(c.id,'ARS') > 0 || saldoCli(c.id,'USD') > 0).sort((a,b) => debe(b) - debe(a));
   }
+  /* Clientes morosos: además de deber, la deuda tiene que tener cierta antigüedad.
+     El umbral sale de Configuración > Configuraciones generales y se puede pisar acá. */
+  let umbral = 0, sinFecha = 0;
+  if (SUBVISTA === "morosos"){
+    await cargarAtrasos();
+    if (DIAS_MORA === null) DIAS_MORA = Number(cfg("dias_moroso",30)) || 0;
+    umbral = DIAS_MORA;
+    const antes = rows.length;
+    rows = rows.filter(function(c){
+      const a = ATRASO[c.id];
+      if (!a) { sinFecha++; return true; }   // debe pero no sabemos de cuándo: nunca se esconde
+      return a.dias >= umbral;
+    });
+    rows.sort(function(a,b){
+      const da = ATRASO[a.id]?ATRASO[a.id].dias:-1, db = ATRASO[b.id]?ATRASO[b.id].dias:-1;
+      return db - da;
+    });
+    void antes;
+  }
   const favor = SUBVISTA === "afavor";
   const totDeuda = {ARS:0, USD:0};
   rows.forEach(function(c){ ['ARS','USD'].forEach(function(m){ const v = saldoCli(c.id,m); if (favor ? v<0 : v>0) totDeuda[m] += Math.abs(v); }); });
@@ -3007,8 +3690,12 @@ VISTAS.clientes = async function(){
   const rot = favor ? "Tienen a favor" : "Me deben";
   const cuenta = m => rows.filter(c => favor ? saldoCli(c.id,m)<0 : saldoCli(c.id,m)>0).length;
   $("main").innerHTML = '<div class="panel"><h2>'+(SUBVISTA==="morosos"?"Clientes morosos":(favor?"Clientes con saldo a favor":"Clientes"))+'</h2>'+
-   '<div class="desc">'+(SUBVISTA==="morosos"?'Los que te deben plata, de mayor a menor. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
+   '<div class="desc">'+(SUBVISTA==="morosos"?'Los que te deben plata desde hace más de '+umbral+' día'+(umbral===1?"":"s")+', del más atrasado al menos atrasado. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
+   (SUBVISTA==="morosos"?'<div><label>Atraso mínimo</label><select id="cf_mora">'+
+      [0,15,30,60,90].map(d=>'<option value="'+d+'" '+(umbral===d?"selected":"")+'>'+(d?d+' días o más':'Cualquier deuda')+'</option>').join("")+
+      ([0,15,30,60,90].indexOf(umbral)<0?'<option value="'+umbral+'" selected>'+umbral+' días o más</option>':'')+
+      '</select></div>':'')+
    (SUBVISTA?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
    '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
@@ -3016,18 +3703,24 @@ VISTAS.clientes = async function(){
       '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en pesos</div><div class="n">'+(fmtM(totDeuda.ARS,"ARS")||"$ 0")+'</div><div class="muted">'+cuenta("ARS")+' cliente'+(cuenta("ARS")===1?"":"s")+'</div></div>'+
       '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en dólares</div><div class="n">'+(fmtM(totDeuda.USD,"USD")||"US$ 0")+'</div><div class="muted">'+cuenta("USD")+' cliente'+(cuenta("USD")===1?"":"s")+'</div></div>'+
     '</div>':'')+
+   (SUBVISTA==="morosos" && sinFecha ? '<div class="muted" style="margin-bottom:8px">'+sinFecha+' de estos deben plata que no viene de una venta con fecha (un ajuste de cuenta corriente, por ejemplo). No se les puede calcular atraso, así que se muestran siempre: nunca escondemos a alguien que te debe.</div>' : '')+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
-     ['Código','Nombre / Razón social','Localidad','Teléfono','Email','Saldo ARS','Saldo USD'].map(h=>'<th>'+h+'</th>').join("")+
+     ['Código','Nombre / Razón social','Localidad','Teléfono','Email','Saldo ARS','Saldo USD'].concat(SUBVISTA==="morosos"?['Atraso','Comprobante más viejo']:[]).map(h=>'<th>'+h+'</th>').join("")+
      '</tr></thead><tbody>'+rows.map(function(c){
-       const a = saldoCli(c.id,'ARS'), u = saldoCli(c.id,'USD');
+       const a = saldoCli(c.id,'ARS'), u = saldoCli(c.id,'USD'), at = ATRASO[c.id];
        return '<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCliente('+c.id+')">'+
         '<td><b>'+esc(c.codigo)+'</b></td><td>'+esc(c.nombre)+'</td><td>'+esc(nom(M.loc,c.localidad_id))+'</td>'+
         '<td>'+esc(c.celular||c.telefono||"")+'</td><td>'+esc(c.email)+'</td>'+
         '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
-        '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td></tr>';
-     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(favor?'Ningún cliente tiene saldo a favor.':(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.')))+'</div>')+
+        '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td>'+
+        (SUBVISTA==="morosos"
+          ? '<td style="'+(at&&at.dias>=60?'color:#7a2415;font-weight:600':'')+'">'+(at?at.dias+' días':'—')+'</td>'+
+            '<td>'+(at?esc(at.codigo)+' · '+fmtF(at.fecha):'ajuste de cuenta')+'</td>'
+          : '')+'</tr>';
+     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(SUBVISTA==="morosos"?'Ningún cliente te debe plata con más de '+umbral+' días de atraso.':(favor?'Ningún cliente tiene saldo a favor.':(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.'))))+'</div>')+
    '</div>';
   $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); if ($("cf_deuda")) FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
+  if ($("cf_mora")) $("cf_mora").onchange = function(){ DIAS_MORA = Number(this.value); VISTAS.clientes(); };
   if ($("cf_deuda")) $("cf_deuda").onchange = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
   if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
 };
@@ -3058,6 +3751,11 @@ async function fichaCliente(id){
       (p1.data||[]).concat(p2.data||[]).forEach(function(p){ if(!vistos[p.id]){ vistos[p.id]=1; pres.push(p); } });
       pres.sort((a,b)=>b.id-a.id);
     }
+  }
+  let docsCli = [];
+  if (c && (await db27())){
+    if (!DOCS.length) await cargarDocs();
+    docsCli = DOCS.filter(x=>x.cliente_id===c.id && !x.anulado);
   }
   let ventasCli = [], remitosCli = [], saldoVenta = {};
   if (c && (await db12()) && P("venta-consultar")){
@@ -3090,10 +3788,27 @@ async function fichaCliente(id){
    (c? seccionVentasCli(c, ventasCli, saldoVenta) : '') +
    (c? seccionRemitosCli(c, remitosCli) : '') +
    (c? seccionCC(c, seg) : '') +
-   (c? seccionNotas(c, notas, tnotas) : '');
+   (c? seccionNotas(c, notas, tnotas) : '')+
+   (c? seccionDocsCli(c, docsCli) : '');
   if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
   if (c) armarAccionesCC(c);
   $("dlg").showModal();
+}
+/* Los archivos colgados de este cliente: contrato firmado, foto de la obra, plano que mandó. */
+function seccionDocsCli(c, docs){
+  if (!window._db27) return '';
+  return '<div class="sec">Documentos de este cliente</div>'+
+   (docs.length? '<div class="tablewrap"><table><thead><tr><th>Código</th><th>Nombre</th><th>Tags</th><th>Archivo</th><th></th></tr></thead><tbody>'+
+     docs.map(d=>'<tr><td><b>'+esc(d.codigo)+'</b></td><td style="white-space:normal">'+esc(d.nombre)+'</td>'+
+       '<td>'+tagsDe(d.id).map(pillTag).join(" ")+'</td>'+
+       '<td>'+iconoDoc(d)+' '+esc(d.archivo_nombre||(d.enlace?"enlace":"—"))+'</td>'+
+       '<td><button class="btn2 btn-sm" onclick="abrirDocumento('+d.id+')">Abrir</button></td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Este cliente no tiene documentos cargados.</div>')+
+   ((P("cliente-modificar"))?'<div style="margin-top:8px"><button class="btn2 btn-sm" onclick="formDocDeCliente('+c.id+')">+ Subir un documento de este cliente</button></div>':'');
+}
+async function formDocDeCliente(cliId){
+  await formDocumento(null);
+  const s = $("d_cli"); if (s) s.value = String(cliId);
 }
 function seccionPresCli(c, pres){
   if (!window._db9) return '<div class="sec">Presupuestos, ventas y notas</div><div class="muted">Falta correr la actualización de la base para ver acá los presupuestos y el historial de notas de este cliente.</div>';
