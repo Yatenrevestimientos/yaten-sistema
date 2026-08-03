@@ -44,6 +44,10 @@ header button{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,
 nav{background:var(--grafito);display:flex;gap:2px;overflow-x:auto;padding:0 8px;position:sticky;top:47px;z-index:39;-webkit-overflow-scrolling:touch}
 nav button{background:transparent;color:#c9d2d3;border:0;border-radius:0;padding:11px 14px;white-space:nowrap;font-size:14px;border-bottom:3px solid transparent}
 nav button.on{color:#fff;border-bottom-color:var(--ocre);background:rgba(255,255,255,.05)}
+#subnav{background:#f4f0ea;border-bottom:1px solid var(--linea);display:flex;gap:2px;overflow-x:auto;padding:0 10px;position:sticky;top:91px;z-index:38}
+#subnav:empty{display:none}
+#subnav button{background:transparent;border:0;border-radius:0;padding:8px 13px;white-space:nowrap;font-size:13px;color:#5b6668;border-bottom:3px solid transparent}
+#subnav button.on{color:var(--petroleo);font-weight:600;border-bottom-color:var(--ocre);background:#fff}
 main{padding:16px;flex:1;max-width:1600px;width:100%;margin:0 auto}
 .panel{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:16px;margin-bottom:16px}
 .panel>h2{font-size:17px;margin-bottom:2px}
@@ -113,6 +117,7 @@ dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
     <button class="btn-sm" id="hsalir">Salir</button>
   </header>
   <nav id="nav"></nav>
+  <div id="subnav"></div>
   <main id="main"></main>
 </div>
 
@@ -144,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.02-19";
+const VERSION = "v2026.08.03-20";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -281,12 +286,56 @@ const MENU = [
   {id:"maestras", t:"Maestras",        perm:"maestra-consultar"}
 ];
 const VISTAS = {};
+/* Submenús copiados literal del sistema de Pirka, para que la gente encuentre
+   las cosas en el mismo lugar en los dos sistemas. */
+const SUBMENU = {
+  clientes: [
+    {id:"", t:"Listado"},
+    {id:"morosos", t:"Clientes morosos"},
+    {id:"afavor", t:"Clientes con saldo a favor"},
+    {id:"nuevo", t:"Nuevo", perm:"cliente-agregar"}
+  ],
+  presup: [
+    {id:"", t:"Abiertos"},
+    {id:"vendidos", t:"Vendidos"},
+    {id:"cancelados", t:"Cancelados"},
+    {id:"nuevo", t:"Nuevo", perm:"presupuesto-agregar"}
+  ],
+  provee: [
+    {id:"", t:"Listado"},
+    {id:"deuda", t:"Proveedores a los que debemos"},
+    {id:"nuevo", t:"Nuevo", perm:"compra-modificar"}
+  ]
+};
+let SUBVISTA = "";
 function pintarNav(){
   $("nav").innerHTML = MENU.filter(m=>!m.perm||P(m.perm))
     .map(m=>'<button data-v="'+m.id+'" class="'+(m.id===VISTA?"on":"")+'">'+m.t+'</button>').join("");
   Array.prototype.forEach.call($("nav").querySelectorAll("button"), b => b.onclick = () => ir(b.dataset.v));
+  const sub = SUBMENU[VISTA];
+  const sn = $("subnav");
+  if (!sub){ sn.innerHTML = ""; return; }
+  sn.innerHTML = sub.filter(x=>!x.perm||P(x.perm))
+    .map(x=>'<button data-s="'+x.id+'" class="'+(x.id===SUBVISTA?"on":"")+'">'+x.t+'</button>').join("");
+  Array.prototype.forEach.call(sn.querySelectorAll("button"), b => b.onclick = () => ir(VISTA, b.dataset.s));
 }
-function ir(v){ VISTA=v; pintarNav(); (VISTAS[v]||VISTAS.tablero)(); }
+function ir(v, sub){
+  VISTA = v; SUBVISTA = sub || "";
+  // las opciones "Nuevo" abren la ficha y dejan el listado detrás
+  if (SUBVISTA === "nuevo"){
+    SUBVISTA = "";
+    pintarNav();
+    (VISTAS[v]||VISTAS.tablero)();
+    setTimeout(function(){
+      if (v==="clientes") fichaCliente(null);
+      else if (v==="presup") abrirPresupuesto(null);
+      else if (v==="provee") fichaProveedor(null);
+    }, 350);
+    return;
+  }
+  pintarNav();
+  (VISTAS[v]||VISTAS.tablero)();
+}
 
 /* ─────────── DATOS ─────────── */
 const COLS = "id,codigo,fecha,estado,canal_id,origen_id,vl_id,motivo_consulta,decide_con,nombre,telefono,celular,email,localidad_id,direccion,objecion_entrada_id,notas_ato,derivacion,ato_id,fecha_visita,hora_visita,m2_cotizados,m2_colocar,resultado,nro_presup_papel,fecha_papel_a_vl,importe,moneda,producto_2do,objecion_visita_id,tipo_venta,motivo_descarte_id,creado_en";
@@ -974,8 +1023,9 @@ async function db12(){
 let FPRE = {estado:"", desde:"", hasta:"", texto:""};
 
 VISTAS.presup = function(){
+  const rotP = SUBVISTA==="vendidos" ? "Presupuestos vendidos" : (SUBVISTA==="cancelados" ? "Presupuestos cancelados" : "Presupuestos abiertos");
   $("main").innerHTML =
-   '<div class="panel"><h2>Presupuestos</h2>'+
+   '<div class="panel"><h2>'+rotP+'</h2>'+
    '<div class="desc">Cada presupuesto arma su total solo: productos, descuentos, adicionales e IVA producto por producto.</div>'+
    '<div class="filtros">'+
      '<div><label>Estado</label><select id="qf_est"><option value="">Todos</option>'+ESTADOS_PRE.map(e=>'<option '+(FPRE.estado===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
@@ -992,6 +1042,10 @@ VISTAS.presup = function(){
 async function pintarPresupuestos(){
   $("qlista").innerHTML = '<div class="muted">Cargando…</div>';
   let q = sb.from("presupuestos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
+  // el submenu manda: Abiertos / Vendidos / Cancelados, como en Pirka
+  if (SUBVISTA === "vendidos") q = q.eq("estado","Vendido");
+  else if (SUBVISTA === "cancelados") q = q.in("estado",["Rechazado","Anulado","Vencido"]);
+  else if (!SUBVISTA && !FPRE.estado) q = q.in("estado",["Abierto","Enviado"]);
   if (FPRE.estado) q = q.eq("estado", FPRE.estado);
   if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
   if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
@@ -1360,9 +1414,17 @@ VISTAS.provee = async function(){
   if (!PRODS.length) await cargarCatalogo();
   const puede = P("compra-modificar");
   const t = FPROV.toLowerCase();
-  const rows = PROVS.filter(p => !t || (p.nombre+" "+(p.dni_cuit||"")+" "+(p.telefono||"")+" "+(p.celular||"")+" "+(p.email||"")+" "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id)).toLowerCase().indexOf(t)>=0);
-  $("main").innerHTML = '<div class="panel"><h2>Proveedores</h2>'+
-   '<div class="desc">Cada proveedor tiene su cuenta corriente en pesos y en dólares, y su propia lista de precios por producto. Lo que le debemos sale acá y se suma a «cuentas a pagar» en el resumen de Finanzas.</div>'+
+  let rows = PROVS.filter(p => !t || (p.nombre+" "+(p.dni_cuit||"")+" "+(p.telefono||"")+" "+(p.celular||"")+" "+(p.email||"")+" "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id)).toLowerCase().indexOf(t)>=0);
+  const debemos = p => Math.max(saldoProv(p.id,'ARS'),0) + Math.max(saldoProv(p.id,'USD'),0);
+  if (SUBVISTA === "deuda") rows = rows.filter(p => saldoProv(p.id,'ARS')>0 || saldoProv(p.id,'USD')>0).sort((a,b)=>debemos(b)-debemos(a));
+  const totPag = {ARS:0, USD:0};
+  rows.forEach(function(p){ ['ARS','USD'].forEach(function(m){ const v = saldoProv(p.id,m); if (v>0) totPag[m] += v; }); });
+  $("main").innerHTML = '<div class="panel"><h2>'+(SUBVISTA==="deuda"?"Proveedores a los que debemos":"Proveedores")+'</h2>'+
+   '<div class="desc">'+(SUBVISTA==="deuda"?'A quiénes les debemos plata, de mayor a menor. Tocá la fila para entrar y pagarle.':'Cada proveedor tiene su cuenta corriente en pesos y en dólares, y su propia lista de precios por producto. Lo que le debemos sale acá y se suma a «cuentas a pagar» en el resumen de Finanzas.')+'</div>'+
+   ((SUBVISTA==="deuda"||totPag.ARS>0||totPag.USD>0)?'<div class="kpis" style="margin-bottom:10px">'+
+     '<div class="kpi" style="border-left-color:#7a2415"><div class="t">Debemos en pesos</div><div class="n">'+(fmtM(totPag.ARS,"ARS")||"$ 0")+'</div></div>'+
+     '<div class="kpi" style="border-left-color:#7a2415"><div class="t">Debemos en dólares</div><div class="n">'+(fmtM(totPag.USD,"USD")||"US$ 0")+'</div></div>'+
+   '</div>':'')+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="pvf_txt" placeholder="razón social, CUIT, teléfono, dirección, localidad…" value="'+esc(FPROV)+'"></div>'+
    '<div style="min-width:auto"><button class="btn" id="pvf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="fichaProveedor(null)">+ Proveedor nuevo</button></div>':'')+'</div>'+
@@ -2256,26 +2318,32 @@ VISTAS.clientes = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   await cargarClientes();
   const puede = P("cliente-agregar");
+  if (SUBVISTA === "morosos") FDEUDA = true;
+  else if (SUBVISTA === "afavor") FDEUDA = false;
   const t = FCLI.toLowerCase();
   let rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)+" "+(c.observaciones||"")).toLowerCase().indexOf(t)>=0);
-  // los morosos: quienes me deben plata, ordenados de mayor a menor
-  const debe = c => Math.max(saldoCli(c.id,'ARS'),0) + Math.max(saldoCli(c.id,'USD'),0);
-  if (FDEUDA){
-    rows = rows.filter(c => saldoCli(c.id,'ARS') > 0 || saldoCli(c.id,'USD') > 0)
-               .sort((a,b) => debe(b) - debe(a));
+  const debe   = c => Math.max(saldoCli(c.id,'ARS'),0) + Math.max(saldoCli(c.id,'USD'),0);
+  const aFavor = c => Math.max(-saldoCli(c.id,'ARS'),0) + Math.max(-saldoCli(c.id,'USD'),0);
+  if (SUBVISTA === "afavor"){
+    rows = rows.filter(c => saldoCli(c.id,'ARS') < 0 || saldoCli(c.id,'USD') < 0).sort((a,b)=>aFavor(b)-aFavor(a));
+  } else if (FDEUDA || SUBVISTA === "morosos"){
+    rows = rows.filter(c => saldoCli(c.id,'ARS') > 0 || saldoCli(c.id,'USD') > 0).sort((a,b) => debe(b) - debe(a));
   }
+  const favor = SUBVISTA === "afavor";
   const totDeuda = {ARS:0, USD:0};
-  rows.forEach(function(c){ ['ARS','USD'].forEach(function(m){ const v = saldoCli(c.id,m); if (v>0) totDeuda[m] += v; }); });
+  rows.forEach(function(c){ ['ARS','USD'].forEach(function(m){ const v = saldoCli(c.id,m); if (favor ? v<0 : v>0) totDeuda[m] += Math.abs(v); }); });
   const cuantosDeben = CLIS.filter(c => saldoCli(c.id,'ARS')>0 || saldoCli(c.id,'USD')>0).length;
-  $("main").innerHTML = '<div class="panel"><h2>Clientes</h2>'+
-   '<div class="desc">Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.</div>'+
+  const rot = favor ? "Tienen a favor" : "Me deben";
+  const cuenta = m => rows.filter(c => favor ? saldoCli(c.id,m)<0 : saldoCli(c.id,m)>0).length;
+  $("main").innerHTML = '<div class="panel"><h2>'+(SUBVISTA==="morosos"?"Clientes morosos":(favor?"Clientes con saldo a favor":"Clientes"))+'</h2>'+
+   '<div class="desc">'+(SUBVISTA==="morosos"?'Los que te deben plata, de mayor a menor. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
-   '<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>'+
+   (SUBVISTA?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
    '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
-   ((FDEUDA||totDeuda.ARS>0||totDeuda.USD>0)? '<div class="kpis" style="margin-bottom:10px">'+
-      '<div class="kpi" style="border-left-color:#7a2415"><div class="t">'+(FDEUDA?'Me deben':'Total a cobrar')+' en pesos</div><div class="n">'+(fmtM(totDeuda.ARS,"ARS")||"$ 0")+'</div><div class="muted">'+rows.filter(c=>saldoCli(c.id,"ARS")>0).length+' cliente'+(rows.filter(c=>saldoCli(c.id,"ARS")>0).length===1?"":"s")+'</div></div>'+
-      '<div class="kpi" style="border-left-color:#7a2415"><div class="t">'+(FDEUDA?'Me deben':'Total a cobrar')+' en dólares</div><div class="n">'+(fmtM(totDeuda.USD,"USD")||"US$ 0")+'</div><div class="muted">'+rows.filter(c=>saldoCli(c.id,"USD")>0).length+' cliente'+(rows.filter(c=>saldoCli(c.id,"USD")>0).length===1?"":"s")+'</div></div>'+
+   ((FDEUDA||favor||totDeuda.ARS>0||totDeuda.USD>0)? '<div class="kpis" style="margin-bottom:10px">'+
+      '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en pesos</div><div class="n">'+(fmtM(totDeuda.ARS,"ARS")||"$ 0")+'</div><div class="muted">'+cuenta("ARS")+' cliente'+(cuenta("ARS")===1?"":"s")+'</div></div>'+
+      '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en dólares</div><div class="n">'+(fmtM(totDeuda.USD,"USD")||"US$ 0")+'</div><div class="muted">'+cuenta("USD")+' cliente'+(cuenta("USD")===1?"":"s")+'</div></div>'+
     '</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Nombre / Razón social','Localidad','Teléfono','Email','Saldo ARS','Saldo USD'].map(h=>'<th>'+h+'</th>').join("")+
@@ -2286,10 +2354,10 @@ VISTAS.clientes = async function(){
         '<td>'+esc(c.celular||c.telefono||"")+'</td><td>'+esc(c.email)+'</td>'+
         '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
         '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td></tr>';
-     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.'))+'</div>')+
+     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(favor?'Ningún cliente tiene saldo a favor.':(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.')))+'</div>')+
    '</div>';
-  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
-  $("cf_deuda").onchange = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
+  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); if ($("cf_deuda")) FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
+  if ($("cf_deuda")) $("cf_deuda").onchange = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
   if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
 };
 
