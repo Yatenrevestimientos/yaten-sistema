@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-32";
+const VERSION = "v2026.08.03-33";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -319,6 +319,7 @@ const MENU = [
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
   {id:"leads",    t:"Leads",           perm:"lead-consultar"},
+  {id:"reportes", t:"Reportes",        perm:"reporte-ventas"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -1424,6 +1425,516 @@ async function bajarCopia(){
       (fallaron.length? '<br>Ojo: no se pudieron copiar '+fallaron.length+' tablas ('+esc(fallaron.map(f=>f.split(":")[0]).join(", "))+'). Avisá.' : '')+
       '</div>');
   VISTAS.copia();
+}
+
+
+/* ═══════════ REPORTES ═══════════
+   Los 24 de Pirka, menos los dos de Producción, que no existen en Yaten y se
+   reemplazan por los dos de Importaciones. Un solo motor: cada reporte se declara
+   con su consulta y sus columnas, y la pantalla es siempre la misma.
+   Columnas: t=texto · f=fecha · n=número · m=plata (usa la columna Moneda si existe). */
+
+let FREP = {id:"", desde:"", hasta:"", moneda:""};
+
+const sum = (arr, f) => arr.reduce((a,x)=>a+Number(f(x)||0), 0);
+const entre = (fecha, f) => (!f.desde || fecha >= f.desde) && (!f.hasta || fecha <= f.hasta);
+function agrupar(arr, clave){
+  const m = new Map();
+  arr.forEach(function(x){ const k = clave(x); if(!m.has(k)) m.set(k, []); m.get(k).push(x); });
+  return m;
+}
+/* trae todo respetando el rango de fechas, sin traer la base entera */
+async function traer(tabla, campos, f, campoFecha){
+  let q = sb.from(tabla).select(campos);
+  if (campoFecha && f.desde) q = q.gte(campoFecha, f.desde);
+  if (campoFecha && f.hasta) q = q.lte(campoFecha, f.hasta);
+  const r = await q.limit(5000);
+  if (r.error) throw new Error(tabla + ": " + r.error.message);
+  return r.data || [];
+}
+const nomProd = id => { const p = PRODS.find(x=>x.id===id); return p ? p.nombre : (id?("producto #"+id):"—"); };
+const tipoDeProd = id => { const p = PRODS.find(x=>x.id===id); return p ? (nom(TIPOSP, p.tipo_id) || "Sin tipo") : "Sin tipo"; };
+
+const REPORTES = [
+
+/* ── Comercial ── */
+{id:"ventas", t:"Ventas", g:"Comercial", perm:"reporte-ventas",
+ ay:"Todas las ventas del período, de la más nueva a la más vieja. Las anuladas se muestran tachadas y no suman.",
+ run: async function(f){
+   const v = await traer("ventas","id,codigo,fecha,cliente_id,moneda,neto,iva,total,estado,anulado,vl_id",f,"fecha");
+   if (!CLIS.length) await cargarClientes();
+   const rows = v.filter(x=>!f.moneda || x.moneda===f.moneda).sort((a,b)=>b.fecha<a.fecha?-1:1);
+   return {
+     cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Vendedor"},{t:"Estado"},{t:"Moneda"},
+           {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}],
+     filas: rows.map(x=>[x.codigo, x.fecha, (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—",
+       nomP(x.vl_id)||"—", x.anulado?"Anulada":x.estado, x.moneda, x.neto, x.iva, x.total, x.anulado]),
+     anuladaEn: 9
+   };
+ }},
+
+{id:"detalle_venta", t:"Detalles venta", g:"Comercial", perm:"reporte-ventas",
+ ay:"Renglón por renglón de cada venta: qué producto, cuánto y a qué precio. Es el reporte para revisar una venta puntual o ver a qué precio se vendió algo.",
+ run: async function(f){
+   const v = await traer("ventas","id,codigo,fecha,cliente_id,moneda,anulado",f,"fecha");
+   const vivas = v.filter(x=>!x.anulado && (!f.moneda || x.moneda===f.moneda));
+   if (!vivas.length) return {cols:[{t:"Comprobante"}], filas:[]};
+   if (!CLIS.length) await cargarClientes();
+   const it = await sb.from("venta_items").select("*").in("venta_id", vivas.map(x=>x.id)).limit(5000);
+   if (it.error) throw new Error(it.error.message);
+   const porId = {}; vivas.forEach(x=>porId[x.id]=x);
+   return {
+     cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Producto"},{t:"Cantidad",tipo:"n"},
+           {t:"Unidad"},{t:"Moneda"},{t:"Precio unit.",tipo:"m"},{t:"Desc. %",tipo:"n"},{t:"Subtotal",tipo:"m"},{t:"Instalado"}],
+     filas:(it.data||[]).map(function(y){
+       const c = porId[y.venta_id] || {};
+       const sub = Number(y.cantidad||0)*Number(y.precio_unit||0)*(1-Number(y.descuento_pct||0)/100);
+       return [c.codigo, c.fecha, (CLIS.find(x=>x.id===c.cliente_id)||{}).nombre||"—",
+         y.descripcion||nomProd(y.producto_id), y.cantidad, y.unidad, c.moneda, y.precio_unit,
+         y.descuento_pct, sub, y.con_instalacion?"Sí":""];
+     })
+   };
+ }},
+
+{id:"comisiones", t:"Ventas (Comisiones)", g:"Comercial", perm:"reporte-comision",
+ ay:"Cuánto vendió cada uno y cuánta comisión le corresponde. El porcentaje sale de la ficha de cada persona en Equipo; si está en cero, la comisión da cero.",
+ run: async function(f){
+   const v = (await traer("ventas","fecha,moneda,total,anulado,vl_id",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const pf = await sb.from("perfiles").select("id,nombre,comision_pct");
+   const pct = {}; (pf.data||[]).forEach(p=>pct[p.id]=Number(p.comision_pct||0));
+   const g = agrupar(v, x=>x.vl_id+"|"+x.moneda);
+   const filas = [];
+   g.forEach(function(arr, k){
+     const [vl, mon] = k.split("|");
+     const tot = sum(arr, x=>x.total), p = pct[vl]||0;
+     filas.push([nomP(vl)||"Sin asignar", mon, arr.length, tot, p, Math.round(tot*p/100*100)/100]);
+   });
+   filas.sort((a,b)=>b[3]-a[3]);
+   return {cols:[{t:"Vendedor"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Vendido",tipo:"m"},{t:"Comisión %",tipo:"n"},{t:"Comisión",tipo:"m"}], filas:filas,
+     nota: (pf.error? "No pude leer los porcentajes de comisión: tu rol no tiene permiso de usuarios." : "")};
+ }},
+
+{id:"efectividad", t:"Efectividad", g:"Comercial", perm:"reporte-efectividad",
+ ay:"El embudo del período: cuántos prospectos entraron, cuántos se visitaron y cuántos terminaron en venta. Es el reporte que dice si el problema está en conseguir gente o en cerrar.",
+ run: async function(f){
+   const p = await traer("prospectos","fecha,resultado,estado,vl_id,ato_id,fecha_visita,importe",f,"fecha");
+   const g = agrupar(p, x=>x.vl_id||"sin");
+   const filas = [];
+   g.forEach(function(arr, k){
+     const visit = arr.filter(x=>x.fecha_visita).length;
+     const vend = arr.filter(x=>x.resultado==="Vendido").length;
+     filas.push([nomP(k)||"Sin asignar", arr.length, visit, vend,
+       arr.length? Math.round(visit/arr.length*1000)/10 : 0,
+       visit? Math.round(vend/visit*1000)/10 : 0]);
+   });
+   filas.sort((a,b)=>b[1]-a[1]);
+   return {cols:[{t:"Vendedor"},{t:"Prospectos",tipo:"n"},{t:"Visitados",tipo:"n"},{t:"Vendidos",tipo:"n"},
+     {t:"% que se visita",tipo:"n"},{t:"% que cierra",tipo:"n"}], filas:filas};
+ }},
+
+{id:"origen_ventas", t:"¿Cómo nos conocieron? (Ventas)", g:"Comercial", perm:"reporte-origen",
+ ay:"De dónde vino la plata: agrupa las ventas del período según cómo llegó ese cliente. Cruzado con el costo mensual de cada campaña te dice cuál conviene.",
+ run: async function(f){
+   const v = (await traer("ventas","fecha,cliente_id,moneda,total,anulado",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   if (!CLIS.length) await cargarClientes();
+   const g = agrupar(v, x=>{ const c = CLIS.find(y=>y.id===x.cliente_id); return (c?nom(M.ori,c.origen_id):"")||"Sin dato"; });
+   const filas = [];
+   g.forEach(function(arr,k){
+     const o = M.ori.find(x=>x.nombre===k);
+     ["ARS","USD"].forEach(function(mon){
+       const s = arr.filter(x=>x.moneda===mon);
+       if (s.length) filas.push([k, mon, s.length, sum(s,x=>x.total), o?Number(o.costo_mensual||0):0]);
+     });
+   });
+   filas.sort((a,b)=>b[3]-a[3]);
+   return {cols:[{t:"Cómo nos conoció"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Vendido",tipo:"m"},{t:"Costo mensual",tipo:"n"}], filas:filas};
+ }},
+
+{id:"origen_clientes", t:"¿Cómo nos conocieron? (Clientes)", g:"Comercial", perm:"reporte-origen",
+ ay:"Lo mismo pero contando clientes en vez de plata. Sirve para ver qué campaña trae volumen aunque después no compre.",
+ run: async function(f){
+   if (!CLIS.length) await cargarClientes();
+   const c = CLIS.filter(x=>entre((x.creado_en||"").slice(0,10) || "1900-01-01", f));
+   const g = agrupar(c, x=>nom(M.ori,x.origen_id)||"Sin dato");
+   const filas = []; g.forEach((arr,k)=>filas.push([k, arr.length]));
+   filas.sort((a,b)=>b[1]-a[1]);
+   return {cols:[{t:"Cómo nos conoció"},{t:"Clientes",tipo:"n"}], filas:filas,
+     nota:"Cuenta por la fecha en que se cargó el cliente."};
+ }},
+
+{id:"localidad", t:"Localidad", g:"Comercial", perm:"reporte-localidad",
+ ay:"Dónde está la venta. Es el reporte que decide si conviene mandar la cuadrilla a una zona o cobrar flete distinto.",
+ run: async function(f){
+   const v = (await traer("ventas","fecha,cliente_id,moneda,total,anulado",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   if (!CLIS.length) await cargarClientes();
+   const g = agrupar(v, x=>{ const c = CLIS.find(y=>y.id===x.cliente_id); return (c?nom(M.loc,c.localidad_id):"")||"Sin localidad"; });
+   const filas = [];
+   g.forEach(function(arr,k){ ["ARS","USD"].forEach(function(mon){
+     const s = arr.filter(x=>x.moneda===mon);
+     if (s.length) filas.push([k, mon, s.length, sum(s,x=>x.total)]);
+   }); });
+   filas.sort((a,b)=>b[3]-a[3]);
+   return {cols:[{t:"Localidad"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Vendido",tipo:"m"}], filas:filas};
+ }},
+
+/* ── Productos ── */
+{id:"productos_venta", t:"Productos", g:"Productos", perm:"reporte-ventas",
+ ay:"Qué se vendió y cuánto, ordenado por lo que más facturó. El primer reporte que hay que mirar antes de armar un embarque.",
+ run: async function(f){
+   const v = (await traer("ventas","id,fecha,moneda,anulado",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   if (!v.length) return {cols:[{t:"Producto"}], filas:[]};
+   const mon = {}; v.forEach(x=>mon[x.id]=x.moneda);
+   const it = await sb.from("venta_items").select("*").in("venta_id", v.map(x=>x.id)).limit(5000);
+   if (it.error) throw new Error(it.error.message);
+   const g = agrupar((it.data||[]).filter(x=>!x.es_adicional), x=>(x.producto_id||("libre:"+x.descripcion))+"|"+mon[x.venta_id]);
+   const filas = [];
+   g.forEach(function(arr,k){
+     const mo = k.split("|").pop();
+     const p = arr[0];
+     filas.push([p.producto_id?nomProd(p.producto_id):(p.descripcion||"—"), tipoDeProd(p.producto_id), mo,
+       sum(arr,x=>x.cantidad), p.unidad||"",
+       sum(arr,x=>Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100))]);
+   });
+   filas.sort((a,b)=>b[5]-a[5]);
+   return {cols:[{t:"Producto"},{t:"Tipo"},{t:"Moneda"},{t:"Cantidad",tipo:"n"},{t:"Unidad"},{t:"Facturado",tipo:"m"}], filas:filas};
+ }},
+
+{id:"productos_tipo_venta", t:"Productos por tipo (Venta)", g:"Productos", perm:"reporte-ventas",
+ ay:"Lo mismo agrupado por familia: deck, panel, zócalo, accesorio. Sirve para ver el peso de cada línea sin perderse en los códigos.",
+ run: async function(f){
+   const base = await REPORTES.find(r=>r.id==="productos_venta").run(f);
+   const g = agrupar(base.filas, r=>r[1]+"|"+r[2]);
+   const filas = [];
+   g.forEach(function(arr,k){ const [tipo,mo] = k.split("|");
+     filas.push([tipo, mo, arr.length, sum(arr,r=>r[3]), sum(arr,r=>r[5])]); });
+   filas.sort((a,b)=>b[4]-a[4]);
+   return {cols:[{t:"Tipo de producto"},{t:"Moneda"},{t:"Productos distintos",tipo:"n"},{t:"Cantidad",tipo:"n"},{t:"Facturado",tipo:"m"}], filas:filas};
+ }},
+
+{id:"utilidades", t:"Utilidades", g:"Productos", perm:"reporte-utilidades",
+ ay:"Lo que quedó. Compara lo facturado contra el costo cargado en cada producto. Ojo: el costo sale del campo «Costo USD» de la ficha del producto, así que el reporte vale lo que valga ese dato. Si está vacío, ese renglón no calcula margen.",
+ run: async function(f){
+   const base = await REPORTES.find(r=>r.id==="productos_venta").run(f);
+   const filas = base.filas.map(function(r){
+     const p = PRODS.find(x=>x.nombre===r[0]);
+     const costoU = p ? Number(p.costo_usd||0) : 0;
+     const cot = Number(cfg("cotizacion_usd",0))||0;
+     const costoUnit = r[2]==="USD" ? costoU : (cot ? costoU*cot : 0);
+     const costo = costoUnit * Number(r[3]||0);
+     const fact = Number(r[5]||0);
+     const margen = costo ? Math.round((fact-costo)/fact*1000)/10 : null;
+     return [r[0], r[2], r[3], fact, costo||null, costo?fact-costo:null, margen];
+   });
+   filas.sort((a,b)=>(b[5]||0)-(a[5]||0));
+   const sinCosto = filas.filter(r=>!r[4]).length;
+   return {cols:[{t:"Producto"},{t:"Moneda"},{t:"Cantidad",tipo:"n"},{t:"Facturado",tipo:"m"},
+     {t:"Costo",tipo:"m"},{t:"Utilidad",tipo:"m"},{t:"Margen %",tipo:"n"}], filas:filas,
+     nota: sinCosto ? (sinCosto+" producto(s) sin costo cargado, o sin cotización del dólar en Configuración: esos renglones no calculan margen.") : ""};
+ }},
+
+/* ── Compras e importaciones ── */
+{id:"compras", t:"Compras", g:"Compras", perm:"compra-consultar",
+ ay:"Las facturas de compra del período por proveedor.",
+ run: async function(f){
+   const fc = (await traer("facturas_compra","fecha,proveedor_id,tipo,punto_venta,nro_comprobante,moneda,neto,impuestos,total,anulado",f,"fecha"))
+     .filter(x=>!f.moneda||x.moneda===f.moneda);
+   if (!PROVS.length) await cargarProveedores();
+   return {cols:[{t:"Fecha",tipo:"f"},{t:"Proveedor"},{t:"Comprobante"},{t:"Moneda"},{t:"Neto",tipo:"m"},{t:"Impuestos",tipo:"m"},{t:"Total",tipo:"m"}],
+     filas: fc.sort((a,b)=>b.fecha<a.fecha?-1:1).map(x=>[x.fecha, (PROVS.find(p=>p.id===x.proveedor_id)||{}).nombre||"—",
+       (x.tipo||"")+" "+(x.punto_venta||"")+" "+(x.nro_comprobante||""), x.moneda, x.neto, x.impuestos, x.total, x.anulado]),
+     anuladaEn: 7};
+ }},
+
+{id:"compras_detalle", t:"Compras (Detalle)", g:"Compras", perm:"compra-consultar",
+ ay:"Renglón por renglón de cada factura de compra: a qué precio te vendió cada cosa cada proveedor.",
+ run: async function(f){
+   const fc = (await traer("facturas_compra","id,fecha,proveedor_id,nro_comprobante,moneda,anulado",f,"fecha")).filter(x=>!x.anulado);
+   if (!fc.length) return {cols:[{t:"Fecha"}], filas:[]};
+   if (!PROVS.length) await cargarProveedores();
+   const it = await sb.from("factura_items").select("*").in("factura_id", fc.map(x=>x.id)).limit(5000);
+   if (it.error) throw new Error(it.error.message);
+   const por = {}; fc.forEach(x=>por[x.id]=x);
+   return {cols:[{t:"Fecha",tipo:"f"},{t:"Proveedor"},{t:"Comprobante"},{t:"Producto"},{t:"Tipo"},{t:"Cantidad",tipo:"n"},{t:"Moneda"},{t:"Precio unit.",tipo:"m"},{t:"Subtotal",tipo:"m"}],
+     filas:(it.data||[]).map(function(y){ const c = por[y.factura_id]||{};
+       return [c.fecha, (PROVS.find(p=>p.id===c.proveedor_id)||{}).nombre||"—", c.nro_comprobante||"",
+         y.descripcion||nomProd(y.producto_id), tipoDeProd(y.producto_id), y.cantidad, c.moneda, y.precio_unit,
+         Number(y.cantidad||0)*Number(y.precio_unit||0)]; })};
+ }},
+
+{id:"prod_comprados", t:"Productos comprados", g:"Compras", perm:"compra-consultar",
+ ay:"Qué compraste y cuánto pagaste, agrupado por producto. Cruzado con «Productos» de ventas te dice qué te sobra y qué te falta traer.",
+ run: async function(f){
+   const base = await REPORTES.find(r=>r.id==="compras_detalle").run(f);
+   const g = agrupar(base.filas, r=>r[3]+"|"+r[6]);
+   const filas = [];
+   g.forEach(function(arr,k){ const parts = k.split("|");
+     const cant = sum(arr,r=>r[5]), tot = sum(arr,r=>r[8]);
+     filas.push([parts[0], arr[0][4], parts[1], cant, tot, cant?Math.round(tot/cant*100)/100:0]); });
+   filas.sort((a,b)=>b[4]-a[4]);
+   return {cols:[{t:"Producto"},{t:"Tipo"},{t:"Moneda"},{t:"Cantidad",tipo:"n"},{t:"Pagado",tipo:"m"},{t:"Precio promedio",tipo:"m"}], filas:filas};
+ }},
+
+{id:"prod_comprados_tipo", t:"Productos comprados por tipo", g:"Compras", perm:"compra-consultar",
+ ay:"Lo comprado agrupado por familia de producto.",
+ run: async function(f){
+   const base = await REPORTES.find(r=>r.id==="prod_comprados").run(f);
+   const g = agrupar(base.filas, r=>r[1]+"|"+r[2]);
+   const filas = [];
+   g.forEach(function(arr,k){ const p = k.split("|");
+     filas.push([p[0], p[1], arr.length, sum(arr,r=>r[3]), sum(arr,r=>r[4])]); });
+   filas.sort((a,b)=>b[4]-a[4]);
+   return {cols:[{t:"Tipo de producto"},{t:"Moneda"},{t:"Productos distintos",tipo:"n"},{t:"Cantidad",tipo:"n"},{t:"Pagado",tipo:"m"}], filas:filas};
+ }},
+
+{id:"pedidos", t:"Pedidos", g:"Compras", perm:"compra-consultar",
+ ay:"Las órdenes de compra: qué pediste, a quién, y qué falta que llegue.",
+ run: async function(f){
+   const oc = (await traer("ordenes_compra","id,codigo,fecha,fecha_recepcion,proveedor_id,moneda,total,estado,anulado",f,"fecha"))
+     .filter(x=>!f.moneda||x.moneda===f.moneda);
+   if (!PROVS.length) await cargarProveedores();
+   let pend = {};
+   if (oc.length){
+     const it = await sb.from("oc_items").select("orden_id,cantidad,recibido").in("orden_id", oc.map(x=>x.id)).limit(5000);
+     (it.data||[]).forEach(function(y){ pend[y.orden_id] = (pend[y.orden_id]||0) + Math.max(0, Number(y.cantidad||0)-Number(y.recibido||0)); });
+   }
+   return {cols:[{t:"Orden"},{t:"Fecha",tipo:"f"},{t:"Proveedor"},{t:"Estado"},{t:"Moneda"},{t:"Total",tipo:"m"},{t:"Falta recibir",tipo:"n"},{t:"Recibida el",tipo:"f"}],
+     filas: oc.sort((a,b)=>b.fecha<a.fecha?-1:1).map(x=>[x.codigo, x.fecha, (PROVS.find(p=>p.id===x.proveedor_id)||{}).nombre||"—",
+       x.anulado?"Anulada":x.estado, x.moneda, x.total, Math.round((pend[x.id]||0)*100)/100, x.fecha_recepcion||"", x.anulado]),
+     anuladaEn: 8};
+ }},
+
+{id:"import_producto", t:"Importaciones por producto", g:"Compras", perm:"compra-consultar",
+ ay:"Reemplaza al reporte de Producción de Pirka, que acá no aplica. Muestra el costo puesto en Bariloche de cada producto importado y el multiplicador sobre el precio de fábrica. Es el número que decide a qué precio se puede vender.",
+ run: async function(f){
+   const [r, e] = await Promise.all([
+     sb.from("v_landed").select("*").limit(2000),
+     sb.from("embarques").select("id,codigo,fecha_arribo").limit(500)
+   ]);
+   if (r.error) throw new Error("v_landed: "+r.error.message);
+   const cod = {}; (e.data||[]).forEach(x=>cod[x.id]=x.codigo);
+   const filas = (r.data||[]).map(x=>[cod[x.embarque_id]||("Embarque #"+x.embarque_id), x.descripcion||nomProd(x.producto_id),
+     tipoDeProd(x.producto_id), x.cantidad, x.precio_fob_unit, x.landed_unit_usd, x.multiplicador]);
+   filas.sort((a,b)=>(b[6]||0)-(a[6]||0));
+   return {cols:[{t:"Embarque"},{t:"Producto"},{t:"Tipo"},{t:"Cantidad",tipo:"n"},{t:"FOB unit. USD",tipo:"n"},
+     {t:"Puesto acá USD",tipo:"n"},{t:"Multiplicador",tipo:"n"}], filas:filas,
+     nota:"Ordenado por multiplicador, de peor a mejor. Los de arriba son los que más encarece el flete: revisá que el precio de venta los banque."};
+ }},
+
+{id:"import_tipo", t:"Importaciones por tipo", g:"Compras", perm:"compra-consultar",
+ ay:"El costo puesto acá agrupado por familia de producto.",
+ run: async function(f){
+   const base = await REPORTES.find(r=>r.id==="import_producto").run(f);
+   const g = agrupar(base.filas, r=>r[2]);
+   const filas = [];
+   g.forEach(function(arr,k){
+     const fob = sum(arr,r=>Number(r[4]||0)*Number(r[3]||0));
+     const land = sum(arr,r=>Number(r[5]||0)*Number(r[3]||0));
+     filas.push([k, arr.length, sum(arr,r=>r[3]), fob, land, fob?Math.round(land/fob*100)/100:null]);
+   });
+   filas.sort((a,b)=>(b[5]||0)-(a[5]||0));
+   return {cols:[{t:"Tipo de producto"},{t:"Productos",tipo:"n"},{t:"Cantidad",tipo:"n"},
+     {t:"FOB total USD",tipo:"n"},{t:"Puesto acá USD",tipo:"n"},{t:"Multiplicador",tipo:"n"}], filas:filas};
+ }},
+
+/* ── Finanzas ── */
+{id:"ingresos", t:"Ingresos", g:"Finanzas", perm:"finanzas-consultar",
+ ay:"Toda la plata que entró de clientes en el período, agrupada por concepto de cobranza.",
+ run: async function(f){
+   const c = (await traer("cobranzas","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const g = agrupar(c, x=>(nom(M.cco,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
+   const filas = [];
+   g.forEach(function(arr,k){ const p = k.split("|");
+     filas.push([p[0], p[1], arr.length, sum(arr,x=>x.importe)]); });
+   filas.sort((a,b)=>b[3]-a[3]);
+   return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Cobranzas",tipo:"n"},{t:"Total",tipo:"m"}], filas:filas};
+ }},
+
+{id:"egresos", t:"Egresos", g:"Finanzas", perm:"finanzas-consultar",
+ ay:"Todos los gastos del período por concepto. Es el reporte para ver en qué se va la plata.",
+ run: async function(f){
+   const gs = (await traer("gastos","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const g = agrupar(gs, x=>(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
+   const filas = [];
+   g.forEach(function(arr,k){ const p = k.split("|");
+     filas.push([p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]); });
+   filas.sort((a,b)=>b[5]-a[5]);
+   return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
+ }},
+
+/* ── Depósito ── */
+{id:"remitos", t:"Remitos de entregas", g:"Depósito", perm:"reporte-ventas",
+ ay:"Las entregas hechas en el período.",
+ run: async function(f){
+   const r = await traer("remitos","id,codigo,fecha,cliente_id,venta_id,direccion,anulado",f,"fecha");
+   if (!CLIS.length) await cargarClientes();
+   let peso = {};
+   if (r.length){
+     const it = await sb.from("remito_items").select("remito_id,cantidad,peso").in("remito_id", r.map(x=>x.id)).limit(5000);
+     (it.data||[]).forEach(y=>{ peso[y.remito_id] = (peso[y.remito_id]||0) + Number(y.peso||0); });
+   }
+   return {cols:[{t:"Remito"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Dirección"},{t:"Peso kg",tipo:"n"}],
+     filas: r.sort((a,b)=>b.fecha<a.fecha?-1:1).map(x=>[x.codigo, x.fecha,
+       (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—", x.direccion||"", Math.round((peso[x.id]||0)*100)/100, x.anulado]),
+     anuladaEn: 5};
+ }},
+
+{id:"remitos_det", t:"Remitos de entregas Detallado", g:"Depósito", perm:"reporte-ventas",
+ ay:"Qué se entregó exactamente en cada remito. Sirve para responder un reclamo de «esto no me llegó».",
+ run: async function(f){
+   const r = (await traer("remitos","id,codigo,fecha,cliente_id,direccion,anulado",f,"fecha")).filter(x=>!x.anulado);
+   if (!r.length) return {cols:[{t:"Remito"}], filas:[]};
+   if (!CLIS.length) await cargarClientes();
+   const it = await sb.from("remito_items").select("*").in("remito_id", r.map(x=>x.id)).limit(5000);
+   if (it.error) throw new Error(it.error.message);
+   const por = {}; r.forEach(x=>por[x.id]=x);
+   return {cols:[{t:"Remito"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Producto"},{t:"Cantidad",tipo:"n"},{t:"Peso kg",tipo:"n"}],
+     filas:(it.data||[]).map(function(y){ const c = por[y.remito_id]||{};
+       return [c.codigo, c.fecha, (CLIS.find(x=>x.id===c.cliente_id)||{}).nombre||"—",
+         y.descripcion||nomProd(y.producto_id), y.cantidad, y.peso]; })};
+ }},
+
+{id:"planificadas", t:"Entregas e instalaciones Planificadas", g:"Depósito", perm:"stock-consultar",
+ ay:"La semana del depósito y de la cuadrilla: qué hay que entregar e instalar, y en qué orden. Toma las fechas cargadas en cada venta. Si el rango de fechas queda vacío, muestra de hoy en adelante.",
+ run: async function(f){
+   const desde = f.desde || hoy();
+   let q = sb.from("ventas").select("codigo,cliente_id,fecha_entrega,horario_entrega,fecha_instalacion,instalador_id,estado,anulado,total,moneda")
+     .or("fecha_entrega.gte."+desde+",fecha_instalacion.gte."+desde).limit(2000);
+   const r = await q;
+   if (r.error) throw new Error(r.error.message);
+   if (!CLIS.length) await cargarClientes();
+   const rows = (r.data||[]).filter(x=>!x.anulado)
+     .filter(x=>!f.hasta || (x.fecha_entrega||"")<=f.hasta || (x.fecha_instalacion||"")<=f.hasta);
+   rows.sort((a,b)=>((a.fecha_entrega||a.fecha_instalacion||"9999")<(b.fecha_entrega||b.fecha_instalacion||"9999")?-1:1));
+   return {cols:[{t:"Venta"},{t:"Cliente"},{t:"Entrega",tipo:"f"},{t:"Horario"},{t:"Instalación",tipo:"f"},{t:"Instalador"},{t:"Estado"}],
+     filas: rows.map(x=>[x.codigo, (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—",
+       x.fecha_entrega||"", x.horario_entrega||"", x.fecha_instalacion||"",
+       nom(M.ins||[], x.instalador_id)||nomP(x.instalador_id)||"", x.estado])};
+ }}
+];
+
+VISTAS.reportes = async function(){
+  const mios = REPORTES.filter(r=>!r.perm || P(r.perm));
+  if (!mios.length){
+    $("main").innerHTML = '<div class="panel"><h2>Reportes</h2><div class="muted">Tu rol no tiene ningún reporte habilitado.</div></div>';
+    return;
+  }
+  if (!FREP.id || !mios.find(r=>r.id===FREP.id)) FREP.id = mios[0].id;
+  const rep = mios.find(r=>r.id===FREP.id);
+  const grupos = [];
+  mios.forEach(r=>{ if (grupos.indexOf(r.g)<0) grupos.push(r.g); });
+  $("main").innerHTML =
+   '<div class="panel"><h2>Reportes</h2>'+
+   '<div class="desc">Todos toman el rango de fechas de arriba. Lo anulado nunca suma. Cualquiera se puede bajar a Excel con el botón de la derecha.</div>'+
+   '<div class="filtros">'+
+     '<div style="min-width:300px"><label>Reporte</label><select id="rp_id">'+
+       grupos.map(g=>'<optgroup label="'+esc(g)+'">'+
+         mios.filter(r=>r.g===g).map(r=>'<option value="'+r.id+'" '+(r.id===FREP.id?"selected":"")+'>'+esc(r.t)+'</option>').join("")+
+       '</optgroup>').join("")+'</select></div>'+
+     '<div><label>Desde</label><input type="date" id="rp_desde" value="'+esc(FREP.desde)+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="rp_hasta" value="'+esc(FREP.hasta)+'"></div>'+
+     '<div><label>Moneda</label><select id="rp_mon"><option value="">Las dos</option>'+
+       ["ARS","USD"].map(m=>'<option '+(FREP.moneda===m?"selected":"")+'>'+m+'</option>').join("")+'</select></div>'+
+     '<div style="min-width:auto"><button class="btn" id="rp_ver">Ver</button></div>'+
+     '<div style="min-width:auto"><button class="btn2" id="rp_mes">Este mes</button></div>'+
+     '<div style="min-width:auto"><button class="btn2" id="rp_anio">Este año</button></div>'+
+   '</div>'+
+   '<div class="muted" style="margin-bottom:6px">'+esc(rep.ay)+'</div>'+
+   '<div id="rp_out"><div class="muted">Cargando…</div></div></div>';
+  $("rp_id").onchange = function(){ FREP.id = this.value; VISTAS.reportes(); };
+  $("rp_ver").onclick = function(){ FREP.desde=$("rp_desde").value; FREP.hasta=$("rp_hasta").value; FREP.moneda=$("rp_mon").value; correrReporte(); };
+  $("rp_mes").onclick = function(){ const h=hoy(); FREP.desde=h.slice(0,8)+"01"; FREP.hasta=h; VISTAS.reportes(); };
+  $("rp_anio").onclick = function(){ const h=hoy(); FREP.desde=h.slice(0,4)+"-01-01"; FREP.hasta=h; VISTAS.reportes(); };
+  correrReporte();
+};
+
+let REP_DATOS = null;
+async function correrReporte(){
+  const rep = REPORTES.find(r=>r.id===FREP.id);
+  $("rp_out").innerHTML = '<div class="muted">Calculando…</div>';
+  let d;
+  try { d = await rep.run({desde:FREP.desde, hasta:FREP.hasta, moneda:FREP.moneda}); }
+  catch(e){ $("rp_out").innerHTML = '<div class="msg err">No pude armar el reporte: '+esc(e.message)+'</div>'; return; }
+  REP_DATOS = {rep:rep, d:d};
+  const iMon = d.cols.findIndex(c=>c.t==="Moneda");
+  const fmtCel = function(v, c, fila){
+    if (v==null || v==="") return "—";
+    if (c.tipo==="f") return fmtF(v);
+    if (c.tipo==="n") return fmtN(v);
+    if (c.tipo==="m") return fmtM(v, iMon>=0 ? fila[iMon] : "ARS");
+    return esc(String(v));
+  };
+  /* totales: por moneda, de cada columna de plata */
+  const totales = [];
+  d.cols.forEach(function(c,i){
+    if (c.tipo!=="m" && c.tipo!=="n") return;
+    const porMon = {};
+    d.filas.forEach(function(fila){
+      if (d.anuladaEn!=null && fila[d.anuladaEn]) return;
+      const mo = (c.tipo==="m" && iMon>=0) ? fila[iMon] : "";
+      porMon[mo] = (porMon[mo]||0) + Number(fila[i]||0);
+    });
+    Object.keys(porMon).forEach(function(mo){
+      if (!porMon[mo]) return;
+      totales.push({col:c.t, mon:mo, v:porMon[mo], tipo:c.tipo});
+    });
+  });
+  $("rp_out").innerHTML =
+    (d.nota? '<div class="muted" style="margin-bottom:8px"><b>Ojo:</b> '+esc(d.nota)+'</div>' : '')+
+    (d.filas.length
+      ? (totales.length? '<div class="kpis" style="margin-bottom:10px">'+
+          totales.filter(t=>t.tipo==="m").map(t=>'<div class="kpi"><div class="t">'+esc(t.col)+(t.mon?' '+esc(t.mon):'')+'</div>'+
+            '<div class="n">'+fmtM(t.v, t.mon||"ARS")+'</div></div>').join("")+'</div>' : '')+
+        '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+        d.cols.map(c=>'<th>'+esc(c.t)+'</th>').join("")+'</tr></thead><tbody>'+
+        d.filas.map(fila=>'<tr'+((d.anuladaEn!=null && fila[d.anuladaEn])?' style="opacity:.45;text-decoration:line-through"':'')+'>'+
+          d.cols.map((c,i)=>'<td'+((c.tipo==="n"||c.tipo==="m")?' style="text-align:right"':'')+'>'+fmtCel(fila[i],c,fila)+'</td>').join("")+
+          '</tr>').join("")+
+        '</tbody></table></div>'+
+        '<div class="muted" style="margin-top:8px">'+d.filas.length+' renglones</div>'+
+        '<div style="margin-top:8px"><button class="btn2" onclick="bajarReporte()">Bajar a Excel</button> '+
+        '<button class="btn2" onclick="imprimirReporte()">Imprimir o guardar PDF</button></div>'
+      : '<div class="muted">No hay nada en ese período.</div>');
+}
+
+function bajarReporte(){
+  const {rep, d} = REP_DATOS;
+  const esc2 = v => '"' + String(v==null?"":v).replace(/"/g,'""') + '"';
+  const lineas = [d.cols.map(c=>esc2(c.t)).join(";")];
+  d.filas.forEach(function(fila){
+    lineas.push(d.cols.map(function(c,i){
+      const v = fila[i];
+      if (c.tipo==="n" || c.tipo==="m") return String(v==null?"":v).replace(".",",");
+      return esc2(v);
+    }).join(";"));
+  });
+  const blob = new Blob(["﻿"+lineas.join("\r\n")], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "yaten-"+rep.id+"-"+hoy()+".csv";
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 3000);
+}
+
+function imprimirReporte(){
+  const {rep, d} = REP_DATOS;
+  const iMon = d.cols.findIndex(c=>c.t==="Moneda");
+  const cel = (v,c,fila) => (v==null||v==="") ? "" :
+    c.tipo==="f" ? fmtF(v) : c.tipo==="n" ? fmtN(v) : c.tipo==="m" ? fmtM(v, iMon>=0?fila[iMon]:"ARS") : esc(String(v));
+  const per = (FREP.desde||FREP.hasta) ? ("Del "+(FREP.desde?fmtF(FREP.desde):"principio")+" al "+(FREP.hasta?fmtF(FREP.hasta):"hoy")) : "Todo el historial";
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(rep.t)+'</title><style>'+
+   'body{font:12px Helvetica,Arial,sans-serif;color:#1b2426;margin:26px}'+
+   'h1{font-size:19px;color:#24393C;margin:0}.sub{color:#6b7679;font-size:11px;margin-bottom:14px}'+
+   'table{width:100%;border-collapse:collapse}th,td{padding:5px 6px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679;background:#f4f0ea}.r{text-align:right}'+
+   '</style></head><body>'+membrete(esc(rep.t)+" · "+per)+
+   '<table><thead><tr>'+d.cols.map(c=>'<th'+((c.tipo==="n"||c.tipo==="m")?' class="r"':'')+'>'+esc(c.t)+'</th>').join("")+'</tr></thead><tbody>'+
+   d.filas.map(fila=>'<tr>'+d.cols.map((c,i)=>'<td'+((c.tipo==="n"||c.tipo==="m")?' class="r"':'')+'>'+cel(fila[i],c,fila)+'</td>').join("")+'</tr>').join("")+
+   '</tbody></table><div class="sub" style="margin-top:10px">'+d.filas.length+' renglones · emitido el '+fmtF(hoy())+'</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w) return alert("El navegador bloqueó la ventana. Permití las ventanas emergentes para este sitio.");
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
 }
 
 /* ═══════════ PRESUPUESTOS ═══════════ */
