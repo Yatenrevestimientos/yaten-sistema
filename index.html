@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-20";
+const VERSION = "v2026.08.03-21";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -301,6 +301,13 @@ const SUBMENU = {
     {id:"cancelados", t:"Cancelados"},
     {id:"nuevo", t:"Nuevo", perm:"presupuesto-agregar"}
   ],
+  ventas: [
+    {id:"", t:"Historial"},
+    {id:"encurso", t:"En curso"},
+    {id:"cerradas", t:"Cerradas"},
+    {id:"pendientes", t:"Pendientes a cerrar"},
+    {id:"nueva", t:"Nueva", perm:"venta-agregar"}
+  ],
   provee: [
     {id:"", t:"Listado"},
     {id:"deuda", t:"Proveedores a los que debemos"},
@@ -331,6 +338,11 @@ function ir(v, sub){
       else if (v==="presup") abrirPresupuesto(null);
       else if (v==="provee") fichaProveedor(null);
     }, 350);
+    return;
+  }
+  if (SUBVISTA === "nueva"){
+    SUBVISTA = ""; pintarNav(); (VISTAS[v]||VISTAS.tablero)();
+    setTimeout(function(){ if (v==="ventas") formVentaNueva(null); }, 350);
     return;
   }
   pintarNav();
@@ -2031,12 +2043,20 @@ VISTAS.ventas = async function(){
   if (FVEN.desde) q = q.gte("fecha", FVEN.desde);
   if (FVEN.hasta) q = q.lte("fecha", FVEN.hasta);
   if (!FVEN.anulados) q = q.eq("anulado", false);
+  // el submenu manda: Historial / En curso / Cerradas / Pendientes a cerrar, como en Pirka
+  if (SUBVISTA === "encurso")    q = q.eq("estado","En curso");
+  else if (SUBVISTA === "cerradas")   q = q.eq("estado","Cerrada");
+  else if (SUBVISTA === "pendientes") q = q.eq("estado","Pendiente a cerrar");
   const {data,error} = await q;
   if (error){ $("main").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  // saldo por venta: lo que falta cobrar de cada una
+  const sv = await sb.from("v_saldos_venta").select("venta_id,saldo");
+  const saldoDe = {}; (sv.data||[]).forEach(x=>{ saldoDe[x.venta_id] = Number(x.saldo||0); });
   const nomCli = id => { const c = CLIS.find(x=>x.id===id); return c ? c.nombre : ("cliente #"+id); };
   const t = FVEN.texto.toLowerCase();
   const rows = (data||[]).filter(v => !t || ((v.codigo||"")+" "+nomCli(v.cliente_id)+" "+(v.observaciones||"")).toLowerCase().indexOf(t)>=0);
-  $("main").innerHTML = '<div class="panel"><h2>Ventas</h2>'+
+  const rotV = {encurso:"Ventas en curso", cerradas:"Ventas cerradas", pendientes:"Ventas pendientes a cerrar"}[SUBVISTA] || "Historial de ventas";
+  $("main").innerHTML = '<div class="panel"><h2>'+rotV+'</h2>'+
    '<div class="desc">Cada venta nace de un presupuesto pasado a «Vendido» y genera sola la deuda en la cuenta corriente del cliente. No se borra: se anula, y la anulación revierte la deuda.</div>'+
    '<div class="filtros">'+
      '<div><label>Desde</label><input type="date" id="vf_desde" value="'+FVEN.desde+'"></div>'+
@@ -2046,12 +2066,18 @@ VISTAS.ventas = async function(){
      '<div style="min-width:auto"><button class="btn" id="vf_btn">Filtrar</button></div>'+
      (P("venta-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formVentaNueva(null)">+ Venta nueva</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
-     ['Código','Fecha','Cliente','Neto','IVA','Total',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     rows.map(v=>'<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
+     ['Código','Fecha','Cliente','Entrega','Instalación','Total','Saldo','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(function(v){ const sal = saldoDe[v.id];
+       return '<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
        '<td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td><td>'+esc(nomCli(v.cliente_id))+'</td>'+
-       '<td>'+fmtM(v.neto,v.moneda)+'</td><td>'+fmtM(v.iva,v.moneda)+'</td><td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
-       '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
-     '</tbody></table></div>' : '<div class="muted">No hay ventas con esos filtros. La primera se genera pasando un presupuesto a estado «Vendido».</div>')+'</div>';
+       '<td>'+(v.fecha_entrega?fmtF(v.fecha_entrega):'<span class="muted">—</span>')+'</td>'+
+       '<td>'+(v.fecha_instalacion?fmtF(v.fecha_instalacion):'<span class="muted">—</span>')+'</td>'+
+       '<td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
+       '<td style="'+(sal>0?'color:#7a2415;font-weight:600':'color:#1d5b2c')+'">'+(sal==null?'—':(sal>0?fmtM(sal,v.moneda):'Pagada'))+'</td>'+
+       '<td>'+esc(v.estado)+'</td>'+
+       '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>';
+     }).join("")+
+     '</tbody></table></div>' : '<div class="muted">No hay ventas con esos filtros. La primera se genera pasando un presupuesto a estado «Vendido», o con «Nueva».</div>')+'</div>';
   $("vf_btn").onclick = function(){ FVEN={texto:$("vf_txt").value.trim(), desde:$("vf_desde").value, hasta:$("vf_hasta").value, anulados:$("vf_anul").value==="1"}; VISTAS.ventas(); };
 };
 async function fichaVenta(id){
@@ -2078,12 +2104,36 @@ async function fichaVenta(id){
      '<td>'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td><td>'+fmtM(x.precio_unit,ve.moneda)+'</td><td>'+fmtN(x.iva_pct)+'</td><td>'+fmtN(x.entregado)+' de '+fmtN(x.cantidad)+'</td></tr>').join("")+
    '</tbody></table></div>'+
    '<div class="muted" style="margin-top:6px">«Entregado» se va a completar solo con los remitos cuando exista el módulo de stock.</div>'+
+   '<div class="sec">Entrega e instalación</div>'+
+   '<div class="muted" style="margin-bottom:8px">De acá sale el reporte de entregas e instalaciones planificadas que usa el depósito y la cuadrilla.</div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Fecha de entrega</label><input type="date" id="ve_entrega" value="'+(ve.fecha_entrega||"")+'" '+(P("venta-agregar")?"":"disabled")+'></div>'+
+     '<div class="f"><label>Horario de entrega</label><input id="ve_horario" value="'+esc(ve.horario_entrega)+'" placeholder="9 a 12" '+(P("venta-agregar")?"":"disabled")+'></div>'+
+     '<div class="f"><label>Fecha de instalación</label><input type="date" id="ve_instalacion" value="'+(ve.fecha_instalacion||"")+'" '+(P("venta-agregar")?"":"disabled")+'></div>'+
+     '<div class="f"><label>Instalador</label><select id="ve_instalador" '+(P("venta-agregar")?"":"disabled")+'>'+selPer(EQUIPO.filter(x=>x.activo), ve.instalador_id)+'</select></div>'+
+     '<div class="f"><label>Colocador avisado</label><select id="ve_notificado" '+(P("venta-agregar")?"":"disabled")+'><option value="0" '+(ve.notificado_colocador?"":"selected")+'>No</option><option value="1" '+(ve.notificado_colocador?"selected":"")+'>Sí</option></select></div>'+
+     '<div class="f"><label>Estado de la venta</label><select id="ve_estado" '+(P("venta-cerrar")?"":"disabled")+'>'+selTxt(["En curso","Pendiente a cerrar","Cerrada"], ve.estado)+'</select></div>'+
+   '</div>'+
+   (P("venta-agregar")?'<div class="acciones" style="margin-bottom:6px"><button class="btn2 btn-sm" onclick="guardarEntrega('+ve.id+')">Guardar entrega, instalación y estado</button></div>':'')+
    '<div class="acciones">'+
      (ve.presupuesto_id?'<button class="btn2" onclick="abrirPresupuesto('+ve.presupuesto_id+')">Ver el presupuesto</button>':'')+
      (cli?'<button class="btn2" onclick="fichaCliente('+cli.id+')">Ver el cliente</button>':'')+
      (!ve.anulado && P("venta-anular")?'<button class="btn2" onclick="anularVenta('+ve.id+')">Anular venta</button>':'')+
    '</div>';
   try{ $("dlg").showModal(); }catch(e){}
+}
+async function guardarEntrega(id){
+  const est = $("ve_estado").value;
+  const o = {fecha_entrega:$("ve_entrega").value||null, horario_entrega:$("ve_horario").value||null,
+             fecha_instalacion:$("ve_instalacion").value||null,
+             instalador_id:$("ve_instalador").value||null,
+             notificado_colocador:$("ve_notificado").value==="1"};
+  const r = await sb.from("ventas").update(o).eq("id",id);
+  if (r.error){ $("vnmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  const e = await sb.rpc("cambiar_estado_venta",{p_id:id, p_estado:est});
+  if (e.error){ $("vnmsg").innerHTML='<div class="msg err">Se guardó la entrega, pero el estado no: '+esc(e.error.message)+'</div>'; return; }
+  $("vnmsg").innerHTML='<div class="msg ok">Guardado.</div>';
+  if (VISTA==="ventas") VISTAS.ventas();
 }
 async function anularVenta(id){
   const motivo = prompt("¿Por qué se anula esta venta? La deuda del cliente se revierte.");
@@ -2563,12 +2613,16 @@ async function formCobranza(cliId){
      '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="k_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concCobAgregar('+cliId+')">Agregar</button></div></div>'+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="k_obs" rows="2"></textarea></div>'+
-   '<div class="muted" id="k_nota">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
+   '<div class="sec">Imputar a ventas</div>'+
+   '<div class="muted" style="margin-bottom:8px">A qué ventas se aplica este cobro. Si dejás todo en cero, el cobro igual baja la deuda general del cliente.</div>'+
+   '<div id="k_ventas"><div class="muted">Cargando ventas…</div></div>'+
+   '<div class="muted" id="k_nota" style="margin-top:8px">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
    '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
   window._CTAS_COB = cuentas;
-  $("k_moneda").onchange = calcCobranza;
+  $("k_moneda").onchange = function(){ calcCobranza(); pintarVentasCobranza(cliId); };
   $("k_cuenta").onchange = calcCobranza;
   calcCobranza();
+  pintarVentasCobranza(cliId);
   $("k_guardar").onclick = async function(){
     const imp = Number($("k_importe").value||0);
     if (!(imp>0)){ $("cbmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
@@ -2576,14 +2630,40 @@ async function formCobranza(cliId){
     const tc = Number(($("k_tc")||{}).value||0);
     if (distinta && !(tc>0)){ $("cbmsg").innerHTML='<div class="msg err">La cuenta corriente y la cuenta de pago son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
     $("k_guardar").disabled = true;
+    const imputa = [];
+    (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0; if (v>0) imputa.push({venta_id:x.venta_id, importe:v}); });
     const {error} = await sb.rpc("registrar_cobranza", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:$("k_moneda").value,
       p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
+      p_imputaciones:imputa,
       p_importe_pago:Number(($("k_pago")||{}).value||0)||null, p_cotizacion:tc||null});
     $("k_guardar").disabled = false;
     if (error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarClientes();
     fichaCliente(cliId);
   };
+}
+/* tabla de imputacion a ventas, igual a la del pago a proveedores */
+async function pintarVentasCobranza(cliId){
+  const el = $("k_ventas"); if (!el) return;
+  const mon = ($("k_moneda")||{}).value || "ARS";
+  const r = await sb.from("v_saldos_venta").select("*").eq("cliente_id",cliId).eq("moneda",mon).order("fecha");
+  if (r.error){ el.innerHTML = '<div class="muted">No se pudo leer el saldo por venta.</div>'; return; }
+  const pend = (r.data||[]).filter(x=>Number(x.saldo) > 0.009);
+  window._VTAS_COB = pend;
+  el.innerHTML = !pend.length ? '<div class="muted">Este cliente no tiene ventas pendientes en '+mon+'.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th># Venta</th><th>Fecha</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th></tr></thead><tbody>'+
+   pend.map((x,k)=>'<tr><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+fmtM(x.total,x.moneda)+'</td>'+
+     '<td><b>'+fmtM(x.saldo,x.moneda)+'</b></td>'+
+     '<td><input type="number" step="0.01" style="width:130px" id="kv_'+k+'" oninput="calcImputadoCob()"></td></tr>').join("")+
+   '</tbody></table></div><div class="muted" id="k_imputado" style="margin-top:6px"></div>';
+}
+function calcImputadoCob(){
+  let s = 0;
+  (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); if(el) s += Number(el.value||0); });
+  const imp = Number(($("k_importe")||{}).value||0);
+  const el = $("k_imputado");
+  if (el) el.innerHTML = 'Imputado: <b>'+fmtM(s, ($("k_moneda")||{}).value||"ARS")+'</b>'+
+    (imp>0 && Math.abs(s-imp)>0.009 ? ' — <span style="color:#7a2415">no coincide con el importe del cobro</span>' : '');
 }
 /* el tipo de cuenta acota el desplegable, como en Pirka: primero Efectivo/Banco/Cheques y despues la cuenta */
 function filtrarCtasCobranza(){
