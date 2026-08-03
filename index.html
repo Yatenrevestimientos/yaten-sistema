@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-28";
+const VERSION = "v2026.08.03-29";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -305,8 +305,8 @@ const MENU = [
   {id:"nuevo",    t:"Nuevo prospecto", perm:"prospecto-agregar"},
   {id:"agenda",   t:"Agenda ATO",      perm:"visita-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
-  {id:"docs",     t:"Documentos",      perm:"cliente-consultar"},
-  {id:"tags",     t:"Tags",            perm:"maestra-consultar"},
+  {id:"docs",     t:"Documentos",      perm:"documento-consultar"},
+  {id:"tags",     t:"Tags",            perm:"documento-consultar"},
   {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
   {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
@@ -316,7 +316,7 @@ const MENU = [
   {id:"stock",    t:"Stock",           perm:"stock-consultar"},
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
-  {id:"leads",    t:"Leads",           perm:"prospecto-agregar"},
+  {id:"leads",    t:"Leads",           perm:"lead-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -378,7 +378,7 @@ const SUBMENU = {
   docs: [
     {id:"", t:"Catálogo"},
     {id:"listado", t:"Listado"},
-    {id:"nuevo", t:"Nuevo", perm:"cliente-modificar"}
+    {id:"nuevo", t:"Nuevo", perm:"documento-agregar"}
   ],
   config: [
     {id:"", t:"Roles"},
@@ -1266,7 +1266,7 @@ function previsualizarMembrete(){
 
 /* ── Roles: la matriz de permisos. Es la pantalla que decide qué ve cada uno. ── */
 async function configRoles(){
-  const puede = P("usuario-modificar");
+  const puede = P("rol-modificar");
   const [rr, pp, rp] = await Promise.all([
     sb.from("roles").select("id,nombre,descripcion,activo").order("id"),
     sb.from("permisos").select("codigo,modulo,verbo,descripcion").order("modulo").order("verbo"),
@@ -3272,7 +3272,7 @@ VISTAS.docs = async function(){
 
 /* Catálogo: lo que el vendedor abre delante del cliente. Grande, con imagen, sin tabla. */
 function pintarCatalogo(){
-  const puede = P("producto-modificar") || P("cliente-modificar");
+  const puede = P("documento-agregar");
   const t = FDOC.texto.toLowerCase();
   let rows = DOCS.filter(d => d.en_catalogo && !d.anulado && d.activo);
   if (FDOC.tag) rows = rows.filter(d => (DOCTAGS[d.id]||[]).indexOf(Number(FDOC.tag)) >= 0);
@@ -3313,7 +3313,7 @@ function iconoDoc(d){
 }
 
 function pintarDocsListado(){
-  const puede = P("producto-modificar") || P("cliente-modificar");
+  const puede = P("documento-agregar");
   const t = FDOC.texto.toLowerCase();
   let rows = DOCS.filter(d=>!d.anulado);
   if (FDOC.tag) rows = rows.filter(d => (DOCTAGS[d.id]||[]).indexOf(Number(FDOC.tag)) >= 0);
@@ -3350,8 +3350,8 @@ function pintarDocsListado(){
        '<td>'+(d.en_catalogo?'Sí':'—')+'</td>'+
        '<td>'+iconoDoc(d)+' '+esc(d.archivo_nombre||(d.enlace?"enlace":"—"))+'</td>'+
        '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="abrirDocumento('+d.id+')">Abrir</button>'+
-         (puede?' <button class="btn2 btn-sm" onclick="formDocumento('+d.id+')">Editar</button>'+
-                ' <button class="btn2 btn-sm" onclick="anularDocumento('+d.id+')">Anular</button>':'')+'</td></tr>').join("")+
+         (puede?' <button class="btn2 btn-sm" onclick="formDocumento('+d.id+')">Editar</button>':'')+
+         (P("documento-eliminar")?' <button class="btn2 btn-sm" onclick="anularDocumento('+d.id+')">Anular</button>':'')+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">'+(FDOC.texto||FDOC.tag||FDOC.ambito?'Ningún documento con ese filtro.':'Todavía no hay documentos cargados.')+'</div>')+
    '</div>';
   $("dl_btn").onclick = function(){ FDOC.texto=$("dl_txt").value.trim(); FDOC.tag=$("dl_tag").value; FDOC.ambito=$("dl_amb").value; VISTAS.docs(); };
@@ -3465,7 +3465,7 @@ async function anularDocumento(id){
 VISTAS.tags = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   if (!(await cargarDocs())) return $("main").innerHTML = '<div class="panel"><h2>Tags</h2><div class="msg err">Falta la tabla de tags en la base. Hay que correr la migración pendiente.</div></div>';
-  const puede = P("maestra-modificar");
+  const puede = P("documento-agregar");
   const cuantos = id => DOCS.filter(d=>!d.anulado && (DOCTAGS[d.id]||[]).indexOf(id)>=0).length;
   $("main").innerHTML = '<div class="panel"><h2>Tags</h2>'+
    '<div class="desc">Las etiquetas con las que clasificás los documentos. Un documento puede tener varios: un PDF puede ser a la vez «Ficha técnica» y «Deck». Es la forma de encontrar algo dentro de un año sin acordarte cómo se llamaba el archivo.</div>'+
@@ -3515,7 +3515,7 @@ async function cargarLeads(){
 VISTAS.leads = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   if (!(await cargarLeads())) return $("main").innerHTML = '<div class="panel"><h2>Leads</h2><div class="msg err">Falta la tabla de leads en la base. Hay que correr la migración pendiente.</div></div>';
-  const puede = P("prospecto-agregar");
+  const puede = P("lead-agregar") || P("lead-modificar");
   const t = FLEAD.texto.toLowerCase();
   let rows = LEADS.filter(l=>!l.anulado);
   if (FLEAD.estado) rows = rows.filter(l=>l.estado===FLEAD.estado);
@@ -3804,7 +3804,7 @@ function seccionDocsCli(c, docs){
        '<td>'+iconoDoc(d)+' '+esc(d.archivo_nombre||(d.enlace?"enlace":"—"))+'</td>'+
        '<td><button class="btn2 btn-sm" onclick="abrirDocumento('+d.id+')">Abrir</button></td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Este cliente no tiene documentos cargados.</div>')+
-   ((P("cliente-modificar"))?'<div style="margin-top:8px"><button class="btn2 btn-sm" onclick="formDocDeCliente('+c.id+')">+ Subir un documento de este cliente</button></div>':'');
+   ((P("documento-agregar"))?'<div style="margin-top:8px"><button class="btn2 btn-sm" onclick="formDocDeCliente('+c.id+')">+ Subir un documento de este cliente</button></div>':'');
 }
 async function formDocDeCliente(cliId){
   await formDocumento(null);
