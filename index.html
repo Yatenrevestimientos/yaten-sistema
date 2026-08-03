@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-23";
+const VERSION = "v2026.08.03-24";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -279,6 +279,7 @@ const MENU = [
   {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
   {id:"compras",  t:"Compras",         perm:"compra-consultar"},
+  {id:"stock",    t:"Stock",           perm:"stock-consultar"},
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
@@ -309,6 +310,11 @@ const SUBMENU = {
     {id:"cerradas", t:"Cerradas"},
     {id:"pendientes", t:"Pendientes a cerrar"},
     {id:"nueva", t:"Nueva", perm:"venta-agregar"}
+  ],
+  stock: [
+    {id:"", t:"Planeamiento"},
+    {id:"productos", t:"Productos"},
+    {id:"movimientos", t:"Modificaciones Productos"}
   ],
   gastos: [
     {id:"", t:"Listado"},
@@ -1421,6 +1427,119 @@ function imprimirPresupuesto(){
 }
 
 
+
+
+/* ═══════════ STOCK ═══════════ */
+let STK = [], MOTSTK = [], FSTK = "";
+async function cargarStock(){
+  const [v,m] = await Promise.all([
+    sb.from("v_stock").select("*").order("codigo"),
+    sb.from("motivos_stock").select("*").order("id")
+  ]);
+  STK = v.data||[]; MOTSTK = m.data||[];
+}
+VISTAS.stock = async function(){
+  $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  await cargarStock();
+  if (!TIPOSP.length) await cargarCatalogo();
+  if (SUBVISTA === "movimientos") return pintarMovStock();
+  const t = FSTK.toLowerCase();
+  const rows = STK.filter(x=>x.registra_stock && (!t || (x.codigo+" "+x.nombre+" "+nom(TIPOSP,x.tipo_id)+" "+(x.ubicacion||"")).toLowerCase().indexOf(t)>=0));
+  const disp = x => Number(x.stock||0) - Number(x.comprometido||0);
+  const falt = x => Math.max(Number(x.stock_minimo||0) - (disp(x) + Number(x.pend_recepcion||0)), 0);
+  if (SUBVISTA === "productos") return pintarStockProductos(rows, disp, falt);
+  // Planeamiento: agrupado por tipo de producto, como en Pirka
+  const grupos = {};
+  rows.forEach(function(x){ const k = x.tipo_id||0; grupos[k] = grupos[k]||{t:nom(TIPOSP,x.tipo_id)||"Sin tipo", stock:0, comp:0, pend:0, disp:0, falt:0};
+    grupos[k].stock += Number(x.stock||0); grupos[k].comp += Number(x.comprometido||0);
+    grupos[k].pend += Number(x.pend_recepcion||0); grupos[k].disp += disp(x); grupos[k].falt += falt(x); });
+  const gs = Object.keys(grupos).map(k=>grupos[k]);
+  $("main").innerHTML = '<div class="panel"><h2>Planeamiento de stock</h2>'+
+   '<div class="desc">Lo que hay, lo que ya está vendido y todavía no se entregó, y lo que viene en camino. <b>Comprometido</b> sale solo de las ventas abiertas; <b>pendiente de recepción</b>, de las órdenes de compra sin recibir.</div>'+
+   '<div class="sec">Por tipo de producto</div>'+
+   (gs.length? '<div class="tablewrap"><table><thead><tr>'+
+     ['Tipo de producto','Stock','Comprometido','Pend. recepción','Disponible','Faltante'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     gs.map(g=>'<tr><td><b>'+esc(g.t)+'</b></td><td>'+fmtN(g.stock)+'</td><td>'+fmtN(g.comp)+'</td><td>'+fmtN(g.pend)+'</td>'+
+       '<td style="'+(g.disp<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(g.disp)+'</td>'+
+       '<td style="'+(g.falt>0?'color:#7a2415;font-weight:600':'')+'">'+(g.falt>0?fmtN(g.falt):'—')+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Todavía no hay productos que registren stock.</div>')+
+   '<div class="sec">Por producto</div>'+
+   '<div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="st_txt" placeholder="código, nombre, tipo o ubicación" value="'+esc(FSTK)+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="st_btn">Buscar</button></div></div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Producto','Un.','Stock','Comprometido','Pend. recepción','Disponible','Mínimo','Faltante'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(x=>'<tr><td>'+esc(x.codigo)+'</td><td><b>'+esc(x.nombre)+'</b></td><td>'+esc(x.unidad)+'</td>'+
+       '<td>'+fmtN(x.stock)+'</td><td>'+fmtN(x.comprometido)+'</td><td>'+fmtN(x.pend_recepcion)+'</td>'+
+       '<td style="'+(disp(x)<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(disp(x))+'</td>'+
+       '<td>'+fmtN(x.stock_minimo)+'</td>'+
+       '<td style="'+(falt(x)>0?'color:#7a2415;font-weight:600':'')+'">'+(falt(x)>0?fmtN(falt(x)):'—')+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Sin productos con esa búsqueda.</div>')+
+   '</div>';
+  $("st_btn").onclick = function(){ FSTK = $("st_txt").value.trim(); VISTAS.stock(); };
+};
+function pintarStockProductos(rows, disp, falt){
+  const puede = P("stock-modificar");
+  $("main").innerHTML = '<div class="panel"><h2>Stock por producto</h2>'+
+   '<div class="desc">El stock no se escribe a mano: se ajusta con un motivo y queda el rastro de quién y por qué, igual que la plata.</div>'+
+   '<div id="stmsg"></div>'+
+   '<div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="st_txt" placeholder="código, nombre, tipo o ubicación" value="'+esc(FSTK)+'"></div>'+
+   '<div style="min-width:auto"><button class="btn" id="st_btn">Buscar</button></div></div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Producto','Ubicación','Stock','Comprometido','Disponible','Mínimo'].concat(puede?['Ajustar']:[]).map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     rows.map(x=>'<tr><td>'+esc(x.codigo)+'</td><td><b>'+esc(x.nombre)+'</b></td><td>'+esc(x.ubicacion)+'</td>'+
+       '<td><b>'+fmtN(x.stock)+'</b></td><td>'+fmtN(x.comprometido)+'</td>'+
+       '<td style="'+(disp(x)<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(disp(x))+'</td><td>'+fmtN(x.stock_minimo)+'</td>'+
+       (puede?'<td><button class="btn2 btn-sm" onclick="formAjusteStock('+x.producto_id+')">Ajustar</button></td>':'')+'</tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Sin productos con esa búsqueda.</div>')+
+   '</div>';
+  $("st_btn").onclick = function(){ FSTK = $("st_txt").value.trim(); VISTAS.stock(); };
+}
+function formAjusteStock(prodId){
+  const x = STK.find(y=>y.producto_id===prodId);
+  $("dtit").textContent = "Ajustar stock · " + (x?x.nombre:"");
+  $("dbody").innerHTML = '<div id="ajsmsg"></div>'+
+   '<div class="muted" style="margin-bottom:10px">Stock actual: <b>'+fmtN(x?x.stock:0)+' '+esc(x?x.unidad:"")+'</b>. Poné en positivo lo que entra y en negativo lo que sale. El sistema guarda el stock anterior, el posterior, el motivo y tu nombre.</div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Cantidad *</label><input type="number" step="0.01" id="as_cant" placeholder="10 o -3"></div>'+
+     '<div class="f"><label>Motivo *</label><select id="as_motivo">'+selOpts(MOTSTK,null)+'</select></div>'+
+     '<div class="f"><label>¿Falta el motivo?</label><div style="display:flex;gap:6px"><input id="as_mot_nuevo" placeholder="Motivo nuevo"><button class="btn2 btn-sm" onclick="motivoStockAgregar('+prodId+')">Agregar</button></div></div>'+
+   '</div>'+
+   '<div class="f"><label>Detalle</label><input id="as_detalle" placeholder="Qué pasó"></div>'+
+   '<div class="acciones"><button class="btn" onclick="guardarAjusteStock('+prodId+')">Registrar ajuste</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function motivoStockAgregar(prodId){
+  const n = $("as_mot_nuevo").value.trim(); if (!n) return;
+  const {error} = await sb.from("motivos_stock").insert({nombre:n, activo:true});
+  if (error){ $("ajsmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarStock(); formAjusteStock(prodId);
+}
+async function guardarAjusteStock(prodId){
+  const c = Number($("as_cant").value||0);
+  if (!c){ $("ajsmsg").innerHTML='<div class="msg err">Poné una cantidad distinta de cero.</div>'; return; }
+  const {error} = await sb.rpc("ajustar_stock",{p_producto:prodId, p_cantidad:c,
+    p_motivo:$("as_motivo").value?Number($("as_motivo").value):null, p_detalle:$("as_detalle").value||null});
+  if (error){ $("ajsmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  $("dlg").close(); VISTAS.stock();
+}
+async function pintarMovStock(){
+  const {data,error} = await sb.from("stock_movimientos").select("*").order("id",{ascending:false}).limit(400);
+  if (error){ $("main").innerHTML = '<div class="panel"><div class="msg err">'+esc(error.message)+'</div></div>'; return; }
+  const nomProd = id => { const p = STK.find(x=>x.producto_id===id); return p?p.nombre:("producto #"+id); };
+  const quien = id => { const p = EQUIPO.find(x=>x.id===id); return p?p.nombre:""; };
+  $("main").innerHTML = '<div class="panel"><h2>Modificaciones de stock</h2>'+
+   '<div class="desc">La auditoría del depósito: cada movimiento con el stock anterior, el posterior, quién lo hizo y por qué. No se borra ninguno.</div>'+
+   ((data||[]).length? '<div class="tablewrap" style="max-height:68dvh;overflow:auto"><table><thead><tr>'+
+     ['Fecha','Producto','Stock anterior','Cantidad','Stock posterior','Motivo','Detalle','Origen','Realizado por'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     data.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
+       '<td><b>'+esc(nomProd(x.producto_id))+'</b></td><td>'+fmtN(x.stock_anterior)+'</td>'+
+       '<td style="'+(Number(x.cantidad)<0?'color:#7a2415':'color:#1d5b2c')+';font-weight:600">'+(Number(x.cantidad)>0?'+':'')+fmtN(x.cantidad)+'</td>'+
+       '<td><b>'+fmtN(x.stock_posterior)+'</b></td><td>'+esc(nom(MOTSTK,x.motivo_id))+'</td>'+
+       '<td style="white-space:normal">'+esc(x.detalle)+'</td><td>'+esc(x.origen)+'</td><td>'+esc(quien(x.creado_por))+'</td></tr>').join("")+
+     '</tbody></table></div>' : '<div class="muted">Todavía no hay movimientos de stock.</div>')+
+   '</div>';
+}
 
 /* ═══════════ GASTOS (seccion propia, como en Pirka) ═══════════ */
 VISTAS.gastos = async function(){
