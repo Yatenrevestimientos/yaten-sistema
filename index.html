@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-31";
+const VERSION = "v2026.08.03-32";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -387,7 +387,8 @@ const SUBMENU = {
     {id:"usuarios", t:"Usuarios"},
     {id:"horarios", t:"Horarios"},
     {id:"generales", t:"Configuraciones generales"},
-    {id:"impresion", t:"Datos de impresión"}
+    {id:"impresion", t:"Datos de impresión"},
+    {id:"copia", t:"Copia de seguridad", perm:"rol-modificar"}
   ]
 };
 let SUBVISTA = "";
@@ -1200,6 +1201,7 @@ VISTAS.config = async function(){
   if (SUBVISTA === "horarios") return configHorarios();
   if (SUBVISTA === "generales")  return configClaves("generales");
   if (SUBVISTA === "impresion")  return configClaves("impresion");
+  if (SUBVISTA === "copia")      return VISTAS.copia();
   return configRoles();
 };
 
@@ -1323,6 +1325,105 @@ async function togglePermiso(rolId, codigo, on, el){
     : await sb.from("rol_permisos").delete().eq("rol_id",rolId).eq("permiso",codigo);
   if (r.error){ el.checked = !on; msg('<div class="msg err">'+esc(r.error.message)+'</div>'); return; }
   msg('<div class="msg ok">Guardado: '+esc(codigo)+(on?" activado":" desactivado")+'.</div>');
+}
+
+
+/* ═══════════ COPIA DE SEGURIDAD ═══════════
+   El plan Free de Supabase NO hace backups. Hasta que se pase a Pro, la copia
+   la baja el dueño a mano desde acá. No es un lujo: sin esto, si se pierde la
+   base se pierde todo, sin vuelta atrás. */
+
+const TABLAS_COPIA = ["asesores","bancos","canales_contacto","cc_movimientos","chequeras","cheques",
+"clientes","cobranza_imputaciones","cobranzas","conceptos_cobranza","conceptos_embarque","conceptos_gasto",
+"conceptos_ingreso","conceptos_pago","conceptos_transferencia","config","cuentas","documento_tags",
+"documentos","embarque_costos","embarque_items","embarques","factura_impuestos","factura_items",
+"facturas_compra","franjas_horarias","gastos","instaladores","leads","listas_precios","localidades",
+"motivos","motivos_anulacion","motivos_stock","movimientos_cuenta","nota_impuestos","notas_cliente",
+"notas_proveedor","objeciones","oc_items","ordenes_compra","origenes","pago_imputaciones","pagos_compra",
+"perfiles","permisos","precios_por_lista","presupuesto_adicionales","presupuesto_items","presupuestos",
+"productos","prospectos","proveedor_precios","proveedores","pv_movimientos","remito_items","remitos",
+"retiros","rol_permisos","roles","seguimientos","stock_movimientos","sucursales","tags","tipos_cliente",
+"tipos_cuenta","tipos_impuesto","tipos_nota","tipos_producto","transferencias","venta_items","ventas"];
+
+VISTAS.copia = async function(){
+  const puede = P("rol-modificar");
+  let hist = [];
+  if (puede){
+    const h = await sb.from("exportaciones").select("*").order("id",{ascending:false}).limit(20);
+    hist = h.data||[];
+  }
+  const ultima = hist[0];
+  const diasDesde = ultima ? Math.round((Date.now() - new Date(ultima.hecha_en).getTime())/86400000) : null;
+  $("main").innerHTML =
+   '<div class="panel"><h2>Copia de seguridad</h2>'+
+   '<div class="msg err"><b>El servicio de la base está en plan gratuito, y el plan gratuito no hace copias de seguridad.</b> '+
+   'Si mañana se pierde o se corrompe la base, no hay de dónde recuperarla: se pierde todo, sin vuelta atrás. '+
+   'La solución de fondo es pasar el proyecto a plan Pro, que hace una copia diaria y guarda 7 días. '+
+   'Mientras tanto, la copia la bajás vos desde acá.</div>'+
+   (!puede
+     ? '<div class="muted">Solo el dueño puede bajar la copia: es toda la base de clientes en un archivo.</div></div>'
+     : '<div class="desc">Baja un archivo con <b>todo</b> lo que hay cargado: clientes, presupuestos, ventas, cobranzas, compras, stock, importaciones y las tablas básicas. '+
+       'Guardalo en Drive o en un pendrive, no en la misma computadora donde trabajás. Si algún día hay que reconstruir, se reconstruye de acá.</div>'+
+       (ultima
+         ? '<div class="kpis" style="margin:10px 0"><div class="kpi" style="border-left-color:'+(diasDesde>7?'#7a2415':'#1d5b2c')+'">'+
+           '<div class="t">Última copia</div><div class="n">'+(diasDesde===0?'hoy':'hace '+diasDesde+' día'+(diasDesde===1?'':'s'))+'</div>'+
+           '<div class="muted">'+fmtF(ultima.hecha_en)+' · '+(ultima.filas||0)+' registros</div></div></div>'+
+           (diasDesde>7?'<div class="msg err">Pasó más de una semana desde la última copia. Bajá una ahora.</div>':'')
+         : '<div class="msg err">Todavía no se bajó ninguna copia.</div>')+
+       '<div id="cpmsg"></div>'+
+       '<div class="acciones"><button class="btn" id="cp_btn">Bajar la copia de seguridad ahora</button></div>'+
+       '<div class="muted" style="margin-top:6px">Puede tardar un rato si hay mucho cargado. No cierres la pestaña.</div>'+
+       (hist.length? '<div class="sec">Copias anteriores</div><div class="tablewrap"><table><thead><tr>'+
+          '<th>Fecha</th><th>Quién</th><th>Tablas</th><th>Registros</th></tr></thead><tbody>'+
+          hist.map(x=>'<tr><td>'+fmtF(x.hecha_en)+'</td><td>'+esc(nomP(x.hecha_por)||"—")+'</td>'+
+            '<td>'+(x.tablas||0)+'</td><td>'+(x.filas||0)+'</td></tr>').join("")+
+          '</tbody></table></div>':'')+
+       '</div>');
+  if (puede) $("cp_btn").onclick = bajarCopia;
+};
+
+async function bajarCopia(){
+  const btn = $("cp_btn"), msg = t => $("cpmsg").innerHTML = t;
+  btn.disabled = true;
+  const datos = {}, fallaron = [];
+  let filas = 0, hechas = 0;
+  for (const t of TABLAS_COPIA){
+    msg('<div class="msg ok">Copiando '+esc(t)+'… ('+(hechas+1)+' de '+TABLAS_COPIA.length+')</div>');
+    let todo = [], desde = 0;
+    for(;;){
+      const r = await sb.from(t).select("*").range(desde, desde+999);
+      if (r.error){ fallaron.push(t+": "+r.error.message); break; }
+      todo = todo.concat(r.data||[]);
+      if ((r.data||[]).length < 1000) break;
+      desde += 1000;
+    }
+    datos[t] = todo; filas += todo.length; hechas++;
+  }
+  const paquete = {
+    sistema: "Yaten Revestimientos",
+    version_app: VERSION,
+    fecha: new Date().toISOString(),
+    hecha_por: PERFIL.nombre,
+    aviso: "Copia completa de la base. Contiene datos personales de clientes: guardala en un lugar seguro y no la mandes por WhatsApp ni por mail sin cifrar.",
+    tablas_sin_copiar: fallaron,
+    datos: datos
+  };
+  const nombre = "yaten-copia-" + hoy() + ".json";
+  const blob = new Blob([JSON.stringify(paquete, null, 1)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+
+  await sb.from("exportaciones").insert({hecha_por:PERFIL.id, tipo:"Copia de seguridad",
+    tablas:hechas, filas:filas,
+    observaciones: fallaron.length ? ("No se pudieron copiar: "+fallaron.join(" | ")) : null});
+
+  btn.disabled = false;
+  msg('<div class="msg '+(fallaron.length?"err":"ok")+'"><b>Copia lista: '+esc(nombre)+'</b> · '+
+      hechas+' tablas · '+filas+' registros. Buscala en tus descargas y guardala afuera de esta computadora.'+
+      (fallaron.length? '<br>Ojo: no se pudieron copiar '+fallaron.length+' tablas ('+esc(fallaron.map(f=>f.split(":")[0]).join(", "))+'). Avisá.' : '')+
+      '</div>');
+  VISTAS.copia();
 }
 
 /* ═══════════ PRESUPUESTOS ═══════════ */
