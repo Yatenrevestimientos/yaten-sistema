@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-26";
+const VERSION = "v2026.08.03-27";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -911,7 +911,9 @@ function fichaProducto(id){
      '<div class="f"><label>Ancho cm</label><input type="number" step="0.1" id="q_ancho_cm" value="'+v("ancho_cm")+'" '+d+'></div>'+
      '<div class="f"><label>Espesor mm</label><input type="number" step="0.1" id="q_espesor_mm" value="'+v("espesor_mm")+'" '+d+'></div>'+
      '<div class="f"><label>Peso por caja kg</label><input type="number" step="0.01" id="q_peso_kg_caja" value="'+v("peso_kg_caja")+'" '+d+'></div>'+
+     '<div class="f"><label>m³ por caja <b>(clave para importar)</b></label><input type="number" step="0.0001" id="q_m3_por_caja" value="'+v("m3_por_caja")+'" placeholder="0,0125" '+d+'></div>'+
    '</div>'+
+   '<div class="muted" style="margin-top:-4px">El <b>m³ por caja</b> es el volumen de la caja cerrada. Es el dato que reparte el flete cuando importás en LCL, donde se paga por metro cúbico y no por peso. Pedíselo siempre a la fábrica junto con el peso y las piezas por caja: es el que más suelen omitir.</div>'+
    '<div class="sec">Precios e IVA</div><div class="grid">'+
      '<div class="f"><label>IVA %</label><input type="number" step="0.1" id="q_iva_pct" value="'+v("iva_pct",21)+'" '+dp+'></div>'+
      '<div class="f"><label>Precio ARS <span class="muted">sin instalación</span></label><input type="number" step="0.01" id="q_precio_ars" value="'+v("precio_ars",0)+'" '+dp+'></div>'+
@@ -945,8 +947,8 @@ async function tipoAgregar(){
   $("fpmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y seleccionado.</div>';
 }
 const CAMPOS_PROD = ["codigo","nombre","tipo_id","unidad","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja",
-  "iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","moneda_base","costo_usd","stock_minimo","observaciones"];
-const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","costo_usd","stock_minimo"];
+  "iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","moneda_base","costo_usd","stock_minimo","m3_por_caja","observaciones"];
+const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","costo_usd","stock_minimo","m3_por_caja"];
 async function guardarProducto(id){
   const o = {};
   CAMPOS_PROD.forEach(function(c){ const el=$("q_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PROD.indexOf(c)>=0) v=Number(v); o[c]=v; });
@@ -1679,7 +1681,7 @@ function pintarEmbItems(land){
    '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Producto</th><th style="min-width:130px">Descripción</th><th>Cantidad</th><th>FOB unit. US$</th><th>m³ por unidad</th><th>Peso kg</th><th>FOB total</th><th>Costos</th><th>Landed unit.</th><th>× FOB</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    EMB.items.map(function(y,k){ const L = land[y.id]||{};
      return '<tr>'+
-      '<td><select style="width:100%;min-width:220px" id="ei_'+k+'_producto_id" '+(puede?'':'disabled')+'>'+opts(y.producto_id)+'</select></td>'+
+      '<td><select style="width:100%;min-width:220px" id="ei_'+k+'_producto_id" onchange="embProducto('+k+')" '+(puede?'':'disabled')+'>'+opts(y.producto_id)+'</select></td>'+
       '<td><input id="ei_'+k+'_descripcion" value="'+esc(y.descripcion)+'" '+(puede?'':'disabled')+'></td>'+
       '<td><input type="number" step="0.01" style="width:90px" id="ei_'+k+'_cantidad" value="'+(y.cantidad||"")+'" '+(puede?'':'disabled')+'></td>'+
       '<td><input type="number" step="0.0001" style="width:100px" id="ei_'+k+'_precio_fob_unit" value="'+(y.precio_fob_unit||"")+'" '+(puede?'':'disabled')+'></td>'+
@@ -1691,7 +1693,7 @@ function pintarEmbItems(land){
       '<td>'+(L.multiplicador!=null?fmtN(L.multiplicador)+"×":"—")+'</td>'+
       (puede?'<td><button class="btn2 btn-sm" onclick="embItemQuitar('+k+')">Quitar</button></td>':'')+'</tr>';
    }).join("")+'</tbody></table></div>'+
-   '<div class="muted" style="margin-top:6px">El <b>m³ por unidad</b> es el dato que más falta hace y el que las fábricas más suelen omitir. Sin él, el flete se reparte por valor y el costo del producto voluminoso queda subestimado.</div>';
+   '<div class="muted" style="margin-top:6px">El <b>m³ por unidad</b> y el peso <b>salen solos de la ficha del producto</b> cuando lo elegís. Si en este embarque el proveedor cambió el packing, los podés pisar acá sin tocar el producto.<br>Sin el m³ el flete se reparte por valor, y el producto voluminoso queda con el costo subestimado: es el error clásico de la primera importación.</div>';
 }
 function pintarEmbCostos(){
   const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado";
@@ -1708,6 +1710,17 @@ function pintarEmbCostos(){
         ['valor','volumen','peso'].map(o=>'<option value="'+o+'" '+(y.prorrateo===o?"selected":"")+'>'+(o==="valor"?"Valor FOB":(o==="volumen"?"Metro cúbico":"Peso"))+'</option>').join("")+'</select></td>'+
       (puede?'<td><button class="btn2 btn-sm" onclick="embCostoQuitar('+k+')">Quitar</button></td>':'')+'</tr>';
    }).join("")+'</tbody></table></div>';
+}
+/* al elegir el producto, el m3 y el peso salen de la ficha del producto */
+function embProducto(k){
+  embSincro();
+  const y = EMB.items[k], p = PRODS.find(x=>String(x.id)===String(y.producto_id));
+  if (p){
+    y.descripcion = p.nombre;
+    if (p.m3_por_caja != null && p.m3_por_caja !== "") y.m3_unit = Number(p.m3_por_caja);
+    if (p.peso_kg_caja != null && p.peso_kg_caja !== "") y.peso_unit = Number(p.peso_kg_caja);
+  }
+  pintarEmbItems({});
 }
 function embConceptoElegido(k){
   embSincro();
