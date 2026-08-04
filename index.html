@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-34";
+const VERSION = "v2026.08.03-35";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -305,7 +305,7 @@ const MENU = [
   {id:"tablero",  t:"Tablero",         perm:"planilla-tablero"},
   {id:"planilla", t:"Planilla",        perm:"planilla-consultar"},
   {id:"nuevo",    t:"Nuevo prospecto", perm:"prospecto-agregar"},
-  {id:"agenda",   t:"Agenda ATO",      perm:"visita-consultar"},
+  {id:"agenda",   t:"Visitas",         perm:"visita-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
   {id:"docs",     t:"Documentos",      perm:"documento-consultar"},
   {id:"tags",     t:"Tags",            perm:"documento-consultar"},
@@ -320,6 +320,7 @@ const MENU = [
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
   {id:"leads",    t:"Leads",           perm:"lead-consultar"},
   {id:"reportes", t:"Reportes",        perm:"reporte-ventas"},
+  {id:"info",     t:"Información",     perm:"venta-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -403,6 +404,9 @@ const SUBMENU = {
     {id:"", t:"Catálogo"},
     {id:"listado", t:"Listado"},
     {id:"nuevo", t:"Nuevo", perm:"documento-agregar"}
+  ],
+  agenda: [
+    {id:"", t:"Listado"}
   ],
   config: [
     {id:"", t:"Roles"},
@@ -1456,6 +1460,152 @@ async function bajarCopia(){
   VISTAS.copia();
 }
 
+
+
+/* ═══════════ INFORMACIÓN ═══════════
+   Los tableros de resumen de Pirka: Finanzas · Ventas · Compras. Son solo lectura:
+   no se carga nada acá, se mira. Cada bloque dice de dónde sale el número. */
+
+let FINFO = "finanzas";
+
+VISTAS.info = async function(){
+  const puedeFin = P("finanzas-consultar"), puedeVen = P("venta-consultar"), puedeCom = P("compra-consultar");
+  const solapas = [];
+  if (puedeFin) solapas.push(["finanzas","Finanzas"]);
+  if (puedeVen) solapas.push(["ventas","Ventas"]);
+  if (puedeCom) solapas.push(["compras","Compras"]);
+  if (!solapas.length){
+    $("main").innerHTML = '<div class="panel"><h2>Información</h2><div class="muted">Tu rol no tiene ninguno de estos resúmenes habilitado.</div></div>';
+    return;
+  }
+  if (!solapas.find(s=>s[0]===FINFO)) FINFO = solapas[0][0];
+  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
+    '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
+    solapas.map(t=>'<button onclick="FINFO=\''+t[0]+'\';VISTAS.info()" style="border:0;border-radius:0;background:'+
+      (FINFO===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+
+      (FINFO===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
+    '</div><div id="ibody" style="padding:14px"><div class="muted">Calculando…</div></div></div>';
+  ({finanzas:infoFinanzas, ventas:infoVentas, compras:infoCompras}[FINFO])();
+};
+
+const kpi = (rot, val, pie, color) =>
+  '<div class="kpi"'+(color?' style="border-left-color:'+color+'"':'')+'><div class="t">'+esc(rot)+'</div>'+
+  '<div class="n">'+val+'</div>'+(pie?'<div class="muted">'+esc(pie)+'</div>':'')+'</div>';
+
+async function infoFinanzas(){
+  await cargarFin();
+  const [ccl, cpv, chq] = await Promise.all([
+    sb.from("v_saldos_cliente").select("*"),
+    sb.from("v_saldos_proveedor").select("*"),
+    sb.from("cheques").select("importe,moneda,estado,tipo,vencimiento,anulado")
+  ]);
+  const porMon = function(rows, campo, filtro){
+    const r = {ARS:0, USD:0};
+    (rows||[]).forEach(function(x){ if (filtro && !filtro(x)) return;
+      if (r[x.moneda] === undefined) return; r[x.moneda] += Number(x[campo]||0); });
+    return r;
+  };
+  const meDeben  = porMon(ccl.data, "saldo", x=>Number(x.saldo||0) > 0);
+  const aFavor   = porMon(ccl.data, "saldo", x=>Number(x.saldo||0) < 0);
+  const leDebo   = porMon(cpv.data, "saldo", x=>Number(x.saldo||0) > 0);
+  const cajas = {};
+  (CTAS||[]).filter(c=>c.activo).forEach(function(c){ cajas[c.moneda] = (cajas[c.moneda]||0) + Number(c.saldo||0); });
+  /* Campos reales de la tabla: tipo ("Terceros"/"Propios"), estado ("Disponible"),
+     vencimiento. Verificado contra cómo los lee la pantalla de Cheques. */
+  const ch = (chq.data||[]).filter(x=>!x.anulado);
+  const soloARS = x => (x.moneda||"ARS") === "ARS";
+  const enCartera = ch.filter(x=>x.tipo==="Terceros" && x.estado==="Disponible" && soloARS(x));
+  const propiosVivos = ch.filter(x=>x.tipo==="Propios" && x.estado==="Disponible" && soloARS(x));
+  const h = hoy();
+  const vencidos = enCartera.filter(x=>x.vencimiento && x.vencimiento < h);
+  const chqUSD = ch.filter(x=>(x.moneda||"ARS")!=="ARS" && x.estado==="Disponible");
+
+  $("ibody").innerHTML =
+   '<div class="desc">Foto del día. Nada de esto se carga acá: sale de las cuentas, de las cuentas corrientes y de los cheques.</div>'+
+   '<div class="sec">Lo que tenés</div><div class="kpis">'+
+     kpi("En cuentas ARS", fmtM(cajas.ARS||0,"ARS")||"$ 0", (CTAS||[]).filter(c=>c.activo&&c.moneda==="ARS").length+" cuentas", "#1d5b2c")+
+     kpi("En cuentas USD", fmtM(cajas.USD||0,"USD")||"US$ 0", (CTAS||[]).filter(c=>c.activo&&c.moneda==="USD").length+" cuentas", "#1d5b2c")+
+     kpi("Cheques en cartera", fmtM(enCartera.reduce((a,x)=>a+Number(x.importe||0),0),"ARS")||"$ 0", enCartera.length+" cheques")+
+   '</div>'+
+   '<div class="sec">Lo que te deben</div><div class="kpis">'+
+     kpi("Clientes me deben ARS", fmtM(meDeben.ARS,"ARS")||"$ 0", "", "#7a2415")+
+     kpi("Clientes me deben USD", fmtM(meDeben.USD,"USD")||"US$ 0", "", "#7a2415")+
+     kpi("Clientes con saldo a favor", fmtM(Math.abs(aFavor.ARS),"ARS")||"$ 0", "plata que ya cobraste y no aplicaste")+
+   '</div>'+
+   '<div class="sec">Lo que debés</div><div class="kpis">'+
+     kpi("A proveedores ARS", fmtM(leDebo.ARS,"ARS")||"$ 0", "", "#7a2415")+
+     kpi("A proveedores USD", fmtM(leDebo.USD,"USD")||"US$ 0", "", "#7a2415")+
+     kpi("Cheques propios a cubrir", fmtM(propiosVivos.reduce((a,x)=>a+Number(x.importe||0),0),"ARS")||"$ 0", propiosVivos.length+" cheques emitidos sin cobrar", "#7a2415")+
+   '</div>'+
+   (vencidos.length? '<div class="msg err" style="margin-top:10px"><b>'+vencidos.length+' cheque(s) en cartera ya vencidos</b> por '+
+      fmtM(vencidos.reduce((a,x)=>a+Number(x.importe||0),0),"ARS")+'. Están en Cheques → Cheques vencidos.</div>' : '')+
+   (chqUSD.length? '<div class="muted" style="margin-top:10px">Hay '+chqUSD.length+' cheque(s) en otra moneda que no se suman acá, para no mezclar. Están en Cheques.</div>' : '')+
+   '<div class="muted" style="margin-top:10px">Los totales de cheques son solo los que están en Disponible: los ya cobrados o entregados no cuentan.</div>';
+}
+
+async function infoVentas(){
+  if (!CLIS.length) await cargarClientes();
+  const h = hoy(), mes = h.slice(0,8)+"01", anio = h.slice(0,4)+"-01-01";
+  const [v, p, sv] = await Promise.all([
+    sb.from("ventas").select("fecha,moneda,total,estado,anulado").gte("fecha", anio).limit(5000),
+    sb.from("presupuestos").select("fecha,moneda,total,estado").gte("fecha", anio).limit(5000),
+    sb.from("v_saldos_venta").select("saldo,moneda,estado")
+  ]);
+  const vivas = (v.data||[]).filter(x=>!x.anulado);
+  const suma = (arr,m,desde) => arr.filter(x=>x.moneda===m && x.fecha>=desde).reduce((a,x)=>a+Number(x.total||0),0);
+  const cuenta = (arr,desde) => arr.filter(x=>x.fecha>=desde).length;
+  const pres = (p.data||[]).filter(x=>x.estado!=="Anulado");
+  const abiertos = pres.filter(x=>x.estado==="Abierto"||x.estado==="Enviado");
+  const vendidos = pres.filter(x=>x.estado==="Vendido");
+  const porCerrar = vivas.filter(x=>x.estado==="En curso"||x.estado==="Pendiente a cerrar");
+  const saldoAbierto = (sv.data||[]).filter(x=>Number(x.saldo||0)>0);
+
+  $("ibody").innerHTML =
+   '<div class="desc">Del 1° de enero a hoy. Los presupuestos anulados y las ventas anuladas no cuentan.</div>'+
+   '<div class="sec">Vendido</div><div class="kpis">'+
+     kpi("Este mes ARS", fmtM(suma(vivas,"ARS",mes),"ARS")||"$ 0", cuenta(vivas.filter(x=>x.moneda==="ARS"),mes)+" ventas")+
+     kpi("Este año ARS", fmtM(suma(vivas,"ARS",anio),"ARS")||"$ 0", cuenta(vivas.filter(x=>x.moneda==="ARS"),anio)+" ventas")+
+     kpi("Este año USD", fmtM(suma(vivas,"USD",anio),"USD")||"US$ 0", cuenta(vivas.filter(x=>x.moneda==="USD"),anio)+" ventas")+
+   '</div>'+
+   '<div class="sec">Presupuestos</div><div class="kpis">'+
+     kpi("Abiertos", String(abiertos.length), "esperando respuesta", abiertos.length?"#7a5415":"")+
+     kpi("Vendidos", String(vendidos.length), "pasaron a venta", "#1d5b2c")+
+     kpi("Efectividad", pres.length? (Math.round(vendidos.length/pres.length*1000)/10)+" %" : "—", "vendidos sobre el total")+
+   '</div>'+
+   '<div class="sec">Lo que falta cerrar</div><div class="kpis">'+
+     kpi("Ventas en curso", String(porCerrar.length), "entregadas o en proceso, sin cerrar", porCerrar.length?"#7a5415":"")+
+     kpi("Ventas con saldo", String(saldoAbierto.length), "todavía deben algo", saldoAbierto.length?"#7a2415":"")+
+   '</div>'+
+   (p.error||v.error? '<div class="msg err" style="margin-top:10px">Falta leer algo: '+esc((p.error||v.error).message)+'</div>':'');
+}
+
+async function infoCompras(){
+  if (!PROVS.length) await cargarProveedores();
+  const h = hoy(), anio = h.slice(0,4)+"-01-01";
+  const [oc, fc, pg, emb] = await Promise.all([
+    sb.from("ordenes_compra").select("fecha,moneda,total,estado,anulado").gte("fecha",anio).limit(3000),
+    sb.from("facturas_compra").select("fecha,moneda,total,anulado").gte("fecha",anio).limit(3000),
+    sb.from("pagos_compra").select("fecha,moneda,importe,anulado").gte("fecha",anio).limit(3000),
+    sb.from("embarques").select("codigo,estado,fecha_arribo,cotizacion_usd").limit(500)
+  ]);
+  const viv = a => (a||[]).filter(x=>!x.anulado);
+  const sm = (arr,m,c) => viv(arr).filter(x=>x.moneda===m).reduce((a,x)=>a+Number(x[c]||0),0);
+  const abiertas = viv(oc.data).filter(x=>x.estado!=="Recibida"&&x.estado!=="Cerrada");
+  const embEnCurso = (emb.data||[]).filter(x=>x.estado!=="Cerrado");
+  $("ibody").innerHTML =
+   '<div class="desc">Del 1° de enero a hoy. Lo anulado no cuenta.</div>'+
+   '<div class="sec">Comprado</div><div class="kpis">'+
+     kpi("Facturado ARS", fmtM(sm(fc.data,"ARS","total"),"ARS")||"$ 0", viv(fc.data).filter(x=>x.moneda==="ARS").length+" facturas")+
+     kpi("Facturado USD", fmtM(sm(fc.data,"USD","total"),"USD")||"US$ 0", viv(fc.data).filter(x=>x.moneda==="USD").length+" facturas")+
+     kpi("Pagado ARS", fmtM(sm(pg.data,"ARS","importe"),"ARS")||"$ 0", viv(pg.data).filter(x=>x.moneda==="ARS").length+" pagos", "#1d5b2c")+
+   '</div>'+
+   '<div class="sec">En curso</div><div class="kpis">'+
+     kpi("Órdenes abiertas", String(abiertas.length), "pedido que todavía no llegó", abiertas.length?"#7a5415":"")+
+     kpi("Embarques en curso", String(embEnCurso.length), embEnCurso.length? embEnCurso.map(x=>x.codigo).join(", ") : "ninguno navegando", embEnCurso.length?"#7a5415":"")+
+   '</div>'+
+   (embEnCurso.length? '<div class="muted" style="margin-top:8px">Los embarques en curso todavía no tienen el costo cerrado: el landed cost recién queda firme cuando se cierra el embarque con todos los gastos cargados.</div>':'')+
+   ((oc.error||fc.error||pg.error)? '<div class="msg err" style="margin-top:10px">Falta leer algo: '+esc((oc.error||fc.error||pg.error).message)+'</div>':'');
+}
 
 /* ═══════════ REPORTES ═══════════
    Los 24 de Pirka, menos los dos de Producción, que no existen en Yaten y se
