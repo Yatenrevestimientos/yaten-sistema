@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-35";
+const VERSION = "v2026.08.03-36";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5030,11 +5030,24 @@ async function finResumen(){
 function finCuentas(){
   const puede = P("cuenta-modificar");
   /* Si se entró por Banco, Caja Efectivo o Cheques, se muestran solo esas cuentas.
-     El filtro compara contra el nombre del tipo de cuenta, así que si se renombra
-     un tipo hay que renombrarlo igual acá o el listado sale vacío. */
+     El tipo de cuenta es una lista editable, así que el filtro acepta varias formas
+     de escribir lo mismo en vez de adivinar con la primera palabra. La primera
+     versión de esto cortaba en el primer espacio y hacía que «Cheques de terceros»
+     y «Cheques propios» se mezclaran: los dos empiezan con «cheques». */
+  const ALIAS_CTA = {
+    "Banco": ["banco","bancos","cuenta bancaria"],
+    "Caja Efectivo": ["caja / efectivo","caja/efectivo","caja efectivo","efectivo","caja","caja chica"],
+    "Cheques de terceros": ["cheques de terceros","cheque de terceros","terceros"],
+    "Cheques propios": ["cheques propios","cheque propio","propios"]
+  };
   const filtro = FIN.tipoCta || "";
+  const norm = t => (t||"").toLowerCase().replace(/\s+/g," ").trim();
   const CTASV = filtro
-    ? CTAS.filter(c => (nom(TCTAS, c.tipo_cuenta_id)||"").toLowerCase().indexOf(filtro.toLowerCase().split(" ")[0]) >= 0)
+    ? CTAS.filter(function(c){
+        const t = norm(nom(TCTAS, c.tipo_cuenta_id));
+        if (!t) return false;
+        return (ALIAS_CTA[filtro]||[norm(filtro)]).some(a => t === a || t.indexOf(a) >= 0);
+      })
     : CTAS;
   $("fbody").innerHTML =
    (filtro ? '<div class="panel"><h2>'+esc(filtro)+'</h2><div class="desc">Solo las cuentas de este tipo. '+
@@ -5047,7 +5060,11 @@ function finCuentas(){
        CTASV.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
          '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+(fmtM(c.saldo,c.moneda)||'—')+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")+
        '</tbody></table></div>'
-     : '<div class="msg err" style="line-height:1.5"><b>Todavía no creaste ninguna cuenta.</b><br>Hasta que exista al menos una, no vas a poder registrar cobranzas, gastos, transferencias ni retiros: el sistema no sabría de dónde sale o entra la plata.<br><br>Tocá <b>«+ Cuenta nueva»</b> acá arriba y creá por ejemplo «Caja Chica» en ARS. Al crearla podés cargarle el saldo con el que arranca.</div>')+
+     : (filtro
+        ? '<div class="muted" style="line-height:1.5">No hay ninguna cuenta de tipo <b>'+esc(filtro)+'</b>.'+
+          (CTAS.length? ' Sí hay '+CTAS.length+' cuenta(s) de otros tipos: mirálas en <b>Cuentas</b>.' : '')+
+          '<br>Si tenés una y no aparece acá, fijate el tipo que le pusiste: el filtro busca por el nombre del tipo de cuenta.</div>'
+        : '<div class="msg err" style="line-height:1.5"><b>Todavía no creaste ninguna cuenta.</b><br>Hasta que exista al menos una, no vas a poder registrar cobranzas, gastos, transferencias ni retiros: el sistema no sabría de dónde sale o entra la plata.<br><br>Tocá <b>«+ Cuenta nueva»</b> acá arriba y creá por ejemplo «Caja Chica» en ARS. Al crearla podés cargarle el saldo con el que arranca.</div>'))+
    '</div>'+
    '<div class="panel"><h2>Tipos de cuenta</h2><div class="desc">Esto <b>no</b> es plata: es solo la clasificación con la que se agrupan las cuentas en el resumen (caja, banco, fondo de inversión, Mercado Pago, tarjetas, cheques). Agregá los que necesites.</div>'+
    '<div id="tcmsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Orden</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
