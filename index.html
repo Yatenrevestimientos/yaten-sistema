@@ -149,7 +149,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-33";
+const VERSION = "v2026.08.03-34";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -335,7 +335,28 @@ const SUBMENU = {
     {id:"", t:"Listado"},
     {id:"morosos", t:"Clientes morosos"},
     {id:"afavor", t:"Clientes con saldo a favor"},
-    {id:"nuevo", t:"Nuevo", perm:"cliente-agregar"}
+    {id:"nuevo", t:"Nuevo", perm:"cliente-agregar"},
+    {id:"listas", t:"Listas de precios", perm:"producto-precio"}
+  ],
+  /* Pirka abre Finanzas por tipo de cuenta: Banco, Caja Efectivo y los cheques son
+     entradas de menú propias, además de Cuentas. */
+  finanzas: [
+    {id:"", t:"Resumen de Movimientos"},
+    {id:"banco", t:"Banco"},
+    {id:"efectivo", t:"Caja Efectivo"},
+    {id:"chterceros", t:"Cheques de terceros"},
+    {id:"chpropios", t:"Cheques propios"},
+    {id:"cuentas", t:"Cuentas"},
+    {id:"transf", t:"Transferencias"},
+    {id:"retiros", t:"Retirar dinero"}
+  ],
+  /* En Pirka son tres secciones separadas del menú. Acá viven en Compras, pero con
+     los mismos nombres y en la misma barra, para que se busquen en el mismo lugar. */
+  compras: [
+    {id:"", t:"Órdenes de Compra"},
+    {id:"facturas", t:"Facturas de Compras"},
+    {id:"notas", t:"Notas de crédito y débito"},
+    {id:"pagos", t:"Pagos de Compras"}
   ],
   presup: [
     {id:"", t:"Abiertos"},
@@ -933,13 +954,13 @@ async function listaAgregar(){
   if (!nombre){ $("lmsg2").innerHTML = '<div class="msg err">Poné un nombre.</div>'; return; }
   const {error} = await sb.from("listas_precios").insert({nombre:nombre, descripcion:$("nl_desc").value||null, ajuste_pct:Number($("nl_aj").value||0), activo:true});
   if (error){ $("lmsg2").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
-  await cargarCatalogo(); VISTAS.productos();
+  await cargarCatalogo(); (VISTAS[VISTA]||VISTAS.productos)();
 }
 async function listaGuardar(id){
   const {error} = await sb.from("listas_precios").update({nombre:$("el_"+id+"_nombre").value.trim(), descripcion:$("el_"+id+"_desc").value||null,
     ajuste_pct:Number($("el_"+id+"_aj").value||0), activo:$("el_"+id+"_act").value==="1"}).eq("id",id);
   if (error){ $("lmsg2").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
-  await cargarCatalogo(); VISTAS.productos();
+  await cargarCatalogo(); (VISTAS[VISTA]||VISTAS.productos)();
 }
 
 function fichaProducto(id){
@@ -1084,6 +1105,14 @@ const MAESTRAS = [
   {k:"tpr", extra:true, tabla:"tipos_producto", titulo:"Tipos de producto",
    ayuda:"La familia del producto: deck, panel, zócalo, accesorio. Los reportes de productos por tipo se arman con esto.",
    cols:[]},
+  {k:"ban", extra:true, tabla:"bancos", titulo:"Banco",
+   ayuda:"Los bancos con los que trabajás. Después cada cuenta y cada chequera se cuelga de uno.",
+   cols:[]},
+  {k:"caj", extra:true, tabla:"cajas", titulo:"Cajas",
+   ayuda:"El tipo de bulto en el que viene la mercadería: caja chica, caja grande, pallet, atado. En la importación define cuántas unidades entran por bulto y cuánto ocupa.",
+   cols:[{c:"unidades", t:"Unidades por caja", num:true, ph:"0"},
+         {c:"m3", t:"m³ por caja", num:true, ph:"0"},
+         {c:"peso_kg", t:"Peso kg", num:true, ph:"0"}]},
   /* Esta vive en Configuración > Horarios, igual que en Pirka */
   {k:"fho", extra:true, donde:"config", tabla:"franjas_horarias", titulo:"Horarios", orden:"desde",
    ayuda:"Las franjas en las que se agenda una visita, una entrega o una instalación. Poné las que uses de verdad: si nunca entregás después de las 18, no la cargues.",
@@ -1684,6 +1713,37 @@ const REPORTES = [
      filas.push([p[0], p[1], arr.length, sum(arr,r=>r[3]), sum(arr,r=>r[4])]); });
    filas.sort((a,b)=>b[4]-a[4]);
    return {cols:[{t:"Tipo de producto"},{t:"Moneda"},{t:"Productos distintos",tipo:"n"},{t:"Cantidad",tipo:"n"},{t:"Pagado",tipo:"m"}], filas:filas};
+ }},
+
+{id:"prod_tipo_compra", t:"Productos por tipo (Compra)", g:"Compras", perm:"compra-consultar",
+ ay:"Lo pedido en órdenes de compra, agrupado por familia de producto. Se diferencia de «Productos comprados por tipo» en que ese mira facturas —lo que ya te facturaron— y este mira las órdenes —lo que pediste, te haya llegado o no.",
+ run: async function(f){
+   const oc = (await traer("ordenes_compra","id,fecha,moneda,anulado",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   if (!oc.length) return {cols:[{t:"Tipo de producto"}], filas:[]};
+   const mon = {}; oc.forEach(x=>mon[x.id]=x.moneda);
+   const it = await sb.from("oc_items").select("*").in("orden_id", oc.map(x=>x.id)).limit(5000);
+   if (it.error) throw new Error(it.error.message);
+   const g = agrupar(it.data||[], y=>tipoDeProd(y.producto_id)+"|"+mon[y.orden_id]);
+   const filas = [];
+   g.forEach(function(arr,k){ const p = k.split("|");
+     filas.push([p[0], p[1], arr.length, sum(arr,y=>y.cantidad), sum(arr,y=>y.recibido),
+       sum(arr,y=>Number(y.cantidad||0)*Number(y.precio_unit||0))]); });
+   filas.sort((a,b)=>b[5]-a[5]);
+   return {cols:[{t:"Tipo de producto"},{t:"Moneda"},{t:"Renglones",tipo:"n"},{t:"Pedido",tipo:"n"},
+     {t:"Recibido",tipo:"n"},{t:"Importe",tipo:"m"}], filas:filas};
+ }},
+
+{id:"compras_det_tipo", t:"Compras (Detalle por tipo)", g:"Compras", perm:"compra-consultar",
+ ay:"Lo facturado por los proveedores, cruzando proveedor con familia de producto. Responde a quién le comprás cada línea.",
+ run: async function(f){
+   const base = await REPORTES.find(r=>r.id==="compras_detalle").run(f);
+   const g = agrupar(base.filas, r=>r[1]+"|"+r[4]+"|"+r[6]);
+   const filas = [];
+   g.forEach(function(arr,k){ const p = k.split("|");
+     filas.push([p[0], p[1], p[2], arr.length, sum(arr,r=>r[5]), sum(arr,r=>r[8])]); });
+   filas.sort((a,b)=>b[5]-a[5]);
+   return {cols:[{t:"Proveedor"},{t:"Tipo de producto"},{t:"Moneda"},{t:"Renglones",tipo:"n"},
+     {t:"Cantidad",tipo:"n"},{t:"Importe",tipo:"m"}], filas:filas};
  }},
 
 {id:"pedidos", t:"Pedidos", g:"Compras", perm:"compra-consultar",
@@ -3071,7 +3131,9 @@ VISTAS.compras = async function(){
   if (!PRODS.length) await cargarCatalogo();
   if (!CTAS.length) await cargarFin();
   if (!TIMP.length){ const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[]; }
-  const tabs = [["ordenes","Órdenes de compra"],["facturas","Facturas"],["notas","Notas de crédito y débito"],["pagos","Pagos"]];
+  const porSub = {"":"ordenes", facturas:"facturas", notas:"notas", pagos:"pagos"};
+  if (porSub[SUBVISTA] !== undefined) COM.tab = porSub[SUBVISTA];
+  const tabs = [["ordenes","Órdenes de Compra"],["facturas","Facturas de Compras"],["notas","Notas de crédito y débito"],["pagos","Pagos de Compras"]];
   $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
     '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
     tabs.map(t=>'<button onclick="COM.tab=\''+t[0]+'\';VISTAS.compras()" style="border:0;border-radius:0;background:'+(COM.tab===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+(COM.tab===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
@@ -4269,6 +4331,11 @@ let DIAS_MORA = null;   // null = todavía no se tocó, se toma el de Configurac
 
 VISTAS.clientes = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
+  if (SUBVISTA === "listas"){
+    if (!LISTAS.length) await cargarCatalogo();
+    $("main").innerHTML = bloqueListas();
+    return;
+  }
   await cargarClientes();
   const puede = P("cliente-agregar");
   if (SUBVISTA === "morosos") FDEUDA = true;
@@ -4710,7 +4777,7 @@ function formCredDeb(cliId){
 }
 
 /* ═══════════ FINANZAS ═══════════ */
-let FIN = {tab:"resumen", moneda:"ARS", desde:"", hasta:"", anulados:false, texto:""};
+let FIN = {tab:"resumen", tipoCta:"", moneda:"ARS", desde:"", hasta:"", anulados:false, texto:""};
 let CTAS = [], TCTAS = [], CGASTOS = [];
 
 async function cargarFin(){
@@ -4724,6 +4791,12 @@ async function cargarFin(){
 VISTAS.finanzas = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   await cargarFin();
+  /* el submenú de arriba (los nombres de Pirka) manda sobre la solapa interna */
+  const porSub = {"":"resumen", cuentas:"cuentas", transf:"transf", retiros:"retiros"};
+  const porTipo = {banco:"Banco", efectivo:"Caja Efectivo", chterceros:"Cheques de terceros", chpropios:"Cheques propios"};
+  if (porSub[SUBVISTA] !== undefined) FIN.tab = porSub[SUBVISTA];
+  else if (porTipo[SUBVISTA]){ FIN.tab = "cuentas"; FIN.tipoCta = porTipo[SUBVISTA]; }
+  if (!porTipo[SUBVISTA]) FIN.tipoCta = "";
   const tabs = [["resumen","Resumen"],["cuentas","Cuentas"],["movs","Movimientos"],["gastos","Gastos"],["transf","Transferencias"],["retiros","Retiros"]];
   $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
     '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
@@ -4806,12 +4879,22 @@ async function finResumen(){
 
 function finCuentas(){
   const puede = P("cuenta-modificar");
+  /* Si se entró por Banco, Caja Efectivo o Cheques, se muestran solo esas cuentas.
+     El filtro compara contra el nombre del tipo de cuenta, así que si se renombra
+     un tipo hay que renombrarlo igual acá o el listado sale vacío. */
+  const filtro = FIN.tipoCta || "";
+  const CTASV = filtro
+    ? CTAS.filter(c => (nom(TCTAS, c.tipo_cuenta_id)||"").toLowerCase().indexOf(filtro.toLowerCase().split(" ")[0]) >= 0)
+    : CTAS;
   $("fbody").innerHTML =
-   '<div class="panel"><h2>Cuentas de dinero</h2><div class="desc">Cada caja, banco o billetera real, con su moneda. Acá es donde entra y sale la plata. El saldo lo calcula el sistema con los movimientos, no se escribe a mano.</div>'+
+   (filtro ? '<div class="panel"><h2>'+esc(filtro)+'</h2><div class="desc">Solo las cuentas de este tipo. '+
+     (CTASV.length? '' : '<b>No hay ninguna cargada.</b> Se crean desde Cuentas, eligiendo el tipo «'+esc(filtro)+'».')+
+     '</div></div>' : '')+
+   '<div class="panel"><h2>'+(filtro?esc(filtro):'Cuentas de dinero')+'</h2><div class="desc">Cada caja, banco o billetera real, con su moneda. Acá es donde entra y sale la plata. El saldo lo calcula el sistema con los movimientos, no se escribe a mano.</div>'+
    '<div id="ctmsg"></div>'+(puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="fichaCuenta(null)">+ Cuenta nueva</button></div>':'')+
-   (CTAS.length
+   (CTASV.length
      ? '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Moneda</th><th>Tope</th><th>Saldo</th><th>Activa</th></tr></thead><tbody>'+
-       CTAS.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
+       CTASV.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
          '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+(fmtM(c.saldo,c.moneda)||'—')+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")+
        '</tbody></table></div>'
      : '<div class="msg err" style="line-height:1.5"><b>Todavía no creaste ninguna cuenta.</b><br>Hasta que exista al menos una, no vas a poder registrar cobranzas, gastos, transferencias ni retiros: el sistema no sabría de dónde sale o entra la plata.<br><br>Tocá <b>«+ Cuenta nueva»</b> acá arriba y creá por ejemplo «Caja Chica» en ARS. Al crearla podés cargarle el saldo con el que arranca.</div>')+
