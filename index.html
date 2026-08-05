@@ -193,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.04-40";
+const VERSION = "v2026.08.04-41";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -458,7 +458,8 @@ const SUBMENU = {
   /* Pirka abre Finanzas por tipo de cuenta: Banco, Caja Efectivo y los cheques son
      entradas de menú propias, además de Cuentas. */
   finanzas: [
-    {id:"", t:"Resumen de Movimientos"},
+    {id:"", t:"Estado financiero"},
+    {id:"movs", t:"Resumen de Movimientos"},
     {id:"banco", t:"Banco"},
     {id:"efectivo", t:"Caja Efectivo"},
     {id:"chterceros", t:"Cheques de terceros"},
@@ -523,6 +524,11 @@ const SUBMENU = {
   ],
   agenda: [
     {id:"", t:"Listado"}
+  ],
+  info: [
+    {id:"", t:"Finanzas"},
+    {id:"ventas", t:"Ventas"},
+    {id:"compras", t:"Compras"}
   ],
   config: [
     {id:"", t:"Roles"},
@@ -1618,13 +1624,11 @@ VISTAS.info = async function(){
     $("main").innerHTML = '<div class="panel"><h2>Información</h2><div class="muted">Tu rol no tiene ninguno de estos resúmenes habilitado.</div></div>';
     return;
   }
+  const porSub = {"":"finanzas", ventas:"ventas", compras:"compras"};
+  if (porSub[SUBVISTA]) FINFO = porSub[SUBVISTA];
   if (!solapas.find(s=>s[0]===FINFO)) FINFO = solapas[0][0];
-  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
-    '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
-    solapas.map(t=>'<button onclick="FINFO=\''+t[0]+'\';VISTAS.info()" style="border:0;border-radius:0;background:'+
-      (FINFO===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+
-      (FINFO===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
-    '</div><div id="ibody" style="padding:14px"><div class="muted">Calculando…</div></div></div>';
+  /* Sin barra de solapas: se navega desde el menú lateral */
+  $("main").innerHTML = '<div id="ibody"><div class="muted">Calculando…</div></div>';
   ({finanzas:infoFinanzas, ventas:infoVentas, compras:infoCompras}[FINFO])();
 };
 
@@ -3423,11 +3427,8 @@ VISTAS.compras = async function(){
   if (!TIMP.length){ const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[]; }
   const porSub = {"":"ordenes", facturas:"facturas", notas:"notas", pagos:"pagos"};
   if (porSub[SUBVISTA] !== undefined) COM.tab = porSub[SUBVISTA];
-  const tabs = [["ordenes","Órdenes de Compra"],["facturas","Facturas de Compras"],["notas","Notas de crédito y débito"],["pagos","Pagos de Compras"]];
-  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
-    '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
-    tabs.map(t=>'<button onclick="COM.tab=\''+t[0]+'\';VISTAS.compras()" style="border:0;border-radius:0;background:'+(COM.tab===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+(COM.tab===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
-    '</div><div id="cbody" style="padding:14px"><div class="muted">Cargando…</div></div></div>';
+  /* Sin barra de solapas: se navega solo desde el menú lateral */
+  $("main").innerHTML = '<div id="cbody"><div class="muted">Cargando…</div></div>';
   ({ordenes:comOrdenes, facturas:comFacturas, notas:comNotas, pagos:comPagos}[COM.tab]||comOrdenes)();
 };
 function filtrosCompra(id){
@@ -5082,16 +5083,13 @@ VISTAS.finanzas = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   await cargarFin();
   /* el submenú de arriba (los nombres de Pirka) manda sobre la solapa interna */
-  const porSub = {"":"resumen", cuentas:"cuentas", transf:"transf", retiros:"retiros"};
+  const porSub = {"":"resumen", movs:"movs", cuentas:"cuentas", transf:"transf", retiros:"retiros"};
   const porTipo = {banco:"Banco", efectivo:"Caja Efectivo", chterceros:"Cheques de terceros", chpropios:"Cheques propios"};
   if (porSub[SUBVISTA] !== undefined) FIN.tab = porSub[SUBVISTA];
   else if (porTipo[SUBVISTA]){ FIN.tab = "cuentas"; FIN.tipoCta = porTipo[SUBVISTA]; }
   if (!porTipo[SUBVISTA]) FIN.tipoCta = "";
-  const tabs = [["resumen","Resumen"],["cuentas","Cuentas"],["movs","Movimientos"],["gastos","Gastos"],["transf","Transferencias"],["retiros","Retiros"]];
-  $("main").innerHTML = '<div class="panel" style="padding:0;overflow:hidden">'+
-    '<div style="display:flex;gap:2px;background:#f4f0ea;border-bottom:1px solid var(--linea);overflow-x:auto">'+
-    tabs.map(t=>'<button onclick="FIN.tab=\''+t[0]+'\';VISTAS.finanzas()" style="border:0;border-radius:0;background:'+(FIN.tab===t[0]?'#fff':'transparent')+';padding:11px 16px;white-space:nowrap;border-bottom:3px solid '+(FIN.tab===t[0]?'var(--ocre)':'transparent')+'">'+t[1]+'</button>').join("")+
-    '</div></div><div id="fbody"></div>';
+  /* Sin barra de solapas: se navega solo desde el menú lateral, como en Pirka */
+  $("main").innerHTML = '<div id="fbody"></div>';
   ({resumen:finResumen, cuentas:finCuentas, movs:finMovs, gastos:finGastos, transf:finTransf, retiros:finRetiros}[FIN.tab]||finResumen)();
 };
 
