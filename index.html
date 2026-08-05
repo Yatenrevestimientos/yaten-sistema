@@ -193,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.04-42";
+const VERSION = "v2026.08.05-43";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1466,22 +1466,7 @@ async function configRoles(){
   const modulos = [];
   permisos.forEach(function(p){ if (modulos.indexOf(p.modulo)<0) modulos.push(p.modulo); });
 
-  const filaPerm = function(p){
-    return '<tr><td style="white-space:normal"><b>'+esc(p.verbo)+'</b>'+
-      (p.descripcion?'<div class="muted">'+esc(p.descripcion)+'</div>':'')+'</td>'+
-      roles.map(function(r){
-        const on = !!tiene[r.id+"|"+p.codigo];
-        return '<td style="text-align:center">'+(puede
-          ? '<input type="checkbox" '+(on?"checked":"")+' onchange="togglePermiso('+r.id+',\''+p.codigo+'\',this.checked,this)">'
-          : (on?"✓":"·"))+'</td>';
-      }).join("")+'</tr>';
-  };
-  const bloqueMod = function(mod){
-    return '<div class="sec">'+esc(mod)+'</div>'+
-      '<div class="tablewrap"><table><thead><tr><th>Puede…</th>'+
-      roles.map(r=>'<th style="text-align:center">'+esc(r.nombre)+'</th>').join("")+'</tr></thead><tbody>'+
-      permisos.filter(p=>p.modulo===mod).map(filaPerm).join("")+'</tbody></table></div>';
-  };
+  ROLESM = {roles:roles, permisos:permisos, tiene:tiene, modulos:modulos, puede:puede};
 
   $("main").innerHTML =
     '<div class="panel"><h2>Roles</h2>'+
@@ -1495,7 +1480,46 @@ async function configRoles(){
     '<div class="desc">'+(puede
       ? 'Tildá o destildá y se guarda solo. Cuidado con sacarle permisos a tu propio rol: te podés dejar afuera de una pantalla.'
       : 'Tu rol consulta esta matriz pero no la modifica.')+'</div>'+
-    modulos.map(bloqueMod).join("")+'</div>';
+    '<div class="filtros"><input id="rolbusca" placeholder="Buscar el permiso por lo que hace: proveedor, cobranza, comisión, stock…" '+
+      'style="min-width:340px;flex:1" oninput="pintarMatrizRoles()">'+
+      '<button class="btn-sm" onclick="$(\'rolbusca\').value=\'\';pintarMatrizRoles()">Ver todos</button></div>'+
+    '<div id="rolmatriz"></div></div>';
+  pintarMatrizRoles();
+}
+
+let ROLESM = null;
+function pintarMatrizRoles(){
+  if (!ROLESM) return;
+  const roles = ROLESM.roles, tiene = ROLESM.tiene, puede = ROLESM.puede;
+  const q = (($("rolbusca")||{}).value||"").trim().toLowerCase()
+             .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const limpio = t => (t||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  const entra = p => !q || limpio(p.codigo+" "+p.modulo+" "+p.verbo+" "+(p.descripcion||"")).indexOf(q) >= 0;
+  const permisos = ROLESM.permisos.filter(entra);
+
+  const filaPerm = function(p){
+    return '<tr><td style="white-space:normal"><b>'+esc(p.verbo)+'</b>'+
+      (p.descripcion?'<div class="muted">'+esc(p.descripcion)+'</div>':'')+'</td>'+
+      roles.map(function(r){
+        const on = !!tiene[r.id+"|"+p.codigo];
+        return '<td style="text-align:center">'+(puede
+          ? '<input type="checkbox" '+(on?"checked":"")+' onchange="togglePermiso('+r.id+',\''+p.codigo+'\',this.checked,this)">'
+          : (on?"✓":"·"))+'</td>';
+      }).join("")+'</tr>';
+  };
+  const bloqueMod = function(mod){
+    const filas = permisos.filter(p=>p.modulo===mod);
+    if (!filas.length) return "";
+    return '<div class="sec">'+esc(mod)+'</div>'+
+      '<div class="tablewrap"><table><thead><tr><th>Puede…</th>'+
+      roles.map(r=>'<th style="text-align:center">'+esc(r.nombre)+'</th>').join("")+'</tr></thead><tbody>'+
+      filas.map(filaPerm).join("")+'</tbody></table></div>';
+  };
+  const cuerpo = ROLESM.modulos.map(bloqueMod).join("");
+  $("rolmatriz").innerHTML = (q
+      ? '<div class="msg">'+permisos.length+' permiso'+(permisos.length===1?"":"s")+' con "'+esc(q)+'".</div>'
+      : "")+
+    (cuerpo || '<div class="msg">Ningún permiso coincide con lo que buscaste. Probá con una palabra más corta.</div>');
 }
 
 async function togglePermiso(rolId, codigo, on, el){
