@@ -99,12 +99,28 @@ dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
     <h1>Yaten Revestimientos</h1>
     <div class="sub">Sistema de gestión · acceso restringido</div>
     <div id="lmsg"></div>
-    <div class="f"><label>Correo</label><input id="lemail" type="email" autocomplete="username" placeholder="nombre@yaten.com.ar"></div>
+    <div class="f"><label>Usuario</label><input id="lemail" type="text" autocomplete="username" placeholder="rocio"></div>
     <div class="f"><label>Contraseña</label><input id="lpass" type="password" autocomplete="current-password" placeholder="········"></div>
     <button class="btn" style="width:100%" id="lbtn">Entrar</button>
-    <div style="margin-top:14px;text-align:center;display:flex;gap:8px;justify-content:center">
+    <div class="muted" style="margin-top:8px;text-align:center">Tu nombre de usuario. Si tenés correo propio cargado, también entrás con el correo.</div>
+    <div style="margin-top:14px;text-align:center;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
       <button class="btn2 btn-sm" id="lreg">Crear mi usuario</button>
       <button class="btn2 btn-sm" id="lrec">Olvidé la contraseña</button>
+    </div>
+    <!-- alta de usuario: se despliega acá abajo, sin ventanitas del navegador -->
+    <div id="lform" class="hide" style="margin-top:14px;border-top:1px solid var(--linea);padding-top:12px">
+      <div class="f"><label>Nombre de usuario</label><input id="ruser" placeholder="rocio"></div>
+      <div class="muted" style="margin-top:-4px;margin-bottom:8px">Con esto entrás. Sin espacios ni acentos: rocio, marcela, deposito.</div>
+      <div class="f"><label>Nombre y apellido</label><input id="rnom" placeholder="Rocío Pérez"></div>
+      <div class="muted" style="margin-top:-4px;margin-bottom:8px">Así te ve el resto del equipo en el sistema.</div>
+      <div class="f"><label>Correo (opcional)</label><input id="rmail" type="email" placeholder="dejalo vacío si no tenés uno propio"></div>
+      <div class="muted" style="margin-top:-4px;margin-bottom:8px">Solo sirve para recuperar la contraseña si te la olvidás. Si lo dejás vacío, la recupera administración.</div>
+      <div class="f"><label>Contraseña</label><input id="rpass" type="password" placeholder="12 caracteres o más"></div>
+      <div class="f"><label>Repetir contraseña</label><input id="rpass2" type="password" placeholder="otra vez"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn" id="rcrear" style="flex:1">Crear mi usuario</button>
+        <button class="btn2" id="rcancel">Cancelar</button>
+      </div>
     </div>
   </div>
 </div>
@@ -149,7 +165,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-36";
+const VERSION = "v2026.08.03-38";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -174,24 +190,76 @@ const VISITADA  = ["Sin Decision","Senado","Vendido","No Vendido"];
 /* ─────────── LOGIN ─────────── */
 function lmsg(t,k){ $("lmsg").innerHTML = t? '<div class="msg '+(k||'err')+'">'+esc(t)+'</div>' : ""; }
 
+/* ─── Entrar con nombre de usuario ───
+   Supabase autentica siempre contra un correo. Para que cada uno tenga su usuario
+   sin necesitar una casilla propia, al nombre de usuario se le pega un dominio
+   interno: "rocio" se guarda como "rocio@yaten.local". No es una casilla real y
+   nunca se le manda un mail; es solo la forma que tiene la base de identificarla.
+   Si la persona sí escribe un correo de verdad, se usa ese y además le sirve para
+   recuperar la contraseña sola. */
+const DOMINIO_INTERNO = "yaten.local";
+function aCorreo(entrada){
+  const v = (entrada||"").trim().toLowerCase();
+  if (!v) return "";
+  if (v.indexOf("@") >= 0) return v;
+  return normUsuario(v) + "@" + DOMINIO_INTERNO;
+}
+/* sin espacios ni acentos: "Rocío Pérez" -> "rocioperez" */
+function normUsuario(v){
+  return (v||"").trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9._-]/g,"");
+}
+
 $("lbtn").onclick = async () => {
+  const usuario = $("lemail").value.trim();
+  if (!usuario) return lmsg("Escribí tu usuario.");
   lmsg(""); $("lbtn").disabled = true; $("lbtn").textContent = "Entrando…";
-  const {error} = await sb.auth.signInWithPassword({email:$("lemail").value.trim(), password:$("lpass").value});
+  const {error} = await sb.auth.signInWithPassword({email:aCorreo(usuario), password:$("lpass").value});
   $("lbtn").disabled = false; $("lbtn").textContent = "Entrar";
-  if (error) lmsg(error.message === "Invalid login credentials" ? "Correo o contraseña incorrectos." : error.message);
+  if (error) lmsg(error.message === "Invalid login credentials" ? "Usuario o contraseña incorrectos." : error.message);
 };
-$("lreg").onclick = async () => {
-  const em = $("lemail").value.trim(), pw = $("lpass").value;
-  if (!em || pw.length < 12) return lmsg("Escribí el correo y una contraseña de 12 caracteres o más, después tocá Crear mi usuario.");
-  const nombre = prompt("Nombre y apellido para mostrar en el sistema:");
-  if (!nombre) return;
-  const {error} = await sb.auth.signUp({email:em, password:pw, options:{data:{nombre}}});
-  lmsg(error ? error.message : "Usuario creado. Todavía no podés entrar: administración tiene que activarte y asignarte el rol. Avisales.", error?"err":"ok");
+
+$("lreg").onclick = () => {
+  $("lform").classList.toggle("hide");
+  if (!$("lform").classList.contains("hide")){
+    lmsg("");
+    if ($("lemail").value.trim() && $("lemail").value.indexOf("@")<0) $("ruser").value = $("lemail").value.trim();
+    $("ruser").focus();
+  }
 };
+$("rcancel").onclick = () => { $("lform").classList.add("hide"); lmsg(""); };
+
+$("rcrear").onclick = async () => {
+  const usuario = normUsuario($("ruser").value);
+  const nombre  = $("rnom").value.trim();
+  const correo  = $("rmail").value.trim();
+  const pw = $("rpass").value, pw2 = $("rpass2").value;
+  if (!usuario)          return lmsg("Poné un nombre de usuario.");
+  if (usuario.length < 3) return lmsg("El nombre de usuario tiene que tener al menos 3 letras.");
+  if (!nombre)           return lmsg("Poné tu nombre y apellido, así te reconoce el resto del equipo.");
+  if (pw.length < 12)    return lmsg("La contraseña tiene que tener 12 caracteres o más.");
+  if (pw !== pw2)        return lmsg("Las dos contraseñas no coinciden.");
+  const email = correo ? correo.toLowerCase() : (usuario + "@" + DOMINIO_INTERNO);
+  $("rcrear").disabled = true; $("rcrear").textContent = "Creando…";
+  const {error} = await sb.auth.signUp({email:email, password:pw, options:{data:{nombre:nombre, usuario:usuario}}});
+  $("rcrear").disabled = false; $("rcrear").textContent = "Crear mi usuario";
+  if (error){
+    lmsg(/already registered|already been registered/i.test(error.message)
+      ? "Ya existe un usuario con ese nombre. Probá con otro." : error.message);
+    return;
+  }
+  $("lform").classList.add("hide");
+  $("lemail").value = usuario; $("lpass").value = "";
+  lmsg("Listo, "+nombre+". Tu usuario es «"+usuario+"». Todavía no podés entrar: administración te tiene que activar y darte el rol. Avisales.", "ok");
+};
+
 $("lrec").onclick = async () => {
-  const em = $("lemail").value.trim();
-  if (!em) return lmsg("Escribí tu correo primero.");
-  const {error} = await sb.auth.resetPasswordForEmail(em, {redirectTo: location.href});
+  const v = $("lemail").value.trim();
+  if (!v) return lmsg("Escribí tu usuario o tu correo primero.");
+  if (v.indexOf("@") < 0)
+    return lmsg("Tu usuario no tiene un correo propio cargado, así que no te puedo mandar el enlace. Pedile a administración que te la restablezca.");
+  const {error} = await sb.auth.resetPasswordForEmail(v.toLowerCase(), {redirectTo: location.href});
   lmsg(error ? error.message : "Te mandamos un correo para restablecer la contraseña.", error?"err":"ok");
 };
 $("hsalir").onclick = async () => { await sb.auth.signOut(); location.reload(); };
@@ -228,7 +296,7 @@ async function cargarMaestras(){
     sb.from("motivos").select("id,nombre,aplica_a,activo").order("id"),
     /* La lista del equipo sale de una vista que muestra solo id, nombre, rol y activo.
        La comisión de cada uno vive en perfiles y solo la lee quien tiene usuario-consultar. */
-    sb.from("equipo_visible").select("id,nombre,rol,activo").order("nombre"),
+    sb.from("equipo_visible").select("id,nombre,usuario,rol,activo").order("nombre"),
     sb.from("conceptos_gasto").select("id,nombre,activo").order("nombre"),
     sb.from("conceptos_cobranza").select("id,nombre,activo").order("nombre"),
     sb.from("tipos_nota").select("id,nombre,activo").order("id")
@@ -839,13 +907,14 @@ VISTAS.equipo = async function(){
   const puede = P("usuario-modificar");
   const {data:roles} = await sb.from("roles").select("id,nombre,descripcion").order("id");
   /* la comisión solo se puede leer con usuario-consultar; si no, la pantalla muestra el resto */
-  const pf = await sb.from("perfiles").select("id,nombre,rol,activo,comision_pct").order("nombre");
+  const pf = await sb.from("perfiles").select("id,nombre,usuario,rol,activo,comision_pct").order("nombre");
   const GENTE = pf.error ? EQUIPO : (pf.data||[]);
   const verComision = !pf.error;
   $("main").innerHTML = '<div class="panel"><h2>Equipo</h2>'+
-    '<div class="desc">Cada persona se da de alta sola desde la pantalla de entrada con “Crear mi usuario”, pero <b>nace desactivada y sin rol: no ve un solo dato hasta que vos la actives acá</b>. Es a propósito: cualquiera que conozca la dirección del sistema puede registrarse, así que la puerta la abrís vos.</div>'+
-    '<div id="emsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Rol</th><th>Comisión %</th><th>Activo</th>'+(puede?"<th></th>":"")+'</tr></thead><tbody>'+
+    '<div class="desc">Cada persona se da de alta sola desde la pantalla de entrada con “Crear mi usuario”, eligiendo su <b>nombre de usuario</b> y su contraseña. Nace <b>desactivada y sin rol: no ve un solo dato hasta que vos la actives acá</b>. Es a propósito: cualquiera que conozca la dirección del sistema puede registrarse, así que la puerta la abrís vos. Si alguien se olvida la contraseña y no tiene correo propio cargado, se la restablecés desde Supabase.</div>'+
+    '<div id="emsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Comisión %</th><th>Activo</th>'+(puede?"<th></th>":"")+'</tr></thead><tbody>'+
     GENTE.map(p=>'<tr><td><b>'+esc(p.nombre)+'</b></td>'+
+      '<td><code>'+esc(p.usuario||"—")+'</code></td>'+
       '<td>'+(puede?'<select id="r_'+p.id+'">'+(roles||[]).map(r=>'<option value="'+esc(r.nombre)+'" '+(p.rol===r.nombre?"selected":"")+'>'+esc(r.nombre)+'</option>').join("")+'</select>':esc(p.rol))+'</td>'+
       '<td>'+(!verComision?'<span class="muted">—</span>':(puede?'<input id="k_'+p.id+'" type="number" step="0.1" style="width:90px" value="'+(p.comision_pct==null?0:p.comision_pct)+'">':fmtN(p.comision_pct)))+'</td>'+
       '<td>'+(puede?'<select id="a_'+p.id+'"><option value="1" '+(p.activo?"selected":"")+'>Sí</option><option value="0" '+(!p.activo?"selected":"")+'>No</option></select>':(p.activo?"Sí":"No"))+'</td>'+
