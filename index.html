@@ -165,7 +165,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-38";
+const VERSION = "v2026.08.03-39";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -204,6 +204,19 @@ function aCorreo(entrada){
   if (v.indexOf("@") >= 0) return v;
   return normUsuario(v) + "@" + DOMINIO_INTERNO;
 }
+/* Los que se registraron antes lo hicieron con su correo real, así que el correo
+   interno no les sirve. La base resuelve el usuario al correo con el que se
+   registró cada uno. Si esa función todavía no está creada, se sigue de largo con
+   el correo interno: la app no se rompe, simplemente esa persona entra con su correo. */
+async function correoDeUsuario(entrada){
+  const v = (entrada||"").trim();
+  if (!v || v.indexOf("@") >= 0) return aCorreo(v);
+  try {
+    const r = await sb.rpc("correo_de_usuario", {p_usuario: normUsuario(v)});
+    if (!r.error && r.data) return String(r.data).toLowerCase();
+  } catch(e){ /* la función no existe todavía */ }
+  return aCorreo(v);
+}
 /* sin espacios ni acentos: "Rocío Pérez" -> "rocioperez" */
 function normUsuario(v){
   return (v||"").trim().toLowerCase()
@@ -215,9 +228,14 @@ $("lbtn").onclick = async () => {
   const usuario = $("lemail").value.trim();
   if (!usuario) return lmsg("Escribí tu usuario.");
   lmsg(""); $("lbtn").disabled = true; $("lbtn").textContent = "Entrando…";
-  const {error} = await sb.auth.signInWithPassword({email:aCorreo(usuario), password:$("lpass").value});
+  const email = await correoDeUsuario(usuario);
+  const {error} = await sb.auth.signInWithPassword({email:email, password:$("lpass").value});
   $("lbtn").disabled = false; $("lbtn").textContent = "Entrar";
-  if (error) lmsg(error.message === "Invalid login credentials" ? "Usuario o contraseña incorrectos." : error.message);
+  if (error){
+    lmsg(error.message === "Invalid login credentials"
+      ? ("Usuario o contraseña incorrectos." + (usuario.indexOf("@")<0 ? " Si tenés un correo propio cargado, probá entrando con el correo." : ""))
+      : error.message);
+  }
 };
 
 $("lreg").onclick = () => {
