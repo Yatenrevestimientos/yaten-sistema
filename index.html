@@ -41,10 +41,29 @@ header{background:var(--petroleo);color:#fff;padding:10px 16px;display:flex;alig
 header .marca{font-family:Georgia,serif;font-size:19px;letter-spacing:.5px}
 header .quien{margin-left:auto;font-size:12px;text-align:right;line-height:1.25;opacity:.92}
 header button{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.25)}
-nav{background:var(--grafito);display:flex;gap:2px;overflow-x:auto;padding:0 8px;position:sticky;top:47px;z-index:39;-webkit-overflow-scrolling:touch}
+/* ── Menú lateral, como el de Pirka: cada título con opciones internas se despliega ── */
+#cuerpo{display:flex;align-items:flex-start;min-height:calc(100dvh - 47px)}
+nav{background:var(--grafito);width:230px;min-width:230px;position:sticky;top:47px;
+    max-height:calc(100dvh - 47px);overflow-y:auto;padding:6px 0 30px;z-index:39;
+    -webkit-overflow-scrolling:touch}
+nav .sec-btn{display:flex;align-items:center;gap:8px;width:100%;background:transparent;color:#c9d2d3;
+    border:0;border-radius:0;padding:10px 14px;text-align:left;font-size:14px;line-height:1.25;
+    border-left:3px solid transparent}
+nav .sec-btn:hover{background:rgba(255,255,255,.06);color:#fff}
+nav .sec-btn.on{color:#fff;background:rgba(255,255,255,.09);border-left-color:var(--ocre);font-weight:600}
+nav .flecha{margin-left:auto;font-size:10px;opacity:.6;transition:transform .15s}
+nav .sec-btn.abierto .flecha{transform:rotate(90deg);opacity:1}
+nav .subs{background:rgba(0,0,0,.22);overflow:hidden}
+nav .subs.cerrado{display:none}
+nav .subs button{display:block;width:100%;background:transparent;color:#a9b5b7;border:0;border-radius:0;
+    padding:8px 14px 8px 30px;text-align:left;font-size:13px;line-height:1.3;border-left:3px solid transparent}
+nav .subs button:hover{color:#fff;background:rgba(255,255,255,.05)}
+nav .subs button.on{color:#fff;font-weight:600;border-left-color:var(--ocre);background:rgba(255,255,255,.08)}
+#tapa{display:none}
+#subnav{display:none}
 nav button{background:transparent;color:#c9d2d3;border:0;border-radius:0;padding:11px 14px;white-space:nowrap;font-size:14px;border-bottom:3px solid transparent}
 nav button.on{color:#fff;border-bottom-color:var(--ocre);background:rgba(255,255,255,.05)}
-#subnav{background:#f4f0ea;border-bottom:1px solid var(--linea);display:flex;gap:2px;overflow-x:auto;padding:0 10px;position:sticky;top:91px;z-index:38}
+
 #subnav:empty{display:none}
 #subnav button{background:transparent;border:0;border-radius:0;padding:8px 13px;white-space:nowrap;font-size:13px;color:#5b6668;border-bottom:3px solid transparent}
 #subnav button.on{color:var(--petroleo);font-weight:600;border-bottom-color:var(--ocre);background:#fff}
@@ -87,8 +106,14 @@ dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
 @media(max-width:700px){
   main{padding:10px}
   header .marca{font-size:16px}
-  nav{top:45px}
+  /* En el celular el menú sale de costado y tapa la pantalla hasta que elegís */
+  nav{position:fixed;top:45px;left:0;bottom:0;max-height:none;width:78vw;min-width:0;
+      transform:translateX(-100%);transition:transform .18s;z-index:60;box-shadow:2px 0 14px rgba(0,0,0,.3)}
+  body.menu-abierto nav{transform:translateX(0)}
+  body.menu-abierto #tapa{display:block;position:fixed;inset:45px 0 0 0;background:rgba(0,0,0,.4);z-index:55}
+  #cuerpo{display:block}
 }
+@media(min-width:701px){ #hmenu{display:none} }
 </style>
 </head>
 <body>
@@ -128,13 +153,16 @@ dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
 <!-- ══════════ APP ══════════ -->
 <div id="app" class="hide">
   <header>
+    <button class="btn-sm" id="hmenu" title="Mostrar u ocultar el menú">☰</button>
     <div class="marca">YATEN</div>
     <div class="quien"><div id="hnom"></div><div id="hrol" style="opacity:.7"></div></div>
     <button class="btn-sm" id="hsalir">Salir</button>
   </header>
-  <nav id="nav"></nav>
-  <div id="subnav"></div>
-  <main id="main"></main>
+  <div id="cuerpo">
+    <nav id="nav"></nav>
+    <div id="tapa"></div>
+    <main id="main"></main>
+  </div>
 </div>
 
 <!-- ══════════ MODAL ══════════ -->
@@ -165,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.03-39";
+const VERSION = "v2026.08.04-40";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -281,6 +309,8 @@ $("lrec").onclick = async () => {
   lmsg(error ? error.message : "Te mandamos un correo para restablecer la contraseña.", error?"err":"ok");
 };
 $("hsalir").onclick = async () => { await sb.auth.signOut(); location.reload(); };
+$("hmenu").onclick = () => document.body.classList.toggle("menu-abierto");
+$("tapa").onclick  = () => document.body.classList.remove("menu-abierto");
 $("dcerrar").onclick = () => $("dlg").close();
 
 sb.auth.onAuthStateChange((_e, session) => { if (session) arrancar(); });
@@ -504,16 +534,39 @@ const SUBMENU = {
   ]
 };
 let SUBVISTA = "";
+/* El menú lateral: cada sección con opciones internas se despliega al tocarla,
+   como en Pirka. Solo queda abierta la sección donde estás parado. */
 function pintarNav(){
-  $("nav").innerHTML = MENU.filter(m=>!m.perm||P(m.perm))
-    .map(m=>'<button data-v="'+m.id+'" class="'+(m.id===VISTA?"on":"")+'">'+m.t+'</button>').join("");
-  Array.prototype.forEach.call($("nav").querySelectorAll("button"), b => b.onclick = () => ir(b.dataset.v));
-  const sub = SUBMENU[VISTA];
-  const sn = $("subnav");
-  if (!sub){ sn.innerHTML = ""; return; }
-  sn.innerHTML = sub.filter(x=>!x.perm||P(x.perm))
-    .map(x=>'<button data-s="'+x.id+'" class="'+(x.id===SUBVISTA?"on":"")+'">'+x.t+'</button>').join("");
-  Array.prototype.forEach.call(sn.querySelectorAll("button"), b => b.onclick = () => ir(VISTA, b.dataset.s));
+  const html = MENU.filter(m=>!m.perm||P(m.perm)).map(function(m){
+    const subs = (SUBMENU[m.id]||[]).filter(x=>!x.perm||P(x.perm));
+    const acaEstoy = m.id===VISTA;
+    if (!subs.length){
+      return '<button class="sec-btn '+(acaEstoy?"on":"")+'" data-v="'+m.id+'">'+esc(m.t)+'</button>';
+    }
+    return '<button class="sec-btn '+(acaEstoy?"on abierto":"")+'" data-abrir="'+m.id+'">'+esc(m.t)+
+             '<span class="flecha">▶</span></button>'+
+           '<div class="subs '+(acaEstoy?"":"cerrado")+'" data-subs="'+m.id+'">'+
+             subs.map(x=>'<button data-v="'+m.id+'" data-s="'+x.id+'" class="'+
+               (acaEstoy && x.id===SUBVISTA?"on":"")+'">'+esc(x.t)+'</button>').join("")+
+           '</div>';
+  }).join("");
+  $("nav").innerHTML = html;
+  Array.prototype.forEach.call($("nav").querySelectorAll("button"), function(b){
+    b.onclick = function(){
+      if (b.dataset.abrir){
+        /* tocar el título abre o cierra; si estaba cerrado, además entra a la sección */
+        const caja = $("nav").querySelector('[data-subs="'+b.dataset.abrir+'"]');
+        const estabaCerrado = caja.classList.contains("cerrado");
+        caja.classList.toggle("cerrado");
+        b.classList.toggle("abierto");
+        if (estabaCerrado && b.dataset.abrir !== VISTA) ir(b.dataset.abrir);
+        return;
+      }
+      ir(b.dataset.v, b.dataset.s || "");
+      document.body.classList.remove("menu-abierto");
+    };
+  });
+  $("subnav") && ($("subnav").innerHTML = "");
 }
 function ir(v, sub){
   VISTA = v; SUBVISTA = sub || "";
