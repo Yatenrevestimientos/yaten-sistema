@@ -193,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.04-41";
+const VERSION = "v2026.08.04-42";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1628,7 +1628,10 @@ VISTAS.info = async function(){
   if (porSub[SUBVISTA]) FINFO = porSub[SUBVISTA];
   if (!solapas.find(s=>s[0]===FINFO)) FINFO = solapas[0][0];
   /* Sin barra de solapas: se navega desde el menú lateral */
-  $("main").innerHTML = '<div id="ibody"><div class="muted">Calculando…</div></div>';
+  const rotI = {finanzas:"Información · Finanzas", ventas:"Información · Ventas",
+                compras:"Información · Compras"}[FINFO] || "Información";
+  $("main").innerHTML = '<h2 style="margin:0 0 14px;font-size:19px">'+esc(rotI)+'</h2>'+
+    '<div id="ibody"><div class="muted">Calculando…</div></div>';
   ({finanzas:infoFinanzas, ventas:infoVentas, compras:infoCompras}[FINFO])();
 };
 
@@ -3427,8 +3430,12 @@ VISTAS.compras = async function(){
   if (!TIMP.length){ const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[]; }
   const porSub = {"":"ordenes", facturas:"facturas", notas:"notas", pagos:"pagos"};
   if (porSub[SUBVISTA] !== undefined) COM.tab = porSub[SUBVISTA];
-  /* Sin barra de solapas: se navega solo desde el menú lateral */
-  $("main").innerHTML = '<div id="cbody"><div class="muted">Cargando…</div></div>';
+  /* Sin barra de solapas: se navega solo desde el menú lateral. El título dice
+     en qué pantalla estás, que antes lo decía la solapa marcada. */
+  const rotC = {ordenes:"Órdenes de Compra", facturas:"Facturas de Compras",
+                notas:"Notas de crédito y débito", pagos:"Pagos de Compras"}[COM.tab] || "Compras";
+  $("main").innerHTML = '<h2 style="margin:0 0 14px;font-size:19px">'+esc(rotC)+'</h2>'+
+    '<div id="cbody"><div class="muted">Cargando…</div></div>';
   ({ordenes:comOrdenes, facturas:comFacturas, notas:comNotas, pagos:comPagos}[COM.tab]||comOrdenes)();
 };
 function filtrosCompra(id){
