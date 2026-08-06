@@ -193,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.05-43";
+const VERSION = "v2026.08.06-44";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -609,7 +609,7 @@ function ir(v, sub){
 }
 
 /* ─────────── DATOS ─────────── */
-const COLS = "id,codigo,fecha,estado,canal_id,origen_id,vl_id,motivo_consulta,decide_con,nombre,telefono,celular,email,localidad_id,direccion,objecion_entrada_id,notas_ato,derivacion,ato_id,fecha_visita,hora_visita,m2_cotizados,m2_colocar,resultado,nro_presup_papel,fecha_papel_a_vl,importe,moneda,producto_2do,objecion_visita_id,tipo_venta,motivo_descarte_id,creado_en";
+const COLS = "id,codigo,fecha,estado,canal_id,origen_id,vl_id,motivo_consulta,decide_con,nombre,telefono,celular,email,localidad_id,direccion,objecion_entrada_id,notas_ato,derivacion,ato_id,fecha_visita,hora_visita,observaciones_previas,m2_cotizados,m2_colocar,resultado,nro_presup_papel,fecha_papel_a_vl,importe,moneda,producto_2do,objecion_visita_id,tipo_venta,motivo_descarte_id,creado_en";
 async function traerProspectos(f){
   let q = sb.from("prospectos").select(COLS).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(1000);
   if (f){
@@ -682,7 +682,7 @@ let FILTROS = {desde:"",hasta:"",resultado:"",estado:"",ato:"",vl:"",texto:""};
 VISTAS.planilla = function(){
   $("main").innerHTML =
    '<div class="panel"><h2>Planilla de ventas</h2>'+
-   '<div class="desc">Una fila por oportunidad. Entrada · Visita · Venta · Último seguimiento.</div>'+
+   '<div class="desc">Una fila por oportunidad. Entrada · Visita · Presupuesto · Último seguimiento.</div>'+
    '<div class="filtros">'+
      '<div><label>Desde</label><input type="date" id="fdesde" value="'+FILTROS.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="fhasta" value="'+FILTROS.hasta+'"></div>'+
@@ -712,11 +712,11 @@ async function pintarPlanilla(){
   $("plres").innerHTML =
   '<div class="muted" style="margin-bottom:8px">'+d.length+' oportunidad'+(d.length===1?"":"es")+'</div>'+
   '<div class="tablewrap" style="max-height:70dvh;overflow:auto"><table><thead>'+
-    '<tr class="grupo"><th class="b-e" colspan="10">ENTRADA · VL</th><th class="b-v" colspan="7">VISITA · ATO</th>'+
-    '<th class="b-s" colspan="6">VENTA</th><th class="b-u" colspan="3">ÚLTIMO SEGUIMIENTO</th></tr><tr>'+
-    ["Código","Fecha","Estado","Canal","Origen","VL","Cliente","Celular","Localidad","Objeción"].map(t=>th(t,"b-e")).join("")+
-    ["Derivación","ATO","Fecha visita","Hora","m² cotiz.","m² colocar","Resultado"].map(t=>th(t,"b-v")).join("")+
-    ["N° presup.","Importe","Tipo","2do prod.","Objeción visita","Descarte"].map(t=>th(t,"b-s")).join("")+
+    '<tr class="grupo"><th class="b-e" colspan="11">ENTRADA · VL</th><th class="b-v" colspan="3">VISITA · ATO</th>'+
+    '<th class="b-s" colspan="9">PRESUPUESTO</th><th class="b-u" colspan="3">ÚLTIMO SEGUIMIENTO</th></tr><tr>'+
+    ["Código","Fecha","Estado","Canal","Origen","VL","Cliente","Celular","Localidad","Objeción","Derivación"].map(t=>th(t,"b-e")).join("")+
+    ["ATO","Fecha visita","Hora"].map(t=>th(t,"b-v")).join("")+
+    ["Resultado","m² cotiz.","m² colocar","N° presup.","Fecha presup.","Importe","Objeción","2do prod.","Descarte"].map(t=>th(t,"b-s")).join("")+
     ["Fecha","Observación","Próxima"].map(t=>th(t,"b-u")).join("")+
   '</tr></thead><tbody>'+ d.map(function(p){
     const s = ultimos[p.id]||{};
@@ -724,11 +724,11 @@ async function pintarPlanilla(){
       '<td class="b-e"><b>'+esc(p.codigo)+'</b></td><td class="b-e">'+fmtF(p.fecha)+'</td><td class="b-e"><span class="pill">'+esc(p.estado)+'</span></td>'+
       '<td class="b-e">'+esc(nom(M.can,p.canal_id))+'</td><td class="b-e">'+esc(nom(M.ori,p.origen_id))+'</td><td class="b-e">'+esc(nomP(p.vl_id))+'</td>'+
       '<td class="b-e"><b>'+esc(p.nombre)+'</b></td><td class="b-e">'+esc(p.celular||p.telefono||"")+'</td><td class="b-e">'+esc(nom(M.loc,p.localidad_id))+'</td>'+
-      '<td class="b-e">'+esc(nom(M.obj,p.objecion_entrada_id))+'</td>'+
-      '<td class="b-v">'+esc(p.derivacion||"")+'</td><td class="b-v">'+esc(nomP(p.ato_id))+'</td><td class="b-v">'+fmtF(p.fecha_visita)+'</td><td class="b-v">'+esc(p.hora_visita||"")+'</td>'+
-      '<td class="b-v">'+fmtN(p.m2_cotizados)+'</td><td class="b-v">'+fmtN(p.m2_colocar)+'</td><td class="b-v">'+badge(p.resultado)+'</td>'+
-      '<td class="b-s">'+esc(p.nro_presup_papel||"")+'</td><td class="b-s">'+fmtM(p.importe,p.moneda)+'</td><td class="b-s">'+esc(p.tipo_venta||"")+'</td>'+
-      '<td class="b-s">'+esc(p.producto_2do||"")+'</td><td class="b-s">'+esc(nom(M.obj,p.objecion_visita_id))+'</td><td class="b-s">'+esc(nom(M.mot,p.motivo_descarte_id))+'</td>'+
+      '<td class="b-e">'+esc(nom(M.obj,p.objecion_entrada_id))+'</td><td class="b-e">'+esc(p.derivacion||"")+'</td>'+
+      '<td class="b-v">'+esc(nomP(p.ato_id))+'</td><td class="b-v">'+fmtF(p.fecha_visita)+'</td><td class="b-v">'+esc(p.hora_visita||"")+'</td>'+
+      '<td class="b-s">'+badge(p.resultado)+'</td><td class="b-s">'+fmtN(p.m2_cotizados)+'</td><td class="b-s">'+fmtN(p.m2_colocar)+'</td>'+
+      '<td class="b-s">'+esc(p.nro_presup_papel||"")+'</td><td class="b-s">'+fmtF(p.fecha_papel_a_vl)+'</td><td class="b-s">'+fmtM(p.importe,p.moneda)+'</td>'+
+      '<td class="b-s">'+esc(nom(M.obj,p.objecion_visita_id))+'</td><td class="b-s">'+esc(p.producto_2do||"")+'</td><td class="b-s">'+esc(nom(M.mot,p.motivo_descarte_id))+'</td>'+
       '<td class="b-u">'+fmtF(s.fecha)+'</td><td class="b-u">'+esc((s.observacion||"").slice(0,45))+'</td>'+
       '<td class="b-u">'+(s.proxima_fecha?fmtF(s.proxima_fecha)+" "+esc(s.proxima_accion||""):"")+'</td></tr>';
   }).join("")+'</tbody></table></div>';
@@ -768,11 +768,22 @@ async function db9(){
   return window._db9;
 }
 
+/* La ficha sigue el proceso real, no el orden en que se fue construyendo:
+   1) ENTRADA — se carga el prospecto y se decide la derivación.
+   2) VISITA   — solo si se derivó a domicilio. Sirve para PROGRAMARLA.
+   3) PRESUPUESTO — lo que se sabe recién después: m², importe, y si se vendió.
+   Pedido de Rocío (VL), agosto 2026. */
 function formHTML(p, ro){
   p = p || {fecha:hoy(), estado:"CONSULTA", resultado:"Sin Visita", moneda:"ARS", vl_id:PERFIL.id};
   const d = ro ? "disabled" : "";
+  // Un bloque nunca se esconde si ya tiene algo cargado: esconder un dato es perderlo de vista.
+  const hayVisita = !!(p.ato_id || p.fecha_visita || p.hora_visita || p.observaciones_previas);
+  const hayPresup = !!(p.nro_presup_papel || p.importe || p.m2_cotizados || p.m2_colocar ||
+                       p.fecha_papel_a_vl || p.objecion_visita_id || p.motivo_descarte_id ||
+                       p.producto_2do || p.notas_ato ||
+                       (p.resultado && p.resultado !== "Sin Visita" && p.resultado !== "Pendiente a Visitar"));
   return ''+
-  '<div class="sec">Entrada · carga la VL</div><div class="grid">'+
+  '<div class="sec">Entrada del prospecto · carga la VL</div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="c_fecha" value="'+(p.fecha||hoy())+'" '+d+'></div>'+
     '<div class="f"><label>Estado</label><select id="c_estado" '+d+'>'+selTxt(ESTADOS,p.estado)+'</select></div>'+
     '<div class="f"><label>Canal de contacto</label><select id="c_canal_id" '+d+'>'+selOpts(M.can,p.canal_id)+'</select></div>'+
@@ -789,31 +800,61 @@ function formHTML(p, ro){
     '<div class="f"><label>Motivo de consulta</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
     '<div class="f"><label>Decide con</label><input id="c_decide_con" value="'+esc(p.decide_con)+'" '+d+'></div>'+
     '<div class="f"><label>Objeción de entrada</label><select id="c_objecion_entrada_id" '+d+'>'+selOpts(M.obj,p.objecion_entrada_id)+'</select></div>'+
+  '</div><div class="grid">'+
+    '<div class="f"><label>Derivación</label><select id="c_derivacion" '+d+' onchange="togglePorDerivacion()">'+selTxt(DERIVA,p.derivacion)+'</select>'+
+      '<div class="muted" style="font-size:.85em;margin-top:4px">Se decide acá, cuando entra el cliente. Con «Presupuesto directo» el sistema saltea la visita.</div></div>'+
   '</div>'+
-  '<div class="sec">Visita · releva el ATO en papel, carga la VL</div><div class="grid">'+
-    '<div class="f"><label>Derivación</label><select id="c_derivacion" '+d+'>'+selTxt(DERIVA,p.derivacion)+'</select></div>'+
+  '<div id="avisoDeriva" class="msg" style="display:none">Elegí la <b>derivación</b> para seguir cargando.</div>'+
+
+  '<div id="bloqueVisita" data-hay="'+(hayVisita?1:0)+'">'+
+  '<div class="sec">Visita · la programa la VL</div><div class="grid">'+
     '<div class="f"><label>ATO asignado</label><select id="c_ato_id" '+d+'>'+selPer(ATOS(),p.ato_id)+'</select></div>'+
     '<div class="f"><label>Fecha de visita</label><input type="date" id="c_fecha_visita" value="'+(p.fecha_visita||"")+'" '+d+'></div>'+
     '<div class="f"><label>Hora</label><input id="c_hora_visita" value="'+esc(p.hora_visita)+'" placeholder="10:30" '+d+'></div>'+
+  '</div>'+
+  '<div class="f"><label>Observaciones previas</label><textarea id="c_observaciones_previas" rows="2" placeholder="Lo que hay que saber antes de ir: cómo llegar, con quién, qué mirar." '+d+'>'+esc(p.observaciones_previas)+'</textarea></div>'+
+  '</div>'+
+
+  '<div id="bloquePresup" data-hay="'+(hayPresup?1:0)+'">'+
+  '<div class="sec">Presupuesto</div><div class="grid">'+
+    '<div class="f"><label>Resultado / Venta</label><select id="c_resultado" '+d+'>'+selTxt(RESULTADOS,p.resultado)+'</select>'+
+      '<div class="muted" style="font-size:.85em;margin-top:4px">Se puede cambiar cuando quieras: el que no compró hoy y cierra en tres días se pasa a «Vendido».</div></div>'+
     '<div class="f"><label>m² cotizados</label><input type="number" step="0.01" id="c_m2_cotizados" value="'+(p.m2_cotizados==null?"":p.m2_cotizados)+'" '+d+'></div>'+
     '<div class="f"><label>m² a colocar</label><input type="number" step="0.01" id="c_m2_colocar" value="'+(p.m2_colocar==null?"":p.m2_colocar)+'" '+d+'></div>'+
-    '<div class="f"><label>Resultado</label><select id="c_resultado" '+d+'>'+selTxt(RESULTADOS,p.resultado)+'</select></div>'+
-  '</div>'+
-  '<div class="f"><label>Notas del ATO / observaciones del plano</label><textarea id="c_notas_ato" rows="2" '+d+'>'+esc(p.notas_ato)+'</textarea></div>'+
-  '<div class="sec">Venta</div><div class="grid">'+
-    '<div class="f"><label>N° presupuesto papel</label><input id="c_nro_presup_papel" value="'+esc(p.nro_presup_papel)+'" '+d+'></div>'+
-    '<div class="f"><label>Fecha papel a VL</label><input type="date" id="c_fecha_papel_a_vl" value="'+(p.fecha_papel_a_vl||"")+'" '+d+'></div>'+
+    '<div class="f"><label>N° de presupuesto</label><input id="c_nro_presup_papel" value="'+esc(p.nro_presup_papel)+'" '+d+'></div>'+
+    '<div class="f"><label>Fecha del presupuesto</label><input type="date" id="c_fecha_papel_a_vl" value="'+(p.fecha_papel_a_vl||"")+'" '+d+'></div>'+
     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="c_importe" value="'+(p.importe==null?"":p.importe)+'" '+d+'></div>'+
     '<div class="f"><label>Moneda</label><select id="c_moneda" '+d+'>'+selTxt(["ARS","USD"],p.moneda||"ARS")+'</select></div>'+
-    '<div class="f"><label>Tipo de venta</label><select id="c_tipo_venta" '+d+'>'+selTxt(TIPOVENTA,p.tipo_venta)+'</select></div>'+
+    '<div class="f"><label>Objeción</label><select id="c_objecion_visita_id" '+d+'>'+selOpts(M.obj,p.objecion_visita_id)+'</select></div>'+
     '<div class="f"><label>2do producto</label><input id="c_producto_2do" value="'+esc(p.producto_2do)+'" '+d+'></div>'+
-    '<div class="f"><label>Objeción en visita</label><select id="c_objecion_visita_id" '+d+'>'+selOpts(M.obj,p.objecion_visita_id)+'</select></div>'+
     '<div class="f"><label>Motivo de descarte</label><select id="c_motivo_descarte_id" '+d+'>'+selOpts(M.mot,p.motivo_descarte_id)+'</select></div>'+
+  '</div>'+
+  '<div class="f"><label>Notas del ATO / observaciones del plano</label><textarea id="c_notas_ato" rows="2" '+d+'>'+esc(p.notas_ato)+'</textarea></div>'+
   '</div>';
 }
 
+/* Muestra solo la etapa que corresponde según la derivación.
+   Regla que no se rompe: si el bloque YA tiene datos cargados, se muestra igual.
+   Esconder un dato ya cargado es la forma más rápida de perderlo. */
+function togglePorDerivacion(){
+  const sel = $("c_derivacion"), bv = $("bloqueVisita"), bp = $("bloquePresup"), av = $("avisoDeriva");
+  if (!sel || !bv || !bp) return;
+  const v = sel.value;
+  const hayV = bv.dataset.hay === "1", hayP = bp.dataset.hay === "1";
+  let verV, verP;
+  if (v === "Visita a domicilio"){ verV = true;  verP = true;  }
+  else if (v === "Presupuesto directo"){ verV = hayV; verP = true; }
+  else { verV = hayV; verP = hayP; }
+  bv.style.display = verV ? "" : "none";
+  bp.style.display = verP ? "" : "none";
+  if (av) av.style.display = (!v && !hayV && !hayP) ? "" : "none";
+}
+
+/* tipo_venta sigue en la lista aunque ya no esté en la pantalla: si el campo no existe,
+   leerForm lo saltea y el dato viejo queda intacto en la base. Nada se pierde. */
 const CAMPOS = ["fecha","estado","canal_id","origen_id","vl_id","nombre","celular","telefono","email","localidad_id","direccion",
-  "motivo_consulta","decide_con","objecion_entrada_id","derivacion","ato_id","fecha_visita","hora_visita","m2_cotizados","m2_colocar",
+  "motivo_consulta","decide_con","objecion_entrada_id","derivacion","ato_id","fecha_visita","hora_visita","observaciones_previas",
+  "m2_cotizados","m2_colocar",
   "resultado","notas_ato","nro_presup_papel","fecha_papel_a_vl","importe","moneda","tipo_venta","producto_2do","objecion_visita_id","motivo_descarte_id"];
 const NUM = ["canal_id","origen_id","localidad_id","objecion_entrada_id","objecion_visita_id","motivo_descarte_id","m2_cotizados","m2_colocar","importe"];
 function leerForm(){
@@ -833,6 +874,7 @@ VISTAS.nuevo = function(){
     '<div class="desc">El código PROS-'+new Date().getFullYear()+'-#### se genera solo al guardar.</div>'+
     '<div id="nmsg"></div>'+formHTML(null,false)+
     '<div class="acciones"><button class="btn" id="nguardar">Guardar prospecto</button><button class="btn2" id="ncancel">Limpiar</button></div></div>';
+  togglePorDerivacion();
   $("ncancel").onclick = VISTAS.nuevo;
   $("nguardar").onclick = async function(){
     const o = leerForm();
@@ -868,6 +910,7 @@ async function abrir(id){
       '<div class="f"><label>Próxima fecha</label><input type="date" id="s_proxima_fecha"></div></div>'+
       '<div class="f"><label>Observación</label><textarea id="s_observacion" rows="2"></textarea></div>'+
       '<button class="btn2" id="sagregar">Agregar seguimiento</button>' : '');
+  togglePorDerivacion();
 
   if (puedeEditar) $("dguardar").onclick = async function(){
     $("dguardar").disabled = true;
