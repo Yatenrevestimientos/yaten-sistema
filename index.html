@@ -193,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.06-44"; /* republicado tras la caida de GitHub Actions del 6/8/2026 */
+const VERSION = "v2026.08.06-45";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -708,6 +708,17 @@ async function pintarPlanilla(){
     (seg||[]).forEach(s=>{ if(!ultimos[s.prospecto_id]) ultimos[s.prospecto_id]=s; });
   }
   if (!d.length){ $("plres").innerHTML = '<div class="muted">No hay prospectos con esos filtros.</div>'; return; }
+  /* el presupuesto ligado manda sobre lo anotado a mano */
+  const ligados = {};
+  if (P("presupuesto-consultar")){
+    const ids = d.slice(0,300).map(p=>p.id);
+    const {data:pr} = await sb.from("presupuestos").select("id,codigo,fecha,total,moneda,estado,prospecto_id")
+      .in("prospecto_id", ids).order("id",{ascending:false});
+    (pr||[]).forEach(function(x){
+      if (x.estado === "Anulado") return;
+      if (!ligados[x.prospecto_id]) ligados[x.prospecto_id] = x;
+    });
+  }
   const th = (t,cl)=>'<th class="'+cl+'">'+t+'</th>';
   $("plres").innerHTML =
   '<div class="muted" style="margin-bottom:8px">'+d.length+' oportunidad'+(d.length===1?"":"es")+'</div>'+
@@ -720,6 +731,10 @@ async function pintarPlanilla(){
     ["Fecha","Observación","Próxima"].map(t=>th(t,"b-u")).join("")+
   '</tr></thead><tbody>'+ d.map(function(p){
     const s = ultimos[p.id]||{};
+    const g = ligados[p.id];
+    const cod = g ? '<b>'+esc(g.codigo)+'</b>' : esc(p.nro_presup_papel||"");
+    const fpr = g ? fmtF(g.fecha) : fmtF(p.fecha_papel_a_vl);
+    const imp = g ? fmtM(g.total,g.moneda) : fmtM(p.importe,p.moneda);
     return '<tr style="cursor:pointer" onclick="abrir('+p.id+')">'+
       '<td class="b-e"><b>'+esc(p.codigo)+'</b></td><td class="b-e">'+fmtF(p.fecha)+'</td><td class="b-e"><span class="pill">'+esc(p.estado)+'</span></td>'+
       '<td class="b-e">'+esc(nom(M.can,p.canal_id))+'</td><td class="b-e">'+esc(nom(M.ori,p.origen_id))+'</td><td class="b-e">'+esc(nomP(p.vl_id))+'</td>'+
@@ -727,7 +742,7 @@ async function pintarPlanilla(){
       '<td class="b-e">'+esc(nom(M.obj,p.objecion_entrada_id))+'</td><td class="b-e">'+esc(p.derivacion||"")+'</td>'+
       '<td class="b-v">'+esc(nomP(p.ato_id))+'</td><td class="b-v">'+fmtF(p.fecha_visita)+'</td><td class="b-v">'+esc(p.hora_visita||"")+'</td>'+
       '<td class="b-s">'+badge(p.resultado)+'</td><td class="b-s">'+fmtN(p.m2_cotizados)+'</td><td class="b-s">'+fmtN(p.m2_colocar)+'</td>'+
-      '<td class="b-s">'+esc(p.nro_presup_papel||"")+'</td><td class="b-s">'+fmtF(p.fecha_papel_a_vl)+'</td><td class="b-s">'+fmtM(p.importe,p.moneda)+'</td>'+
+      '<td class="b-s">'+cod+'</td><td class="b-s">'+fpr+'</td><td class="b-s">'+imp+'</td>'+
       '<td class="b-s">'+esc(nom(M.obj,p.objecion_visita_id))+'</td><td class="b-s">'+esc(p.producto_2do||"")+'</td><td class="b-s">'+esc(nom(M.mot,p.motivo_descarte_id))+'</td>'+
       '<td class="b-u">'+fmtF(s.fecha)+'</td><td class="b-u">'+esc((s.observacion||"").slice(0,45))+'</td>'+
       '<td class="b-u">'+(s.proxima_fecha?fmtF(s.proxima_fecha)+" "+esc(s.proxima_accion||""):"")+'</td></tr>';
@@ -773,12 +788,12 @@ async function db9(){
    2) VISITA   — solo si se derivó a domicilio. Sirve para PROGRAMARLA.
    3) PRESUPUESTO — lo que se sabe recién después: m², importe, y si se vendió.
    Pedido de Rocío (VL), agosto 2026. */
-function formHTML(p, ro){
+function formHTML(p, ro, lig){
   p = p || {fecha:hoy(), estado:"CONSULTA", resultado:"Sin Visita", moneda:"ARS", vl_id:PERFIL.id};
   const d = ro ? "disabled" : "";
   // Un bloque nunca se esconde si ya tiene algo cargado: esconder un dato es perderlo de vista.
   const hayVisita = !!(p.ato_id || p.fecha_visita || p.hora_visita || p.observaciones_previas);
-  const hayPresup = !!(p.nro_presup_papel || p.importe || p.m2_cotizados || p.m2_colocar ||
+  const hayPresup = !!(lig || p.nro_presup_papel || p.importe || p.m2_cotizados || p.m2_colocar ||
                        p.fecha_papel_a_vl || p.objecion_visita_id || p.motivo_descarte_id ||
                        p.producto_2do || p.notas_ato ||
                        (p.resultado && p.resultado !== "Sin Visita" && p.resultado !== "Pendiente a Visitar"));
@@ -816,15 +831,31 @@ function formHTML(p, ro){
   '</div>'+
 
   '<div id="bloquePresup" data-hay="'+(hayPresup?1:0)+'">'+
-  '<div class="sec">Presupuesto</div><div class="grid">'+
+  '<div class="sec">Presupuesto</div>'+
+  (lig
+    ? '<div class="msg ok" style="line-height:1.5">Ligado al presupuesto <b>'+esc(lig.codigo)+'</b> ('+esc(lig.estado)+'). '+
+      'El número, la fecha y el importe salen de ahí y no se cargan a mano.'+
+      (p.nro_presup_papel && p.nro_presup_papel !== lig.codigo
+        ? '<br><span class="muted">En la planilla estaba anotado a mano: '+esc(p.nro_presup_papel)+'. No se borró.</span>'
+        : '')+'</div>'
+    : '')+
+  '<div class="grid">'+
     '<div class="f"><label>Resultado / Venta</label><select id="c_resultado" '+d+'>'+selTxt(RESULTADOS,p.resultado)+'</select>'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">Se puede cambiar cuando quieras: el que no compró hoy y cierra en tres días se pasa a «Vendido».</div></div>'+
     '<div class="f"><label>m² cotizados</label><input type="number" step="0.01" id="c_m2_cotizados" value="'+(p.m2_cotizados==null?"":p.m2_cotizados)+'" '+d+'></div>'+
     '<div class="f"><label>m² a colocar</label><input type="number" step="0.01" id="c_m2_colocar" value="'+(p.m2_colocar==null?"":p.m2_colocar)+'" '+d+'></div>'+
-    '<div class="f"><label>N° de presupuesto</label><input id="c_nro_presup_papel" value="'+esc(p.nro_presup_papel)+'" '+d+'></div>'+
-    '<div class="f"><label>Fecha del presupuesto</label><input type="date" id="c_fecha_papel_a_vl" value="'+(p.fecha_papel_a_vl||"")+'" '+d+'></div>'+
-    '<div class="f"><label>Importe</label><input type="number" step="0.01" id="c_importe" value="'+(p.importe==null?"":p.importe)+'" '+d+'></div>'+
-    '<div class="f"><label>Moneda</label><select id="c_moneda" '+d+'>'+selTxt(["ARS","USD"],p.moneda||"ARS")+'</select></div>'+
+    /* Con un presupuesto ligado, estos tres los manda el presupuesto y no se tocan.
+       Los id cambian a c_ro_* a propósito: leerForm() no los lee, así que la
+       anotación del papel que hubiera en la base queda intacta, no se pisa. */
+    (lig
+      ? '<div class="f"><label>N° de presupuesto</label><input id="c_ro_codigo" value="'+esc(lig.codigo)+'" disabled></div>'+
+        '<div class="f"><label>Fecha del presupuesto</label><input type="date" id="c_ro_fecha" value="'+(lig.fecha||"")+'" disabled></div>'+
+        '<div class="f"><label>Importe</label><input id="c_ro_total" value="'+esc(fmtM(lig.total,lig.moneda))+'" disabled></div>'+
+        '<div class="f"><label>Moneda</label><input id="c_ro_moneda" value="'+esc(lig.moneda||"")+'" disabled></div>'
+      : '<div class="f"><label>N° de presupuesto</label><input id="c_nro_presup_papel" value="'+esc(p.nro_presup_papel)+'" '+d+'></div>'+
+        '<div class="f"><label>Fecha del presupuesto</label><input type="date" id="c_fecha_papel_a_vl" value="'+(p.fecha_papel_a_vl||"")+'" '+d+'></div>'+
+        '<div class="f"><label>Importe</label><input type="number" step="0.01" id="c_importe" value="'+(p.importe==null?"":p.importe)+'" '+d+'></div>'+
+        '<div class="f"><label>Moneda</label><select id="c_moneda" '+d+'>'+selTxt(["ARS","USD"],p.moneda||"ARS")+'</select></div>')+
     '<div class="f"><label>Objeción</label><select id="c_objecion_visita_id" '+d+'>'+selOpts(M.obj,p.objecion_visita_id)+'</select></div>'+
     '<div class="f"><label>2do producto</label><input id="c_producto_2do" value="'+esc(p.producto_2do)+'" '+d+'></div>'+
     '<div class="f"><label>Motivo de descarte</label><select id="c_motivo_descarte_id" '+d+'>'+selOpts(M.mot,p.motivo_descarte_id)+'</select></div>'+
@@ -868,6 +899,105 @@ function leerForm(){
   return o;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   PROSPECTO ↔ PRESUPUESTO ↔ VENTA
+   Pedido de Rocío (VL): lo que se carga en la ficha del prospecto no
+   puede quedar aislado. Las columnas del vínculo ya existían en la base
+   (presupuestos.prospecto_id y clientes.prospecto_id) y no se usaban.
+   Ahora: botón que abre el presupuesto de verdad precargado, el cliente
+   se da de alta solo, y marcar «Vendido» cierra el presupuesto ligado,
+   que es lo que genera la venta y la deuda en cuenta corriente.
+   ══════════════════════════════════════════════════════════════ */
+
+/* Busca el cliente de un prospecto y, si no existe, lo crea.
+   Busca por marca, teléfono, mail y nombre —en ese orden— para no duplicar
+   a alguien que ya estaba cargado con el nombre escrito distinto. */
+async function clienteDeProspecto(p){
+  if (!CLIS.length) await cargarClientes();
+  const soloNum = s => (s||"").replace(/\D/g,"");
+  const norm = s => (s||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ");
+
+  let c = CLIS.find(x=>x.prospecto_id && String(x.prospecto_id)===String(p.id));
+  if (c) return {cliente:c, creado:false};
+
+  const tel = soloNum(p.celular || p.telefono);
+  if (tel.length >= 6) c = CLIS.find(x=>{
+    const t = soloNum(x.celular)+"|"+soloNum(x.telefono);
+    return t.indexOf(tel) >= 0;
+  });
+  const mail = norm(p.email);
+  if (!c && mail) c = CLIS.find(x=>norm(x.email) === mail);
+  if (!c && p.nombre) c = CLIS.find(x=>norm(x.nombre) === norm(p.nombre));
+
+  if (c){
+    if (!c.prospecto_id) await sb.from("clientes").update({prospecto_id:p.id}).eq("id",c.id);
+    await cargarClientes();
+    return {cliente: CLIS.find(x=>String(x.id)===String(c.id)) || c, creado:false, yaEstaba:true};
+  }
+
+  const nuevo = {nombre:p.nombre, telefono:p.telefono||null, celular:p.celular||null, email:p.email||null,
+                 direccion:p.direccion||null, localidad_id:p.localidad_id||null, origen_id:p.origen_id||null,
+                 prospecto_id:p.id, activo:true};
+  const r = await sb.from("clientes").insert(nuevo).select("*").single();
+  if (r.error) return {error:r.error.message};
+  await cargarClientes();
+  return {cliente:r.data, creado:true};
+}
+
+async function presupuestosDeProspecto(id){
+  const r = await sb.from("presupuestos").select("id,codigo,fecha,estado,total,moneda,cliente_id")
+    .eq("prospecto_id", id).order("id",{ascending:false});
+  return r.error ? [] : (r.data||[]);
+}
+
+function listaPresupPros(arr){
+  if (!arr.length) return '<div class="muted">Todavía no tiene ningún presupuesto cargado.</div>';
+  return '<div class="tablewrap"><table><thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th class="r">Total</th></tr></thead><tbody>'+
+    arr.map(x=>'<tr style="cursor:pointer" onclick="verPresupDesdeProspecto('+x.id+')">'+
+      '<td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+pillE(x.estado)+'</td>'+
+      '<td class="r"><b>'+fmtM(x.total,x.moneda)+'</b></td></tr>').join("")+
+    '</tbody></table></div>';
+}
+function verPresupDesdeProspecto(id){ try{ $("dlg").close(); }catch(e){} abrirPresupuesto(id); }
+
+/* Abre el formulario de Presupuestos precargado con los datos del prospecto. */
+async function nuevoPresupuestoDeProspecto(idPros){
+  const msg = t => { const e = $("dmsg"); if (e) e.innerHTML = t; };
+  msg('<div class="msg">Preparando el presupuesto…</div>');
+  const q = await sb.from("prospectos").select(COLS).eq("id",idPros).single();
+  if (q.error) return msg('<div class="msg err">'+esc(q.error.message)+'</div>');
+  const p = q.data;
+  if (!p.nombre) return msg('<div class="msg err">El prospecto no tiene nombre cargado y el presupuesto lo necesita.</div>');
+  const res = await clienteDeProspecto(p);
+  if (res.error) return msg('<div class="msg err">No se pudo preparar el cliente: '+esc(res.error)+'</div>');
+  try{ $("dlg").close(); }catch(e){}
+  await abrirPresupuesto(null, {prospecto:p, cliente:res.cliente, creadoCliente:res.creado, clienteYaEstaba:res.yaEstaba});
+}
+
+/* Marcar «Vendido» en la ficha cierra el presupuesto ligado, y eso —no esto—
+   es lo que genera la venta. Si hay más de uno abierto no elige por su cuenta. */
+async function cerrarVentaDesdeProspecto(idPros){
+  const arr = await presupuestosDeProspecto(idPros);
+  if (!arr.length) return {aviso:'El resultado quedó en «Vendido», pero <b>no se generó ninguna venta</b>: este prospecto todavía no tiene un presupuesto cargado. Creá el presupuesto acá abajo y volvé a guardar.'};
+  const yaVendido = arr.find(x=>x.estado==="Vendido");
+  if (yaVendido) return {ok:'La venta ya estaba registrada desde el presupuesto '+esc(yaVendido.codigo)+'.'};
+  const abiertos = arr.filter(x=>["Abierto","Enviado"].indexOf(x.estado)>=0);
+  if (!abiertos.length) return {aviso:'El resultado quedó en «Vendido», pero los presupuestos de este prospecto están rechazados, vencidos o anulados. Abrilo desde Presupuestos y cerralo ahí.'};
+  if (abiertos.length > 1) return {aviso:'Este prospecto tiene '+abiertos.length+' presupuestos abiertos. Entrá al que corresponda y pasalo a «Vendido» ahí, para no cerrar el equivocado.'};
+  const pre = abiertos[0];
+  if (!pre.cliente_id) return {aviso:'El presupuesto '+esc(pre.codigo)+' no tiene cliente asignado, y sin cliente no se puede registrar la venta. Abrilo y elegí el cliente.'};
+  if (!Number(pre.total)) return {aviso:'El presupuesto '+esc(pre.codigo)+' tiene total cero. Cargale los renglones antes de venderlo.'};
+  if (!(await db12())) return {aviso:'Falta correr la migración de ventas en la base.'};
+  const up = await sb.from("presupuestos").update({estado:"Vendido"}).eq("id",pre.id);
+  if (up.error) return {aviso:'No se pudo cerrar el presupuesto: '+esc(up.error.message)};
+  const rv = await sb.rpc("registrar_venta_desde_presupuesto", {p_presupuesto:pre.id});
+  if (rv.error){
+    await sb.from("presupuestos").update({estado:pre.estado}).eq("id",pre.id);
+    return {aviso:'El presupuesto '+esc(pre.codigo)+' no se pudo pasar a venta: '+esc(rv.error.message)+'. Quedó como estaba.'};
+  }
+  return {ok:'<b>Venta registrada</b> desde el presupuesto '+esc(pre.codigo)+'. Ya aparece en Ventas y le generó la deuda en la cuenta corriente al cliente.'};
+}
+
 /* ─────────── NUEVO ─────────── */
 VISTAS.nuevo = function(){
   $("main").innerHTML = '<div class="panel"><h2>Nuevo prospecto</h2>'+
@@ -895,12 +1025,25 @@ async function abrir(id){
   if (error) return alert(error.message);
   const puedeEditar = P("prospecto-modificar");
   $("dtit").textContent = p.codigo + " · " + p.nombre;
-  const {data:seg} = await sb.from("seguimientos").select("*").eq("prospecto_id",id).order("fecha",{ascending:false});
-  $("dbody").innerHTML = '<div id="dmsg"></div>'+formHTML(p, !puedeEditar)+
+  const [{data:seg}, presPros] = await Promise.all([
+    sb.from("seguimientos").select("*").eq("prospecto_id",id).order("fecha",{ascending:false}),
+    P("presupuesto-consultar") ? presupuestosDeProspecto(id) : Promise.resolve([])
+  ]);
+  /* el presupuesto que manda es el último que no esté anulado */
+  const lig = presPros.filter(x=>x.estado!=="Anulado")[0] || null;
+  $("dbody").innerHTML = '<div id="dmsg"></div>'+formHTML(p, !puedeEditar, lig)+
     '<div class="acciones">'+
       (puedeEditar?'<button class="btn" id="dguardar">Guardar cambios</button>':'<span class="muted">Tu rol tiene acceso de consulta.</span>')+
       (P("prospecto-eliminar")?'<button class="btn3" id="dborrar">Eliminar</button>':'')+
     '</div>'+
+    (P("presupuesto-consultar")
+      ? '<div class="sec">Presupuestos de este prospecto</div>'+
+        '<div class="desc">El presupuesto se arma acá una sola vez y queda en el módulo Presupuestos. Cuando pasa a «Vendido» genera solo la venta y la deuda en la cuenta corriente.</div>'+
+        '<div id="dpres">'+listaPresupPros(presPros)+'</div>'+
+        (P("presupuesto-agregar")
+          ? '<div class="acciones"><button class="btn2" onclick="nuevoPresupuestoDeProspecto('+id+')">+ Crear presupuesto para este prospecto</button></div>'
+          : '')
+      : '')+
     '<div class="sec">Seguimientos</div><div id="dseg">'+listaSeg(seg||[])+'</div>'+
     (P("seguimiento-agregar")?
       '<div class="grid" style="margin-top:10px">'+
@@ -914,10 +1057,27 @@ async function abrir(id){
 
   if (puedeEditar) $("dguardar").onclick = async function(){
     $("dguardar").disabled = true;
-    const {error} = await sb.from("prospectos").update(leerForm()).eq("id",id);
+    const o = leerForm();
+    const pasaAVendido = o.resultado === "Vendido" && p.resultado !== "Vendido";
+    const {error} = await sb.from("prospectos").update(o).eq("id",id);
+    if (error){
+      $("dguardar").disabled = false;
+      $("dmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>';
+      return;
+    }
+    p.resultado = o.resultado;
+    let extra = "";
+    if (pasaAVendido && P("venta-agregar")){
+      $("dmsg").innerHTML = '<div class="msg">Cambios guardados. Registrando la venta…</div>';
+      const r = await cerrarVentaDesdeProspecto(id);
+      extra = r.ok ? ' '+r.ok : '<div class="msg err" style="margin-top:8px">'+r.aviso+'</div>';
+      const nuevos = await presupuestosDeProspecto(id);
+      if ($("dpres")) $("dpres").innerHTML = listaPresupPros(nuevos);
+    }
     $("dguardar").disabled = false;
-    $("dmsg").innerHTML = error?'<div class="msg err">'+esc(error.message)+'</div>':'<div class="msg ok">Cambios guardados.</div>';
-    if (!error && VISTA==="planilla") pintarPlanilla();
+    $("dmsg").innerHTML = '<div class="msg ok">Cambios guardados.'+(extra.indexOf("<div")<0?extra:"")+'</div>'+
+      (extra.indexOf("<div")>=0?extra:"");
+    if (VISTA==="planilla") pintarPlanilla();
   };
   if (P("prospecto-eliminar")) $("dborrar").onclick = async function(){
     if (!confirm("¿Eliminar "+p.codigo+"? No se puede deshacer.")) return;
@@ -2416,7 +2576,7 @@ async function pintarPresupuestos(){
    }).join("")+'</tbody></table></div>';
 }
 
-async function abrirPresupuesto(id){
+async function abrirPresupuesto(id, desde){
   if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
   await db9();
   if (id){
@@ -2435,6 +2595,27 @@ async function abrirPresupuesto(id){
                 lista_id: listaDef?listaDef.id:null, tipo:"Producto suelto",
                 condiciones:cfg("pie_presupuesto","Precios sujetos a confirmación de stock.")},
            items:[], adic:[], borrarItems:[], borrarAdic:[]};
+    /* viene de la ficha de un prospecto: se precarga todo y queda ligado */
+    if (desde && desde.prospecto){
+      const pr = desde.prospecto, cl = desde.cliente;
+      PRE.cab.prospecto_id   = pr.id;
+      PRE.cab.cliente_id     = cl ? cl.id : null;
+      PRE.cab.cliente_nombre = pr.nombre || "";
+      PRE.cab.cliente_tel    = pr.celular || pr.telefono || "";
+      PRE.cab.cliente_email  = pr.email || "";
+      PRE.cab.localidad_id   = pr.localidad_id || null;
+      PRE.cab.direccion_obra = pr.direccion || "";
+      PRE.cab.vl_id          = pr.vl_id || PERFIL.id;
+      PRE.cab.ato_id         = pr.ato_id || null;
+      PRE.cab.nro_papel      = pr.nro_presup_papel || null;
+      if (cl && cl.lista_id) PRE.cab.lista_id = cl.lista_id;
+      PRE.origen = {codigo: pr.codigo, id: pr.id,
+        aviso: desde.creadoCliente
+          ? 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>. Como todavía no era cliente, se dio de alta <b>'+esc(cl.nombre)+'</b> con sus datos. Cargá los renglones y guardá.'
+          : (desde.clienteYaEstaba
+              ? 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>. Ya existía el cliente <b>'+esc(cl.nombre)+'</b> y se usó ese, no se duplicó. Cargá los renglones y guardá.'
+              : 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>, ligado al cliente <b>'+esc(cl.nombre)+'</b>. Cargá los renglones y guardá.')};
+    }
   }
   pintarFichaPre();
   $("dlg").showModal();
@@ -2462,7 +2643,10 @@ function pintarFichaPre(){
   const puede = c.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
   const d = puede ? "" : "disabled";
   $("dtit").textContent = c.codigo ? (c.codigo+" · "+(c.cliente_nombre||"")) : "Presupuesto nuevo";
-  $("dbody").innerHTML = '<div id="qmsg"></div>'+
+  $("dbody").innerHTML = '<div id="qmsg">'+
+   (PRE.origen && PRE.origen.aviso ? '<div class="msg ok" style="line-height:1.5">'+PRE.origen.aviso+'</div>'
+    : (c.prospecto_id ? '<div class="msg" style="line-height:1.5">Este presupuesto nació del prospecto <b>#'+esc(c.prospecto_id)+'</b>.</div>' : ''))+
+   '</div>'+
    '<div class="sec">Cliente y obra</div><div class="grid">'+
      (P("cliente-consultar")?'<div class="f"><label>Cliente registrado</label><select id="w_cliente_id" onchange="presClienteElegido()" '+d+'>'+selPer(CLIS, c.cliente_id?Number(c.cliente_id):null)+'</select></div>':'')+
      '<div class="f"><label>Cliente *</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
@@ -2640,6 +2824,9 @@ async function guardarPresupuesto(){
   const o = {};
   CAMPOS_PRE.forEach(function(c){ const el=$("w_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PRE.indexOf(c)>=0) v=Number(v); o[c]=v; });
   if (!window._db9) delete o.cliente_id;
+  /* el vínculo con el prospecto no es un campo de pantalla: viaja en la cabecera */
+  if (PRE.cab.prospecto_id) o.prospecto_id = PRE.cab.prospecto_id;
+  if (o.cliente_id == null && PRE.cab.cliente_id) o.cliente_id = PRE.cab.cliente_id;
   if (!o.cliente_nombre){ $("qmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
   if (o.descuento_pct == null) o.descuento_pct = 0;
   $("w_guardar").disabled = true;
