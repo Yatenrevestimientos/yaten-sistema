@@ -193,7 +193,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.06-45";
+const VERSION = "v2026.08.07-46";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3606,7 +3606,13 @@ function seccionCCProv(p, mov){
           return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
             '<td style="white-space:normal;min-width:240px">'+esc(x.detalle)+'</td>'+
             '<td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td><td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td>'+
-            (P("finanzas-anular")?'<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="anularPV('+x.id+','+p.id+')">Anular</button>')+'</td>':'')+'</tr>';
+            /* Solo se anula acá lo que se cargó acá. Un renglón que nació de una
+               factura, una nota o un pago se anula desde el documento, porque si no
+               se anula una sola pata: vuelve la deuda pero la plata sigue salida.
+               Le pasó a Gilda con VIGORITA el 7/8/2026. */
+            (P("finanzas-anular")?'<td>'+(x.anulado?'<span class="pill no">Anulado</span>'
+              : (x.ref_id ? '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">se anula desde '+esc((x.origen||"el documento").toLowerCase())+'</span>'
+                          : '<button class="btn2 btn-sm" onclick="anularPV('+x.id+','+p.id+')">Anular</button>'))+'</td>':'')+'</tr>';
         }).join("")+'</tbody></table></div>' : '<div class="muted">Sin movimientos en '+m+'.</div>');
   };
   return bloque("ARS") + bloque("USD") +
@@ -3738,7 +3744,7 @@ async function comFacturas(){
   const {data} = await sb.from("facturas_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
   const rows = (data||[]).filter(x=>aplicaFiltro(x, (x.punto_venta||"")+" "+(x.nro_comprobante||"")));
   const tot = {}; rows.filter(x=>!x.anulado).forEach(x=>{ const m=x.moneda; tot[m]=tot[m]||{n:0,i:0,t:0}; tot[m].n+=Number(x.neto||0); tot[m].i+=Number(x.impuestos||0); tot[m].t+=Number(x.total||0); });
-  $("cbody").innerHTML = '<div class="desc">Cada factura de compra le suma deuda al proveedor. Los <b>impuestos van renglón por renglón</b> —IVA, percepciones, ingresos brutos— y por eso el crédito fiscal queda bien desde el momento de la carga.</div>'+
+  $("cbody").innerHTML = '<div class="desc">Cada factura de compra le suma deuda al proveedor. <b>Por ahora los impuestos se cargan en una sola casilla</b>: el detalle por impuesto —IVA, percepciones, ingresos brutos, derechos de aduana— está pendiente de construir.</div>'+
    filtrosCompra("fc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formFacturaCompra()">+ Factura de compra</button></div>':'')+'</div>'+
    (Object.keys(tot).length? '<div class="kpis">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m].t,m)+'</div><div class="muted">neto '+fmtM(tot[m].n,m)+' · impuestos '+fmtM(tot[m].i,m)+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
@@ -3895,9 +3901,13 @@ function pintarFac(){
      '<div class="f"><label>Neto gravado *</label><input type="number" step="0.01" id="fa_neto" value="'+(FAC.neto||"")+'" oninput="facSincro()"></div>'+
    '</div>'+
    '<div class="sec">Impuestos del comprobante</div>'+
-   '<div class="muted" style="margin-bottom:8px">Cargá cada impuesto por separado, como viene en la factura: IVA, percepciones, ingresos brutos. <b>Esto es lo que hace que el crédito fiscal cierre después.</b></div>'+
+   '<div class="muted" style="margin-bottom:8px">Cargá cada impuesto por separado, como viene en la factura: IVA, percepciones, ingresos brutos, y los de aduana cuando sea un despacho. '+
+   'Elegís el impuesto y <b>el importe se calcula solo</b> sobre el neto. Si en la factura viene otro número, pisalo y el porcentaje se recalcula solo. '+
+   '<b>Esto es lo que hace que el crédito fiscal cierre después.</b></div>'+
    '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="facImpAgregar()">+ Impuesto</button>'+
-   '<div style="display:flex;gap:6px;align-items:center;margin-left:8px"><input id="fa_imp_nuevo" placeholder="Tipo de impuesto nuevo" style="width:200px"><button class="btn2 btn-sm" onclick="tipoImpAgregar()">Agregar a la lista</button></div></div>'+
+   '<div style="display:flex;gap:6px;align-items:center;margin-left:8px"><input id="fa_imp_nuevo" placeholder="Tipo de impuesto nuevo" style="width:200px">'+
+   '<input type="number" step="0.01" id="fa_imp_pct" placeholder="%" style="width:70px" title="Porcentaje fijo, si lo tiene. Dejalo vacío si cambia según el caso, como los derechos de aduana.">'+
+   '<button class="btn2 btn-sm" onclick="tipoImpAgregar()">Agregar a la lista</button></div></div>'+
    '<div id="fa_imps"></div>'+
    '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="fa_obs" value="'+esc(FAC.obs)+'"></div>'+
    '<div id="fa_tot" style="margin-top:8px"></div>'+
@@ -3905,11 +3915,17 @@ function pintarFac(){
    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
   pintarFacImp();
 }
+/* redondeo a dos decimales, para que el importe calculado no arrastre centésimas */
+const dos = n => Math.round(Number(n||0)*100)/100;
+
 function facSincro(){
   FAC.imp.forEach(function(x,k){
-    const t=$("fi_"+k+"_tipo"), d=$("fi_"+k+"_detalle"), i=$("fi_"+k+"_importe");
+    const t=$("fi_"+k+"_tipo"), d=$("fi_"+k+"_detalle"), i=$("fi_"+k+"_importe"),
+          b=$("fi_"+k+"_base"), p=$("fi_"+k+"_pct");
     if (t) x.tipo_impuesto_id = t.value||null;
     if (d) x.detalle = d.value;
+    if (b) x.base = b.value===""?null:Number(b.value);
+    if (p) x.porcentaje = p.value===""?null:Number(p.value);
     if (i) x.importe = i.value===""?0:Number(i.value);
   });
   ["prov","tipo","pv","nro","fecha","moneda","neto","obs"].forEach(function(c){
@@ -3921,23 +3937,71 @@ function facSincro(){
   });
   pintarFacTot();
 }
-function facImpAgregar(){ facSincro(); FAC.imp.push({tipo_impuesto_id:null, detalle:"", importe:0}); pintarFacImp(); }
+
+/* Al elegir el impuesto se trae su porcentaje de la maestra, la base arranca
+   en el neto de la factura y el importe se calcula solo. Pedido de Gilda. */
+function facImpTipo(k){
+  facSincro();
+  const x = FAC.imp[k];
+  const t = TIMP.find(y=>String(y.id)===String(x.tipo_impuesto_id));
+  if (t && t.porcentaje != null) x.porcentaje = Number(t.porcentaje);
+  if (x.base == null) x.base = Number(FAC.neto||0) || null;
+  facRecalcular(k);
+  pintarFacImp();
+}
+/* base × porcentaje = importe */
+function facCalcImporte(k){
+  facSincro();
+  facRecalcular(k);
+  pintarFacImp();
+}
+function facRecalcular(k){
+  const x = FAC.imp[k];
+  if (x.base == null) x.base = Number(FAC.neto||0) || null;
+  if (x.base != null && x.porcentaje != null) x.importe = dos(Number(x.base) * Number(x.porcentaje) / 100);
+}
+/* Si Gilda pisa el importe con el que dice la factura, el porcentaje se
+   recalcula al revés, para que quede asentado a qué alícuota salió. */
+function facImporteAMano(k){
+  facSincro();
+  const x = FAC.imp[k];
+  if (x.base == null) x.base = Number(FAC.neto||0) || null;
+  if (x.base) x.porcentaje = dos(Number(x.importe||0) * 100 / Number(x.base));
+  pintarFacImp();
+}
+function facImpAgregar(){
+  facSincro();
+  FAC.imp.push({tipo_impuesto_id:null, detalle:"", importe:0, base:Number(FAC.neto||0)||null, porcentaje:null});
+  pintarFacImp();
+}
 function facImpQuitar(k){ facSincro(); FAC.imp.splice(k,1); pintarFacImp(); }
 async function tipoImpAgregar(){
   const n = $("fa_imp_nuevo").value.trim(); if (!n) return;
-  const {error} = await sb.from("tipos_impuesto").insert({nombre:n, activo:true});
+  const pEl = $("fa_imp_pct");
+  const pct = (pEl && pEl.value !== "") ? Number(pEl.value) : null;
+  const fila = {nombre:n, activo:true};
+  if (pct != null) fila.porcentaje = pct;
+  let {error} = await sb.from("tipos_impuesto").insert(fila);
+  /* si la base todavía no tiene la columna porcentaje, se guarda igual sin ella */
+  if (error && /porcentaje/i.test(error.message)){
+    const r2 = await sb.from("tipos_impuesto").insert({nombre:n, activo:true});
+    error = r2.error;
+  }
   if (error){ $("facmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[];
+  if (pEl) pEl.value = ""; $("fa_imp_nuevo").value = "";
   facSincro(); pintarFacImp();
-  $("facmsg").innerHTML='<div class="msg ok">Impuesto «'+esc(n)+'» agregado a la lista.</div>';
+  $("facmsg").innerHTML='<div class="msg ok">Impuesto «'+esc(n)+'»'+(pct!=null?' al '+pct+' %':'')+' agregado a la lista.</div>';
 }
 function pintarFacImp(){
   $("fa_imps").innerHTML = !FAC.imp.length ? '<div class="muted">Sin impuestos. Si la factura es exenta, dejalo así.</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Impuesto</th><th style="min-width:160px">Detalle</th><th>Importe</th><th></th></tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Impuesto</th><th>Base</th><th>%</th><th>Importe</th><th style="min-width:140px">Detalle</th><th></th></tr></thead><tbody>'+
    FAC.imp.map(function(x,k){
-     return '<tr><td><select style="width:100%" id="fi_'+k+'_tipo" onchange="facSincro()">'+selOpts(TIMP,x.tipo_impuesto_id)+'</select></td>'+
+     return '<tr><td><select style="width:100%" id="fi_'+k+'_tipo" onchange="facImpTipo('+k+')">'+selOpts(TIMP,x.tipo_impuesto_id)+'</select></td>'+
+     '<td><input type="number" step="0.01" style="width:120px" id="fi_'+k+'_base" value="'+(x.base==null?"":x.base)+'" oninput="facCalcImporte('+k+')" title="Sobre qué monto se calcula. Arranca en el neto de la factura."></td>'+
+     '<td><input type="number" step="0.01" style="width:80px" id="fi_'+k+'_pct" value="'+(x.porcentaje==null?"":x.porcentaje)+'" oninput="facCalcImporte('+k+')"></td>'+
+     '<td><input type="number" step="0.01" style="width:130px" id="fi_'+k+'_importe" value="'+(x.importe||"")+'" oninput="facImporteAMano('+k+')" title="Se calcula solo. Si lo pisás a mano, el porcentaje se recalcula."></td>'+
      '<td><input id="fi_'+k+'_detalle" value="'+esc(x.detalle)+'" oninput="facSincro()" placeholder="opcional"></td>'+
-     '<td><input type="number" step="0.01" style="width:130px" id="fi_'+k+'_importe" value="'+(x.importe||"")+'" oninput="facSincro()"></td>'+
      '<td><button class="btn2 btn-sm" onclick="facImpQuitar('+k+')">Quitar</button></td></tr>';
    }).join("")+'</tbody></table></div>';
   pintarFacTot();
@@ -3959,10 +4023,22 @@ async function guardarFactura(){
   const err = t => { $("facmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
   if (!FAC.proveedor_id) return err("Elegí el proveedor.");
   if (!(Number(FAC.neto)>0)) return err("El neto gravado tiene que ser mayor a cero.");
-  const {error} = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
+  const filas = FAC.imp.filter(x=>Number(x.importe)>0);
+  const r = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
     p_punto_venta:FAC.punto_venta||null, p_nro:FAC.nro||null, p_fecha:FAC.fecha||hoy(), p_moneda:FAC.moneda,
-    p_neto:Number(FAC.neto), p_impuestos:FAC.imp.filter(x=>Number(x.importe)>0), p_items:[], p_obs:FAC.obs||null, p_orden:null});
-  if (error) return err(error.message);
+    p_neto:Number(FAC.neto), p_impuestos:filas, p_items:[], p_obs:FAC.obs||null, p_orden:null});
+  if (r.error) return err(r.error.message);
+  /* La base y el porcentaje se guardan en un segundo paso, para no tocar la
+     función que registra la factura. Si falla, la factura ya quedó bien: lo
+     único que se pierde es el detalle de cómo se calculó cada impuesto. */
+  const idFac = Number(r.data);
+  if (idFac && filas.length){
+    try{
+      await sb.rpc("guardar_detalle_impuestos", {p_factura: idFac,
+        p_filas: filas.map(x=>({porcentaje: x.porcentaje==null?null:String(x.porcentaje),
+                                base:       x.base==null?null:String(x.base)}))});
+    }catch(e){ }
+  }
   $("dlg").close(); await cargarProveedores(); VISTAS.compras();
 }
 async function verFactura(id){
@@ -3981,8 +4057,11 @@ async function verFactura(id){
      '<div class="f"><label>Total</label><div><b>'+fmtM(x.total,x.moneda)+'</b></div></div>'+
    '</div>'+
    '<div class="sec">Impuestos del comprobante</div>'+
-   ((i.data||[]).length? '<div class="tablewrap"><table><thead><tr><th>Impuesto</th><th>Detalle</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
-     i.data.map(t=>'<tr><td>'+esc(nom(TIMP,t.tipo_impuesto_id))+'</td><td>'+esc(t.detalle)+'</td><td style="text-align:right">'+fmtM(t.importe,x.moneda)+'</td></tr>').join("")+
+   ((i.data||[]).length? '<div class="tablewrap"><table><thead><tr><th>Impuesto</th><th style="text-align:right">Base</th><th style="text-align:right">%</th><th>Detalle</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
+     i.data.map(t=>'<tr><td>'+esc(nom(TIMP,t.tipo_impuesto_id))+'</td>'+
+       '<td style="text-align:right">'+(t.base==null?'<span class="muted">—</span>':fmtM(t.base,x.moneda))+'</td>'+
+       '<td style="text-align:right">'+(t.porcentaje==null?'<span class="muted">—</span>':fmtN(t.porcentaje)+' %')+'</td>'+
+       '<td>'+esc(t.detalle)+'</td><td style="text-align:right">'+fmtM(t.importe,x.moneda)+'</td></tr>').join("")+
      '<tr style="background:#f6f3ee"><td colspan="2"><b>Neto gravado</b></td><td style="text-align:right"><b>'+fmtM(x.neto,x.moneda)+'</b></td></tr>'+
      '</tbody></table></div>' : '<div class="muted">Sin impuestos discriminados.</div>')+
    '<div class="acciones">'+(!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularFactura('+x.id+')">Anular factura</button>':'')+
@@ -4069,10 +4148,22 @@ function pintarPago(){
 async function pagoProveedor(){
   PAG.proveedor_id = $("pa_prov").value||null;
   if (!PAG.proveedor_id){ $("pa_facturas").innerHTML='<div class="muted">Elegí el proveedor.</div>'; return; }
-  const f = await sb.from("facturas_compra").select("*").eq("proveedor_id",Number(PAG.proveedor_id)).eq("anulado",false).order("fecha");
-  const pi = await sb.from("pago_imputaciones").select("factura_id,importe,pago_id");
+  const [f, pi, pg] = await Promise.all([
+    sb.from("facturas_compra").select("*").eq("proveedor_id",Number(PAG.proveedor_id)).eq("anulado",false).order("fecha"),
+    sb.from("pago_imputaciones").select("factura_id,importe,pago_id"),
+    /* Sin esto, la plata de un pago ANULADO seguía descontando de la factura para
+       siempre. Lo reportó Gilda el 7/8/2026: anulaba un pago, volvía a pagar la
+       factura y el saldo seguía bajo. La imputación no se borra —nada se borra—,
+       se ignora la del pago que ya no vale. */
+    sb.from("pagos_compra").select("id,anulado")
+  ]);
+  const pagoAnulado = {};
+  (pg.data||[]).forEach(x=>{ if (x.anulado) pagoAnulado[x.id] = true; });
   const pagados = {};
-  (pi.data||[]).forEach(x=>{ pagados[x.factura_id] = (pagados[x.factura_id]||0) + Number(x.importe||0); });
+  (pi.data||[]).forEach(function(x){
+    if (pagoAnulado[x.pago_id]) return;
+    pagados[x.factura_id] = (pagados[x.factura_id]||0) + Number(x.importe||0);
+  });
   PAG.facturas = (f.data||[]).map(x=>({id:x.id, rot:(x.punto_venta||"")+"-"+(x.nro_comprobante||""), fecha:x.fecha, moneda:x.moneda,
     total:Number(x.total||0), saldo:Number(x.total||0)-(pagados[x.id]||0)})).filter(x=>x.saldo>0.009);
   $("pa_facturas").innerHTML = !PAG.facturas.length ? '<div class="muted">Este proveedor no tiene facturas pendientes.</div>' :
@@ -5148,7 +5239,11 @@ function seccionCC(c, seg){
           return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
             '<td style="white-space:normal;min-width:240px">'+esc(x.detalle)+'</td>'+
             '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
-            (P("finanzas-anular")? '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="anularCC('+x.id+','+c.id+')">Anular</button>')+'</td>':'')+
+            /* Misma regla que en proveedores: lo que nació de una venta o de una
+               cobranza se anula desde el documento, no acá. */
+            (P("finanzas-anular")? '<td>'+(x.anulado?'<span class="pill no">Anulado</span>'
+              : (x.ref_id ? '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">se anula desde '+esc((x.origen||"el documento").toLowerCase())+'</span>'
+                          : '<button class="btn2 btn-sm" onclick="anularCC('+x.id+','+c.id+')">Anular</button>'))+'</td>':'')+
           '</tr>';
         }).join("")+'</tbody></table></div>' : '<div class="muted">Sin movimientos.</div>');
   };
