@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.07-49";
+const VERSION = "v2026.08.07-50";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5807,20 +5807,54 @@ function fichaCuenta(id){
   $("dlg").showModal();
 }
 
+/* ══════════════════════════════════════════════════════════════
+   SALDO ACUMULADO POR CUENTA
+   Pedido de Gustavo (7/8/2026): "que todas las cuentas registren saldo, una
+   columna de saldo en todos los listados, para que más allá del movimiento
+   siempre se vea el saldo".
+   Ojo con la trampa: el saldo se calcula sobre TODOS los movimientos vigentes
+   de la cuenta, NO sobre lo filtrado. Si se calculara sobre lo filtrado,
+   arrancaría de cero al poner una fecha desde, y sería mentira.
+   ══════════════════════════════════════════════════════════════ */
+async function saldosAcumulados(cuentaIds){
+  const ids = (cuentaIds||[]).filter(function(v,i,a){ return v!=null && a.indexOf(v)===i; });
+  if (!ids.length) return {};
+  const q = await sb.from("movimientos_cuenta")
+    .select("id,cuenta_id,fecha,credito,debito")
+    .in("cuenta_id", ids).eq("anulado", false)
+    .order("fecha",{ascending:true}).order("id",{ascending:true}).limit(20000);
+  if (q.error) return {};
+  const acum = {}, saldo = {};
+  (q.data||[]).forEach(function(m){
+    acum[m.cuenta_id] = (acum[m.cuenta_id]||0) + Number(m.credito||0) - Number(m.debito||0);
+    saldo[m.id] = acum[m.cuenta_id];
+  });
+  return saldo;
+}
+/* Celda de saldo: los anulados no tienen saldo porque no mueven nada. */
+function celdaSaldo(mapa, movId, moneda, anulado){
+  if (anulado) return '<td class="r"><span class="muted" title="Anulado: no mueve el saldo">—</span></td>';
+  const v = mapa[movId];
+  if (v === undefined) return '<td class="r"><span class="muted">—</span></td>';
+  return '<td class="r" style="'+(v<0?'color:#7a2415;font-weight:600':'')+'"><b>'+fmtM(v,moneda)+'</b></td>';
+}
+
 async function finMovs(){
   $("fbody").innerHTML = '<div class="panel"><h2>Movimientos de cuentas</h2>'+
    '<div class="filtros">'+
      '<div><label>Moneda</label><select id="mf_mon"><option value="">Todas</option>'+["ARS","USD"].map(x=>'<option '+(FIN.moneda===x?"selected":"")+'>'+x+'</option>').join("")+'</select></div>'+
      '<div><label>Desde</label><input type="date" id="mf_desde" value="'+FIN.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="mf_hasta" value="'+FIN.hasta+'"></div>'+
+     '<div><label>Cuenta</label><select id="mf_cta"><option value="">Todas</option>'+CTAS.map(c=>'<option value="'+c.id+'" '+(String(FIN.cuenta||"")===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
      '<div><label>Anulados</label><select id="mf_anul"><option value="0" '+(FIN.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FIN.anulados?"selected":"")+'>Mostrar</option></select></div>'+
      '<div style="min-width:220px"><label>Buscar</label><input id="mf_txt" placeholder="detalle, cuenta o motivo" value="'+esc(FIN.texto||"")+'"></div>'+
      '<div style="min-width:auto"><button class="btn" id="mf_btn">Filtrar</button></div></div>'+
    '<div id="mlista" class="muted">Cargando…</div></div>';
-  $("mf_btn").onclick = function(){ FIN.moneda=$("mf_mon").value; FIN.desde=$("mf_desde").value; FIN.hasta=$("mf_hasta").value; FIN.anulados=$("mf_anul").value==="1"; FIN.texto=$("mf_txt").value.trim(); finMovs(); };
+  $("mf_btn").onclick = function(){ FIN.moneda=$("mf_mon").value; FIN.desde=$("mf_desde").value; FIN.hasta=$("mf_hasta").value; FIN.cuenta=$("mf_cta").value; FIN.anulados=$("mf_anul").value==="1"; FIN.texto=$("mf_txt").value.trim(); finMovs(); };
   let q = sb.from("movimientos_cuenta").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
   if (FIN.desde) q = q.gte("fecha", FIN.desde);
   if (FIN.hasta) q = q.lte("fecha", FIN.hasta+"T23:59:59");
+  if (FIN.cuenta) q = q.eq("cuenta_id", Number(FIN.cuenta));
   if (!FIN.anulados) q = q.eq("anulado", false);
   const {data,error} = await q;
   if (error){ $("mlista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
@@ -5828,13 +5862,16 @@ async function finMovs(){
   const tm = (FIN.texto||"").toLowerCase();
   const rows = (data||[]).filter(x=> (!FIN.moneda || ctaDe(x.cuenta_id).moneda===FIN.moneda) &&
     (!tm || ((x.detalle||"")+" "+(x.motivo||"")+" "+ctaDe(x.cuenta_id).nombre).toLowerCase().indexOf(tm)>=0));
-  $("mlista").innerHTML = rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
-    ['Cuenta','Fecha','Detalle','Crédito','Débito','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+  const SAL = await saldosAcumulados(rows.map(x=>x.cuenta_id));
+  $("mlista").innerHTML = rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos. La columna <b>Saldo</b> es cómo quedó esa cuenta después de ese movimiento, contando todo su historial y no solo lo filtrado.</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+    ['Cuenta','Fecha','Detalle','Crédito','Débito','Saldo','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
     rows.map(function(x){ const c = ctaDe(x.cuenta_id);
       return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+esc(c.nombre)+'</td><td>'+fmtF(x.fecha)+'</td>'+
         '<td style="white-space:normal;min-width:260px">'+esc(x.detalle)+'</td>'+
         '<td style="color:#1d5b2c">'+(Number(x.credito)?fmtM(x.credito,c.moneda):'')+'</td>'+
-        '<td style="color:#7a2415">'+(Number(x.debito)?fmtM(x.debito,c.moneda):'')+'</td><td>'+esc(x.motivo)+'</td></tr>';
+        '<td style="color:#7a2415">'+(Number(x.debito)?fmtM(x.debito,c.moneda):'')+'</td>'+
+        celdaSaldo(SAL, x.id, c.moneda, x.anulado)+
+        '<td>'+esc(x.motivo)+'</td></tr>';
     }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
 }
 
@@ -5842,7 +5879,7 @@ let FG = {desde:"", hasta:"", concepto:"", cuenta:"", anulados:false, texto:""};
 async function finGastos(){
   const puede = P("finanzas-modificar");
   $("fbody").innerHTML = '<div class="panel"><h2>Gastos</h2>'+
-   '<div class="desc">Cada gasto sale de una cuenta y le baja el saldo. No se borran: se anulan y quedan a la vista, para que la auditoría cierre.</div>'+
+   '<div class="desc">Cada gasto sale de una cuenta y le baja el saldo. La columna <b>Saldo cuenta</b> muestra cómo quedó esa cuenta después de ese gasto, con todo su historial. No se borran: se anulan y quedan a la vista, para que la auditoría cierre.</div>'+
    '<div id="gmsg"></div>'+
    '<div class="filtros">'+
      '<div><label>Desde</label><input type="date" id="gf_desde" value="'+FG.desde+'"></div>'+
@@ -5867,6 +5904,7 @@ async function finGastos(){
   if (error){ $("glista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const t = FG.texto.toLowerCase();
   let rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")+" "+nom(CGASTOS,g.concepto_id)+" "+nom(CTAS,g.cuenta_id)).toLowerCase().indexOf(t)>=0);
+  const SALG = await saldosAcumulados(rows.map(g=>g.cuenta_id));
   if (FG.soloAnulados) rows = rows.filter(g=>g.anulado);
   if (!rows.length){ $("glista").innerHTML='<div class="muted">No hay gastos con esos filtros.</div>'; return; }
   const vivos = rows.filter(g=>!g.anulado);
@@ -5880,11 +5918,12 @@ async function finGastos(){
   $("glista").innerHTML = (resumen?'<div class="kpis">'+resumen+'</div>':'')+
    '<div class="muted" style="margin-bottom:8px">'+rows.length+' gasto'+(rows.length===1?"":"s")+(FG.anulados?" (incluye anulados)":"")+'</div>'+
    '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
-   ['Fecha','Cuenta','Concepto','Proveedor','Comprobante','Neto','IVA','Importe','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+   ['Fecha','Cuenta','Concepto','Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
    rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.5;text-decoration:line-through':'')+'">'+
      '<td>'+fmtF(g.fecha)+'</td><td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
      '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
      '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
+     celdaSaldo(SALG, g.mov_id, g.moneda, g.anulado)+
      '<td style="white-space:normal;min-width:160px">'+esc(g.detalle_extra)+'</td>'+
      '<td>'+(g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
    }).join("")+'</tbody></table></div>';
