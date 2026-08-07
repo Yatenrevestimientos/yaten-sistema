@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.07-50";
+const VERSION = "v2026.08.07-51";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2418,9 +2418,10 @@ const REPORTES = [
  }},
 
 {id:"egresos", t:"Egresos", g:"Finanzas", perm:"finanzas-consultar",
- ay:"Todos los gastos del período por concepto. Es el reporte para ver en qué se va la plata.",
+ ay:"Todos los gastos del período por concepto. Es el reporte para ver en qué se va la plata. Toma la fecha de imputación, o sea el mes al que corresponde el gasto, no el día en que se pagó.",
  run: async function(f){
-   const gs = (await traer("gastos","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   /* por imputación: el gasto pertenece al mes que corresponde, no al día que se pagó */
+   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
    const g = agrupar(gs, x=>(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const p = k.split("|");
@@ -5875,13 +5876,14 @@ async function finMovs(){
     }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
 }
 
-let FG = {desde:"", hasta:"", concepto:"", cuenta:"", anulados:false, texto:""};
+let FG = {desde:"", hasta:"", concepto:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
 async function finGastos(){
   const puede = P("finanzas-modificar");
   $("fbody").innerHTML = '<div class="panel"><h2>Gastos</h2>'+
-   '<div class="desc">Cada gasto sale de una cuenta y le baja el saldo. La columna <b>Saldo cuenta</b> muestra cómo quedó esa cuenta después de ese gasto, con todo su historial. No se borran: se anulan y quedan a la vista, para que la auditoría cierre.</div>'+
+   '<div class="desc">Cada gasto tiene <b>dos fechas</b>: la de pago, que es cuando sale la plata y mueve el saldo, y la de imputación, que es el mes al que corresponde el gasto y la que usan los reportes. La columna <b>Saldo cuenta</b> muestra cómo quedó esa cuenta después de ese pago, con todo su historial. No se borran: se anulan y quedan a la vista, para que la auditoría cierre.</div>'+
    '<div id="gmsg"></div>'+
    '<div class="filtros">'+
+     '<div><label>Filtrar por</label><select id="gf_campo"><option value="fecha_imputacion" '+(FG.campo!=="fecha"?"selected":"")+'>Mes al que corresponde</option><option value="fecha" '+(FG.campo==="fecha"?"selected":"")+'>Fecha de pago</option></select></div>'+
      '<div><label>Desde</label><input type="date" id="gf_desde" value="'+FG.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="gf_hasta" value="'+FG.hasta+'"></div>'+
      '<div><label>Concepto</label><select id="gf_concepto"><option value="">Todos</option>'+CGASTOS.map(c=>'<option value="'+c.id+'" '+(String(FG.concepto)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
@@ -5892,11 +5894,12 @@ async function finGastos(){
      '<div style="min-width:auto"><button class="btn2" id="gf_clr">Limpiar</button></div>'+
      (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formGasto()">+ Gasto nuevo</button></div>':'')+
    '</div><div id="glista" class="muted">Cargando…</div></div>';
-  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1"}; finGastos(); };
-  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",cuenta:"",anulados:false,texto:""}; finGastos(); };
+  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1",campo:$("gf_campo").value}; finGastos(); };
+  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",cuenta:"",anulados:false,texto:"",campo:"fecha_imputacion"}; finGastos(); };
   let q = sb.from("gastos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(1000);
-  if (FG.desde) q = q.gte("fecha", FG.desde);
-  if (FG.hasta) q = q.lte("fecha", FG.hasta);
+  const campoF = FG.campo === "fecha" ? "fecha" : "fecha_imputacion";
+  if (FG.desde) q = q.gte(campoF, FG.desde);
+  if (FG.hasta) q = q.lte(campoF, FG.hasta);
   if (FG.concepto) q = q.eq("concepto_id", Number(FG.concepto));
   if (FG.cuenta) q = q.eq("cuenta_id", Number(FG.cuenta));
   if (!FG.anulados) q = q.eq("anulado", false);
@@ -5918,15 +5921,26 @@ async function finGastos(){
   $("glista").innerHTML = (resumen?'<div class="kpis">'+resumen+'</div>':'')+
    '<div class="muted" style="margin-bottom:8px">'+rows.length+' gasto'+(rows.length===1?"":"s")+(FG.anulados?" (incluye anulados)":"")+'</div>'+
    '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
-   ['Fecha','Cuenta','Concepto','Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+   ['Fecha de pago','Corresponde a','Cuenta','Concepto','Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
    rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.5;text-decoration:line-through':'')+'">'+
-     '<td>'+fmtF(g.fecha)+'</td><td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
+     '<td>'+fmtF(g.fecha)+'</td>'+
+     '<td'+((g.fecha_imputacion && g.fecha_imputacion !== g.fecha)?' style="font-weight:600"':'')+'>'+fmtF(g.fecha_imputacion||g.fecha)+'</td>'+
+     '<td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
      '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
      '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
      celdaSaldo(SALG, g.mov_id, g.moneda, g.anulado)+
      '<td style="white-space:normal;min-width:160px">'+esc(g.detalle_extra)+'</td>'+
      '<td>'+(g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
    }).join("")+'</tbody></table></div>';
+}
+/* Si la imputación venía igual a la fecha de pago, la sigue. Si Gilda ya la
+   cambió a mano, se respeta lo que puso. */
+let _gFechaPrev = null;
+function gastoFechas(){
+  const p = $("g_fecha"), i = $("g_fecha_imp");
+  if (!p || !i) return;
+  if (_gFechaPrev === null || i.value === _gFechaPrev) i.value = p.value;
+  _gFechaPrev = p.value;
 }
 function formGasto(){
   const cuentas = CTAS.filter(c=>c.activo);
@@ -5937,7 +5951,15 @@ function formGasto(){
     return;
   }
   $("dbody").innerHTML = '<div id="fgmsg"></div><div class="grid">'+
-    '<div class="f"><label>Fecha</label><input type="date" id="g_fecha" value="'+hoy()+'"></div>'+
+    /* Dos fechas, porque son dos cosas distintas. Pedido de Gustavo el 7/8/2026:
+       "si hoy saco cien pesos y lo imputo al 22 del mes pasado, el gasto me
+       figura como egreso del mes pasado y me modifica un saldo anterior que
+       ya estaba bien". La plata se mueve el dia que sale; el gasto pertenece
+       al mes que corresponde. */
+    '<div class="f"><label>Fecha de pago *</label><input type="date" id="g_fecha" value="'+hoy()+'" onchange="gastoFechas()">'+
+      '<div class="muted" style="font-size:.85em;margin-top:4px">El día que sale la plata. Es la que mueve el saldo de la cuenta.</div></div>'+
+    '<div class="f"><label>Mes al que corresponde</label><input type="date" id="g_fecha_imp" value="'+hoy()+'">'+
+      '<div class="muted" style="font-size:.85em;margin-top:4px">A qué período pertenece el gasto. Es la que usan los reportes. Si es el mismo día, dejala igual.</div></div>'+
     '<div class="f"><label>Cuenta de donde sale</label><select id="g_cuenta">'+optCtas(cuentas)+'</select></div>'+
     '<div class="f"><label>Importe total</label><input type="number" step="0.01" id="g_importe" oninput="calcGasto()"></div>'+
     '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
@@ -5950,14 +5972,18 @@ function formGasto(){
    '<div class="muted" style="margin-top:4px">Proveedor, comprobante y CUIT son opcionales, pero si los cargás ahora el día de mañana se puede sacar el crédito fiscal sin volver a abrir cada gasto.</div>'+
    '<div class="f"><label>Detalle</label><input id="g_extra" placeholder="A qué corresponde"></div>'+
    '<div class="acciones"><button class="btn" id="g_guardar">Registrar gasto</button></div>';
+  _gFechaPrev = hoy();
   calcGasto();
   $("g_guardar").onclick = async function(){
     const imp = Number($("g_importe").value||0);
     if (!(imp>0)){ $("fgmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
-    const {error} = await sb.rpc("registrar_gasto",{p_fecha:$("g_fecha").value||hoy(), p_cuenta:Number($("g_cuenta").value), p_importe:imp,
+    const r = await sb.rpc("registrar_gasto",{p_fecha:$("g_fecha").value||hoy(), p_cuenta:Number($("g_cuenta").value), p_importe:imp,
       p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null,
       p_comprobante:$("g_comprobante").value||null, p_cuit:$("g_cuit").value||null, p_proveedor:$("g_proveedor").value||null});
-    if (error){ $("fgmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    if (r.error){ $("fgmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+    /* la imputación va en un segundo paso, para no tocar la función que mueve la plata */
+    const fi = ($("g_fecha_imp")||{}).value || $("g_fecha").value || hoy();
+    if (r.data) { try{ await sb.rpc("imputar_gasto",{p_gasto:Number(r.data), p_fecha:fi}); }catch(e){} }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
   };
   $("dlg").showModal();
