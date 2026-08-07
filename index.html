@@ -83,6 +83,12 @@ thead th{position:sticky;top:0;background:#fff;z-index:2;font-size:11px;text-tra
 tbody tr:hover{background:#fbf9f6}
 .b-e{background:var(--entrada)}.b-v{background:var(--visita)}.b-s{background:var(--venta)}.b-u{background:var(--segui)}
 .grupo th{text-align:center;font-family:Georgia,serif;font-size:12px;letter-spacing:.08em;color:var(--petroleo);border-bottom:2px solid var(--linea)}
+/* Ordenar haciendo clic en el título de la columna. Pedido de Gilda, 7/8/2026. */
+thead th.ord{cursor:pointer;user-select:none}
+thead th.ord:hover{color:var(--petroleo)}
+thead th.ord::after{content:"⇅";opacity:.28;margin-left:5px;font-size:10px}
+thead th.orden-asc::after{content:"▲";opacity:.85}
+thead th.orden-desc::after{content:"▼";opacity:.85}
 .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--linea);background:#f6f3ee}
 .pill.ok{background:#e6f2e8;border-color:#bcd8c2;color:#1d5b2c}
 .pill.no{background:#f7e6e3;border-color:#e0bdb6;color:#7a2415}
@@ -193,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.07-46";
+const VERSION = "v2026.08.07-47";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -898,6 +904,84 @@ function leerForm(){
   });
   return o;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   ORDENAR CUALQUIER TABLA POR SU COLUMNA
+   Pedido de Gilda (7/8/2026): "que cada columna que tenga datos siempre
+   tenga arriba un seleccionador para poner de menor a mayor".
+   Se resuelve de una vez para todas las tablas: un solo oyente de clics
+   sobre los títulos, en vez de tocar las cuarenta pantallas una por una.
+   ══════════════════════════════════════════════════════════════ */
+
+/* Convierte el texto de una celda en algo comparable: fecha, número o texto. */
+function valorCelda(td){
+  const t = ((td && (td.innerText || td.textContent)) || "").trim();
+  if (!t) return null;                                  // los vacíos van siempre al final
+  const f = t.match(/^(\d{2})\/(\d{2})\/(\d{4})/);      // 07/08/2026
+  if (f) return Number(f[3] + f[2] + f[1]);
+  const n = t.replace(/US\$|\$|%|\s|\u00a0/g, "");      // $ 1.234,56 · 18,5 % · US$ 900
+  if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(n) || /^-?\d+(,\d+)?$/.test(n))
+    return Number(n.replace(/\./g, "").replace(",", "."));
+  if (/^-?\d+(\.\d+)?$/.test(n)) return Number(n);
+  return t.toLowerCase();
+}
+
+function ordenarTabla(th){
+  const tabla = th.closest("table"); if (!tabla) return;
+  const fila = th.parentElement, tbody = tabla.tBodies[0];
+  if (!tbody) return;
+  const col = Array.prototype.indexOf.call(fila.children, th);
+  /* Las filas con campos de carga (el renglón «agregar») se quedan arriba. */
+  const todas = Array.prototype.slice.call(tbody.rows);
+  const fijas = todas.filter(r => r.querySelector("input,select,textarea"));
+  const movibles = todas.filter(r => fijas.indexOf(r) < 0 && r.cells.length > col);
+  if (movibles.length < 2) return;
+
+  const asc = th.dataset.orden !== "asc";
+  Array.prototype.forEach.call(fila.children, function(x){
+    if (x !== th){ delete x.dataset.orden; x.classList.remove("orden-asc","orden-desc"); }
+  });
+  th.dataset.orden = asc ? "asc" : "desc";
+  th.classList.toggle("orden-asc", asc);
+  th.classList.toggle("orden-desc", !asc);
+
+  movibles.sort(function(a,b){
+    const va = valorCelda(a.cells[col]), vb = valorCelda(b.cells[col]);
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;                 // vacío siempre último, ordene como ordene
+    if (vb === null) return -1;
+    let r;
+    if (typeof va === "number" && typeof vb === "number") r = va - vb;
+    else r = String(va).localeCompare(String(vb), "es", {numeric:true, sensitivity:"base"});
+    return asc ? r : -r;
+  });
+  movibles.forEach(r => tbody.appendChild(r));
+}
+
+/* Marca como ordenables los títulos de columna que tienen sentido ordenar:
+   ni los agrupadores de arriba (colspan) ni la columna de botones (vacía). */
+function marcarOrdenables(raiz){
+  const ths = (raiz||document).querySelectorAll("table thead th");
+  Array.prototype.forEach.call(ths, function(th){
+    if (th.classList.contains("ord")) return;
+    if (th.colSpan > 1) return;
+    if (th.parentElement && th.parentElement.classList.contains("grupo")) return;
+    if (!(th.textContent||"").trim()) return;
+    th.classList.add("ord");
+    th.title = "Clic para ordenar por esta columna";
+  });
+}
+document.addEventListener("click", function(ev){
+  const th = ev.target.closest ? ev.target.closest("th") : null;
+  if (!th || !th.classList.contains("ord")) return;
+  ordenarTabla(th);
+});
+/* Cada vez que una pantalla se vuelve a dibujar, se marcan los títulos nuevos. */
+let _tOrd = null;
+new MutationObserver(function(){
+  clearTimeout(_tOrd);
+  _tOrd = setTimeout(marcarOrdenables, 120);   // esperar a que termine de dibujarse
+}).observe(document.documentElement, {childList:true, subtree:true});
 
 /* ══════════════════════════════════════════════════════════════
    PROSPECTO ↔ PRESUPUESTO ↔ VENTA
@@ -3426,7 +3510,11 @@ VISTAS.cheques = async function(){
   rows.filter(x=>!x.anulado).forEach(x=>{ const m=x.moneda||"ARS"; tot[m]=(tot[m]||0)+Number(x.importe||0); });
   $("main").innerHTML = '<div class="panel"><h2>'+rot+'</h2><div class="desc">'+desc+'</div>'+
    '<div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="ch_txt" placeholder="librador, número, banco o comentario" value="'+esc(FCHQ)+'"></div>'+
-   '<div style="min-width:auto"><button class="btn" id="ch_btn">Buscar</button></div></div>'+
+   '<div style="min-width:auto"><button class="btn" id="ch_btn">Buscar</button></div>'+
+   (P("finanzas-modificar")?'<div style="min-width:auto;margin-left:auto">'+
+     '<button class="btn" onclick="formCheque(\'Terceros\')">+ Cheque de terceros</button> '+
+     '<button class="btn2" onclick="formCheque(\'Propios\')">+ Cheque propio</button></div>':'')+
+   '</div>'+
    (Object.keys(tot).length? '<div class="kpis" style="margin-bottom:10px">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m],m)+'</div><div class="muted">'+rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length+' cheque'+(rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length===1?"":"s")+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
      ['Librador','Número','Banco','Sucursal','Importe','Moneda','Fecha','Vencimiento','Cuenta','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
@@ -3444,6 +3532,87 @@ VISTAS.cheques = async function(){
    '</div>';
   $("ch_btn").onclick = function(){ FCHQ = $("ch_txt").value.trim(); VISTAS.cheques(); };
 };
+/* ─────────── ALTA MANUAL DE CHEQUES ─────────── */
+/* Hasta el 7/8/2026 los cheques solo entraban por una cobranza o salían por un
+   pago. Faltaba poder cargar la cartera que ya existe. El de terceros ENTRA a
+   una cuenta; el propio queda «por cubrir» y la plata sale cuando se debita. */
+let CHQ = {};
+function ctasDeCheques(){
+  const tipo = (TCTAS||[]).filter(t=>/cheques de terceros/i.test(t.nombre||"")).map(t=>t.id);
+  return (CTAS||[]).filter(c=>c.activo && tipo.indexOf(c.tipo_cuenta_id)>=0);
+}
+function formCheque(tipo){
+  CHQ = {tipo:tipo, fecha:hoy(), moneda:"ARS"};
+  $("dtit").textContent = tipo==="Propios" ? "Cheque propio" : "Cheque de terceros";
+  pintarFormCheque();
+  try{ $("dlg").showModal(); }catch(e){}
+}
+function pintarFormCheque(){
+  const esProp = CHQ.tipo === "Propios";
+  const ctas = ctasDeCheques();
+  let falta = "";
+  if (!esProp && !ctas.length) falta = '<div class="msg err" style="line-height:1.5">'+
+    '<b>No hay ninguna cuenta de tipo «Cheques de terceros».</b><br>'+
+    'El cheque tiene que entrar a algún lado. Andá a <b>Finanzas → Cuentas</b>, creá una cuenta con ese tipo, y volvé.</div>';
+  if (esProp && !(CHEQUERAS||[]).filter(x=>x.activo).length) falta = '<div class="msg err" style="line-height:1.5">'+
+    '<b>Todavía no hay ninguna chequera cargada.</b><br>'+
+    'Un cheque propio sale de una chequera. Andá a <b>Cheques → Chequeras</b>, cargá la tuya, y volvé.</div>';
+
+  $("dbody").innerHTML = '<div id="chmsg"></div>'+falta+
+   '<div class="desc">'+(esProp
+     ? 'El cheque que emitimos nosotros. Queda como <b>cheque por cubrir</b>: la plata sale de la cuenta recién cuando se debita.'
+     : 'Un cheque que ya tenés en cartera. <b>Entra a la cuenta que elijas y le suma el importe.</b> No le toca la cuenta corriente a ningún cliente: para cobrarle a un cliente con cheque, usá la cobranza desde su ficha.')+'</div>'+
+   (falta ? '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>' :
+   '<div class="grid">'+
+     (esProp
+       ? '<div class="f"><label>Chequera *</label><select id="ch_chequera">'+selOpts((CHEQUERAS||[]).filter(x=>x.activo),null)+'</select></div>'
+       : '<div class="f"><label>Librador *</label><input id="ch_librador" placeholder="Quién firma el cheque"></div>')+
+     '<div class="f"><label>Banco</label><select id="ch_banco">'+selOpts(BANCOS,null)+'</select></div>'+
+     '<div class="f"><label>Sucursal</label><select id="ch_suc">'+selOpts(SUCS,null)+'</select></div>'+
+     '<div class="f"><label>Número *</label><input id="ch_numero"></div>'+
+     '<div class="f"><label>N° de cuenta corriente</label><input id="ch_cta_cte"></div>'+
+     '<div class="f"><label>Importe *</label><input type="number" step="0.01" id="ch_importe"></div>'+
+     '<div class="f"><label>Moneda</label><select id="ch_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
+     '<div class="f"><label>Fecha *</label><input type="date" id="ch_fecha" value="'+hoy()+'"></div>'+
+     '<div class="f"><label>Vencimiento *</label><input type="date" id="ch_venc"></div>'+
+     (esProp ? '' : '<div class="f"><label>Entra a la cuenta *</label><select id="ch_cuenta">'+optCtas(ctas)+'</select></div>')+
+   '</div>'+
+   '<div class="f"><label>Comentarios</label><input id="ch_coment"></div>'+
+   '<div class="acciones"><button class="btn" id="ch_guardar" onclick="guardarCheque()">Registrar cheque</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>');
+}
+async function guardarCheque(){
+  const err = t => { $("chmsg").innerHTML = '<div class="msg err">'+esc(t)+'</div>'; };
+  const v = id => { const e=$(id); return e ? e.value : null; };
+  const esProp = CHQ.tipo === "Propios";
+  if (!v("ch_numero")) return err("Falta el número del cheque.");
+  if (!(Number(v("ch_importe"))>0)) return err("El importe tiene que ser mayor a cero.");
+  if (!v("ch_venc")) return err("Falta la fecha de vencimiento.");
+  if (!esProp && !v("ch_cuenta")) return err("Elegí la cuenta donde entra el cheque.");
+  if (!esProp && !v("ch_librador")) return err("Falta el librador, que es quién firma el cheque.");
+  $("ch_guardar").disabled = true;
+  const r = await sb.rpc("registrar_cheque_manual",{
+    p_tipo: CHQ.tipo,
+    p_librador: esProp ? (cfg("razon_social","") || "Yaten Revestimientos") : v("ch_librador"),
+    p_banco_id: v("ch_banco") ? Number(v("ch_banco")) : null,
+    p_sucursal_id: v("ch_suc") ? Number(v("ch_suc")) : null,
+    p_numero: v("ch_numero"),
+    p_nro_cta_cte: v("ch_cta_cte") || null,
+    p_importe: Number(v("ch_importe")),
+    p_moneda: v("ch_moneda") || "ARS",
+    p_fecha: v("ch_fecha") || hoy(),
+    p_vencimiento: v("ch_venc"),
+    p_cuenta_id: esProp ? null : Number(v("ch_cuenta")),
+    p_chequera_id: esProp ? Number(v("ch_chequera")) : null,
+    p_comentarios: v("ch_coment") || null
+  });
+  $("ch_guardar").disabled = false;
+  if (r.error) return err(r.error.message);
+  $("dlg").close();
+  await cargarCheques(); await cargarFin();
+  VISTAS.cheques();
+}
+
 async function estadoCheque(id){
   const e = prompt("Nuevo estado del cheque: Disponible, Depositado, Entregado, Cobrado o Rechazado");
   if (e === null) return;
