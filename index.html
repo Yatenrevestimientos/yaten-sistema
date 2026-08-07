@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.07-47";
+const VERSION = "v2026.08.07-48";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5651,17 +5651,30 @@ async function finResumen(){
     }
     (ivaV.data||[]).forEach(v=>{ ef.ivaDeb[v.moneda] = (ef.ivaDeb[v.moneda]||0) + Number(v.iva||0); });
     (ivaG.data||[]).forEach(g=>{ ef.ivaCred[g.moneda] = (ef.ivaCred[g.moneda]||0) + Number(g.iva||0); });
+    /* Cheques propios emitidos y todavía no debitados: plata comprometida que
+       hay que tener el día del vencimiento. Es la línea que Pirka llama
+       «cheques por cubrir» y que faltaba desde que se armó esta pantalla. */
+    ef.porCubrir = {};
+    if (P("finanzas-consultar")){
+      const cq = await sb.from("cheques").select("importe,moneda,estado,tipo,anulado")
+        .eq("tipo","Propios").eq("estado","Disponible").eq("anulado",false);
+      (cq.data||[]).forEach(function(c){
+        const m = c.moneda||"ARS";
+        ef.porCubrir[m] = (ef.porCubrir[m]||0) + Number(c.importe||0);
+      });
+    }
   }
   if (ef){
     const linea = (t,obj) => '<tr><td>'+t+'</td><td style="text-align:right">'+(fmtM(obj.ARS||0,"ARS")||"$ 0")+'</td><td style="text-align:right">'+(fmtM(obj.USD||0,"USD")||"US$ 0")+'</td></tr>';
     const nomC = id => { const c = CLIS.find(x=>x.id===id); return c ? c.nombre : ("#"+id); };
     html += '<div class="panel"><h2>Estado financiero</h2>'+
-      '<div class="desc">Lo que hay que cobrar y lo que hay que pagar, aparte de la plata que ya está en las cuentas. Los cheques por cubrir se van a sumar acá cuando construyamos la pantalla de cheques.</div>'+
+      '<div class="desc">Lo que hay que cobrar y lo que hay que pagar, aparte de la plata que ya está en las cuentas.</div>'+
       '<div class="tablewrap"><table><thead><tr><th></th><th style="text-align:right">ARS</th><th style="text-align:right">USD</th></tr></thead><tbody>'+
       linea("Cuentas a cobrar (deuda de clientes)", ef.cobrar)+
       linea("A favor de clientes (señas o pagos de más)", ef.favor)+
       linea("Cuentas a pagar (deuda con proveedores)", ef.pagar||{})+
       linea("A favor sobre proveedores", ef.favorProv||{})+
+      linea("Cheques por cubrir (propios emitidos sin debitar)", ef.porCubrir||{})+
       linea("IVA débito fiscal (por ventas)", ef.ivaDeb)+
       linea("IVA crédito fiscal (por gastos)", ef.ivaCred)+
       '</tbody></table></div>'+
