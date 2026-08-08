@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-53";
+const VERSION = "v2026.08.08-54";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5567,10 +5567,14 @@ async function formCobranza(cliId){
      no tiene ese permiso —ni tiene que tenerlo, porque ahí se ven todos los
      saldos— y la pantalla le decía «no hay caja registrada» habiendo doce.
      Para cobrar alcanza con cuenta-consultar: el nombre y la moneda. */
-  const [ct,cc] = await Promise.all([
+  const [ct,cc,tc] = await Promise.all([
     sb.from("cuentas").select("*").order("nombre"),
-    sb.from("conceptos_cobranza").select("*").order("id")
+    sb.from("conceptos_cobranza").select("*").order("id"),
+    sb.from("tipos_cuenta").select("*").order("orden").order("nombre")
   ]);
+  /* los tipos de cuenta se cargaban solo al entrar a Finanzas: para la VL,
+     que no entra nunca, el filtro «Tipo de cuenta» quedaba vacío */
+  if (!TCTAS.length && (tc.data||[]).length) TCTAS = tc.data;
   // dejamos las cuentas en la variable global asi monedaCta() funciona aunque
   // todavia no se haya entrado a Finanzas en esta sesion. Si Finanzas ya las
   // cargó con saldo, no las pisamos: esas traen mas datos.
