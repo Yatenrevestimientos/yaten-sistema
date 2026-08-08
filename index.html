@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-57";
+const VERSION = "v2026.08.08-58";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -853,10 +853,9 @@ function formHTML(p, ro, lig){
           '<button class="btn2" onclick="nuevoPresupuestoDeProspecto('+p.id+')">+ Otro presupuesto para este prospecto</button></div>'
         : '')
     : '<div class="msg" style="line-height:1.5">Todavía no hay presupuesto cargado. '+
-      'El número, la fecha, el importe y los m² <b>se cargan una sola vez</b>, con el botón '+
-      '<b>«+ Crear presupuesto para este prospecto»</b> al pie de esta ficha '+
-      '(aparece una vez que el prospecto está guardado). Ahí adentro está también el lugar para el '+
-      '<b>número escrito a mano</b> que trae el ATO. Acá solo se registra cómo salió.'+
+      'El número, la fecha, el importe y los m² <b>se cargan una sola vez</b>, con el botón de acá abajo. '+
+      'Ahí adentro está también el lugar para el <b>número escrito a mano</b> que trae el ATO. '+
+      'En esta ficha solo se registra cómo salió.'+
       ((p.nro_presup_papel || p.importe)
         ? '<br><span class="muted">De la carga anterior quedó anotado: '+
           (p.nro_presup_papel ? 'N° '+esc(p.nro_presup_papel)+' ' : '')+
