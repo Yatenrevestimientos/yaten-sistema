@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-52";
+const VERSION = "v2026.08.08-53";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -999,8 +999,14 @@ new MutationObserver(function(){
 
 /* Busca el cliente de un prospecto y, si no existe, lo crea.
    Busca por marca, teléfono, mail y nombre —en ese orden— para no duplicar
-   a alguien que ya estaba cargado con el nombre escrito distinto. */
-async function clienteDeProspecto(p){
+   a alguien que ya estaba cargado con el nombre escrito distinto.
+
+   crear = false → solo busca, no da de alta a nadie. Es lo que pidió Gustavo:
+   «que el cliente sea todo aquel que tiene un presupuesto hecho, como mínimo».
+   Mientras el presupuesto no se guarda, el prospecto no ensucia la base de
+   clientes. El alta se hace recién en guardarPresupuesto(). */
+async function clienteDeProspecto(p, crear){
+  if (crear === undefined) crear = true;
   if (!CLIS.length) await cargarClientes();
   const soloNum = s => (s||"").replace(/\D/g,"");
   const norm = s => (s||"").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ");
@@ -1022,6 +1028,8 @@ async function clienteDeProspecto(p){
     await cargarClientes();
     return {cliente: CLIS.find(x=>String(x.id)===String(c.id)) || c, creado:false, yaEstaba:true};
   }
+
+  if (!crear) return {cliente:null, creado:false, faltaCrear:true};
 
   const nuevo = {nombre:p.nombre, telefono:p.telefono||null, celular:p.celular||null, email:p.email||null,
                  direccion:p.direccion||null, localidad_id:p.localidad_id||null, origen_id:p.origen_id||null,
@@ -1056,10 +1064,11 @@ async function nuevoPresupuestoDeProspecto(idPros){
   if (q.error) return msg('<div class="msg err">'+esc(q.error.message)+'</div>');
   const p = q.data;
   if (!p.nombre) return msg('<div class="msg err">El prospecto no tiene nombre cargado y el presupuesto lo necesita.</div>');
-  const res = await clienteDeProspecto(p);
+  /* solo busca: el alta del cliente se hace al guardar el presupuesto */
+  const res = await clienteDeProspecto(p, false);
   if (res.error) return msg('<div class="msg err">No se pudo preparar el cliente: '+esc(res.error)+'</div>');
   try{ $("dlg").close(); }catch(e){}
-  await abrirPresupuesto(null, {prospecto:p, cliente:res.cliente, creadoCliente:res.creado, clienteYaEstaba:res.yaEstaba});
+  await abrirPresupuesto(null, {prospecto:p, cliente:res.cliente, clienteYaEstaba:!!res.cliente, faltaCrear:res.faltaCrear});
 }
 
 /* Marcar «Vendido» en la ficha cierra el presupuesto ligado, y eso —no esto—
@@ -2722,11 +2731,9 @@ async function abrirPresupuesto(id, desde){
       PRE.cab.nro_papel      = pr.nro_presup_papel || null;
       if (cl && cl.lista_id) PRE.cab.lista_id = cl.lista_id;
       PRE.origen = {codigo: pr.codigo, id: pr.id,
-        aviso: desde.creadoCliente
-          ? 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>. Como todavía no era cliente, se dio de alta <b>'+esc(cl.nombre)+'</b> con sus datos. Cargá los renglones y guardá.'
-          : (desde.clienteYaEstaba
-              ? 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>. Ya existía el cliente <b>'+esc(cl.nombre)+'</b> y se usó ese, no se duplicó. Cargá los renglones y guardá.'
-              : 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>, ligado al cliente <b>'+esc(cl.nombre)+'</b>. Cargá los renglones y guardá.')};
+        aviso: cl
+          ? 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>. Ya existía el cliente <b>'+esc(cl.nombre)+'</b> y se usa ese, no se duplica. Cargá los renglones y guardá.'
+          : 'Viene del prospecto <b>'+esc(pr.codigo)+'</b>. Todavía no es cliente: se va a dar de alta <b>cuando guardes este presupuesto</b>, no antes. Cargá los renglones y guardá.'};
     }
   }
   pintarFichaPre();
@@ -2957,14 +2964,16 @@ async function presProspectoElegido(){
   if (!p.nombre) return msg('<div class="msg err">Ese prospecto no tiene nombre cargado y el presupuesto lo necesita.</div>');
   sel.disabled = true;
   msg('<div class="msg">Buscando al cliente en la base…</div>');
-  const res = await clienteDeProspecto(p);
+  /* solo busca. Si no está, NO lo da de alta acá: el alta se hace al guardar,
+     así el que abre un presupuesto y lo abandona no deja un cliente colgado. */
+  const res = await clienteDeProspecto(p, false);
   sel.disabled = false;
   if (res.error) return msg('<div class="msg err">No se pudo preparar el cliente: '+esc(res.error)+'</div>');
   const cl = res.cliente;
   PRE.cab.prospecto_id = p.id;
-  PRE.cab.cliente_id   = cl.id;
+  PRE.cab.cliente_id   = cl ? cl.id : null;
   const set = (k,v) => { const e = $(k); if (e && v != null && v !== "") e.value = v; };
-  if ($("w_cliente_id")) $("w_cliente_id").innerHTML = selPer(CLIS, Number(cl.id));
+  if ($("w_cliente_id")) $("w_cliente_id").innerHTML = selPer(CLIS, cl ? Number(cl.id) : null);
   if ($("w_cliente_nombre")) $("w_cliente_nombre").value = p.nombre || "";
   if ($("w_cliente_tel"))    $("w_cliente_tel").value    = p.celular || p.telefono || "";
   if ($("w_cliente_email"))  $("w_cliente_email").value  = p.email || "";
@@ -2972,15 +2981,15 @@ async function presProspectoElegido(){
   set("w_direccion_obra", p.direccion);
   set("w_vl_id", p.vl_id);
   set("w_ato_id", p.ato_id);
-  set("w_lista_id", cl.lista_id);
+  if (cl) set("w_lista_id", cl.lista_id);
   const np = $("w_nro_papel");
   if (np && !np.value && p.nro_presup_papel) np.value = p.nro_presup_papel;
   const otros = P("presupuesto-consultar") ? await presupuestosDeProspecto(p.id) : [];
   const vivos = otros.filter(x=>x.estado!=="Anulado");
   msg('<div class="msg ok" style="line-height:1.5">Ligado al prospecto <b>'+esc(p.codigo)+'</b>. '+
-    (res.creado
-      ? 'Como todavía no era cliente, se dio de alta <b>'+esc(cl.nombre)+'</b> con sus datos.'
-      : 'Ya existía el cliente <b>'+esc(cl.nombre)+'</b> y se usó ese, no se duplicó.')+
+    (cl
+      ? 'Ya existía el cliente <b>'+esc(cl.nombre)+'</b> y se usa ese, no se duplica.'
+      : 'Todavía no es cliente: se va a dar de alta <b>cuando guardes este presupuesto</b>, no antes.')+
     (vivos.length
       ? '<br><b>Ojo:</b> este prospecto ya tiene '+vivos.length+' presupuesto'+(vivos.length===1?"":"s")+
         ' cargado'+(vivos.length===1?"":"s")+' ('+vivos.map(x=>esc(x.codigo)).join(", ")+'). '+
@@ -3000,6 +3009,25 @@ async function guardarPresupuesto(){
   if (PRE.cab.prospecto_id) o.prospecto_id = PRE.cab.prospecto_id;
   if (o.cliente_id == null && PRE.cab.cliente_id) o.cliente_id = PRE.cab.cliente_id;
   if (!o.cliente_nombre){ $("qmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
+  /* ACÁ nace el cliente: «el cliente es todo aquel que tiene un presupuesto
+     hecho, como mínimo». Si el presupuesto viene de un prospecto y todavía no
+     hay ficha de cliente, se da de alta ahora —una sola vez, buscando antes
+     para no duplicar— y el presupuesto queda atado a esa ficha. */
+  let avisoCli = "";
+  if (window._db9 && PRE.cab.prospecto_id && o.cliente_id == null){
+    const qp = await sb.from("prospectos").select("id,codigo,nombre,celular,telefono,email,direccion,localidad_id,origen_id").eq("id",PRE.cab.prospecto_id).single();
+    if (qp.data){
+      const rc = await clienteDeProspecto(qp.data, true);
+      if (rc.error){ $("qmsg").innerHTML = '<div class="msg err">No se pudo dar de alta el cliente: '+esc(rc.error)+'</div>'; return; }
+      if (rc.cliente){
+        o.cliente_id = rc.cliente.id;
+        PRE.cab.cliente_id = rc.cliente.id;
+        avisoCli = rc.creado
+          ? ' Se dio de alta el cliente <b>'+esc(rc.cliente.nombre)+'</b> a partir del prospecto.'
+          : ' Quedó atado al cliente <b>'+esc(rc.cliente.nombre)+'</b>, que ya estaba cargado.';
+      }
+    }
+  }
   if (o.descuento_pct == null) o.descuento_pct = 0;
   $("w_guardar").disabled = true;
   let id = PRE.cab.id;
@@ -3058,7 +3086,7 @@ async function guardarPresupuesto(){
   if (fresco.data) PRE.cab = fresco.data;
   $("w_guardar").disabled = false;
   pintarFichaPre();
-  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.'+msgVenta+'</div>';
+  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.'+avisoCli+msgVenta+'</div>';
   if (VISTA==="presup") pintarPresupuestos();
 }
 
