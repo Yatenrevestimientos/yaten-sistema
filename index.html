@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-59";
+const VERSION = "v2026.08.08-60";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3195,6 +3195,15 @@ async function guardarPresupuesto(){
   if (PRE.cab.prospecto_id) o.prospecto_id = PRE.cab.prospecto_id;
   if (o.cliente_id == null && PRE.cab.cliente_id) o.cliente_id = PRE.cab.cliente_id;
   if (!o.cliente_nombre){ $("qmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
+  /* La forma de pago es del presupuesto: es lo que se filtra cuando haya una
+     promoción («todos los abiertos que iban con tarjeta de crédito»). Se lee
+     ACÁ, antes de grabar, no después. */
+  let avisoMP = "", mpElegido = null;
+  if (M.mpg && $("w_medio_pago_pref_id")){
+    mpElegido = $("w_medio_pago_pref_id").value ? Number($("w_medio_pago_pref_id").value) : null;
+    if (await db38()) o.medio_pago_pref_id = mpElegido;
+    PRE.medioPagoPref = mpElegido;
+  }
   /* ACÁ nace el cliente: «el cliente es todo aquel que tiene un presupuesto
      hecho, como mínimo». Si el presupuesto viene de un prospecto y todavía no
      hay ficha de cliente, se da de alta ahora —una sola vez, buscando antes
@@ -3273,19 +3282,10 @@ async function guardarPresupuesto(){
   /* El presupuesto se carga en un solo lugar y desde acá vuelve a la ficha del
      prospecto: m², número de papel, fecha e importe. Así la planilla y los
      reportes siguen leyendo lo mismo que antes, sin cargarlo dos veces. */
-  /* La forma de pago preferida vive en el cliente: se anota en el presupuesto
-     porque es donde se habla de plata, pero la promoción se le manda a la
-     persona. Si no hay cliente todavía, no hay dónde guardarla. */
-  let avisoMP = "";
-  let mpElegido = null;
-  if (M.mpg && $("w_medio_pago_pref_id")){
-    mpElegido = $("w_medio_pago_pref_id").value ? Number($("w_medio_pago_pref_id").value) : null;
-    /* va en el PRESUPUESTO: es lo que se filtra cuando hay una promoción */
-    if (await db38()) o.medio_pago_pref_id = mpElegido;
-    PRE.medioPagoPref = mpElegido;
-  }
-  /* Y además se copia a la ficha del cliente, para el reporte de promociones por
-     cliente. El que manda es el presupuesto; el cliente guarda la última. */
+  /* La forma de pago se guarda en el PRESUPUESTO (arriba, junto con el resto de
+     la cabecera) y además se copia a la ficha del cliente, para el reporte de
+     promociones por cliente. El que manda es el presupuesto; el cliente guarda
+     la última que se usó. */
   if (M.mpg && mpElegido !== null && PRE.cab.cliente_id && P("cliente-modificar")){
     const antes = (CLIS.find(x=>String(x.id)===String(PRE.cab.cliente_id))||{}).medio_pago_pref_id || null;
     if (mpElegido !== antes){
