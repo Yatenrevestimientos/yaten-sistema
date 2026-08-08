@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-56";
+const VERSION = "v2026.08.08-57";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -847,7 +847,11 @@ function formHTML(p, ro, lig){
       'El número, la fecha, el importe y los m² salen de ahí: se cargan una sola vez, en el presupuesto.'+
       (p.nro_presup_papel && p.nro_presup_papel !== lig.codigo && p.nro_presup_papel !== (lig.nro_papel||"")
         ? '<br><span class="muted">De la planilla vieja quedó anotado a mano: '+esc(p.nro_presup_papel)+'. No se borró.</span>'
-        : '')+'</div>'
+        : '')+'</div>'+
+      (p.id && P("presupuesto-agregar")
+        ? '<div class="acciones"><button class="btn2" onclick="verPresupDesdeProspecto('+lig.id+')">Abrir el presupuesto '+esc(lig.codigo)+'</button>'+
+          '<button class="btn2" onclick="nuevoPresupuestoDeProspecto('+p.id+')">+ Otro presupuesto para este prospecto</button></div>'
+        : '')
     : '<div class="msg" style="line-height:1.5">Todavía no hay presupuesto cargado. '+
       'El número, la fecha, el importe y los m² <b>se cargan una sola vez</b>, con el botón '+
       '<b>«+ Crear presupuesto para este prospecto»</b> al pie de esta ficha '+
@@ -858,7 +862,14 @@ function formHTML(p, ro, lig){
           (p.nro_presup_papel ? 'N° '+esc(p.nro_presup_papel)+' ' : '')+
           (p.importe ? '· '+esc(fmtM(p.importe, p.moneda||"ARS")) : '')+
           '. Se conserva; se corrige desde el presupuesto.</span>'
-        : '')+'</div>')+
+        : '')+'</div>'+
+      /* El botón, acá mismo: es donde se lo busca cuando se está cargando el
+         prospecto. El de más abajo, junto a la lista de presupuestos, sigue. */
+      (p.id
+        ? (P("presupuesto-agregar")
+            ? '<div class="acciones"><button class="btn" onclick="nuevoPresupuestoDeProspecto('+p.id+')">+ Crear presupuesto para este prospecto</button></div>'
+            : '')
+        : '<div class="muted" style="margin-bottom:8px">Guardá el prospecto primero: el botón para crear el presupuesto aparece cuando ya tiene código.</div>'))+
   '<div class="grid">'+
     '<div class="f"><label>Resultado / Venta</label><select id="c_resultado" '+d+'>'+selTxt(RESULTADOS,p.resultado)+'</select>'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">Se puede cambiar cuando quieras: el que no compró hoy y cierra en tres días se pasa a «Vendido».</div></div>'+
@@ -1533,6 +1544,9 @@ const MAESTRAS = [
   {k:"ctr", extra:true, tabla:"conceptos_transferencia", titulo:"Concepto de Transferencias",
    ayuda:"Por qué movés plata de una cuenta propia a otra: reposición de caja chica, depósito de efectivo, compra de dólares. No es ni ingreso ni egreso, la plata sigue siendo tuya.",
    cols:[]},
+  {k:"mpg", extra:true, tabla:"medios_pago", titulo:"Formas de pago",
+   ayuda:"Con qué paga la gente: efectivo, transferencia, débito, cada tarjeta de crédito, billetera virtual. En el presupuesto se anota cuál prefiere el cliente, y después el reporte «Clientes por forma de pago» te dice a quiénes mandarles una promoción de esa tarjeta. El «Tipo» agrupa la familia (Crédito, Débito, Efectivo…) para poder filtrar de a montones y no de a una.",
+   cols:[{c:"tipo", t:"Tipo", ph:"Crédito, Débito, Efectivo, Transferencia…"}]},
   {k:"tcl", extra:true, tabla:"tipos_cliente", titulo:"Tipo de clientes",
    ayuda:"Consumidor final, arquitecto, constructora, revendedor. Si le ponés un descuento, se sugiere solo cuando le hagas un presupuesto.",
    cols:[{c:"descuento_pct", t:"Descuento %", num:true, ph:"0"}]},
@@ -2231,6 +2245,29 @@ const REPORTES = [
    return {cols:[{t:"Localidad"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Vendido",tipo:"m"}], filas:filas};
  }},
 
+/* Pedido de Gustavo (8/8/2026): "si mañana tenemos una promoción con alguna
+   tarjeta, poder filtrar y hacer un reporte de qué clientes tenían esa tarjeta
+   para enviarles la promoción". Por eso las columnas son las de contacto:
+   este reporte se baja en CSV y se usa como lista de envío. */
+{id:"clientes_pago", t:"Clientes por forma de pago", g:"Comercial", perm:"cliente-consultar",
+ ay:"A quién le gusta pagar con qué. Sirve para armar la lista de una promoción por tarjeta: filtrás la forma de pago y bajás el CSV con los teléfonos y los mails. No mira fechas: es la foto de la cartera de hoy.",
+ run: async function(){
+   if (!CLIS.length) await cargarClientes();
+   if (!M.mpg) return {cols:[{t:"Forma de pago"}], filas:[],
+     nota:"falta correr la migración de formas de pago en la base."};
+   const filas = CLIS.filter(c=>c.activo).map(function(c){
+     const mp = M.mpg.find(x=>String(x.id)===String(c.medio_pago_pref_id));
+     return [mp?mp.nombre:"— sin cargar —", mp?(mp.tipo||"—"):"—", c.codigo, c.nombre,
+             c.celular||c.telefono||"", c.email||"", nom(M.loc,c.localidad_id)];
+   });
+   filas.sort(function(a,b){
+     const r = String(a[0]).localeCompare(String(b[0]),"es");
+     return r || String(a[3]).localeCompare(String(b[3]),"es");
+   });
+   return {cols:[{t:"Forma de pago"},{t:"Tipo"},{t:"Código"},{t:"Cliente"},
+                 {t:"Teléfono"},{t:"Email"},{t:"Localidad"}], filas:filas};
+ }},
+
 /* ── Productos ── */
 {id:"productos_venta", t:"Productos", g:"Productos", perm:"reporte-ventas",
  ay:"Qué se vendió y cuánto, ordenado por lo que más facturó. El primer reporte que hay que mirar antes de armar un embarque.",
@@ -2771,6 +2808,11 @@ function pintarFichaPre(){
   const c = PRE.cab;
   const puede = c.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
   const d = puede ? "" : "disabled";
+  /* la preferencia de pago sale de la ficha del cliente, no del presupuesto */
+  if (PRE.medioPagoPref === undefined){
+    const cl0 = CLIS.find(x=>String(x.id)===String(c.cliente_id));
+    PRE.medioPagoPref = cl0 ? (cl0.medio_pago_pref_id||null) : null;
+  }
   $("dtit").textContent = c.codigo ? (c.codigo+" · "+(c.cliente_nombre||"")) : "Presupuesto nuevo";
   $("dbody").innerHTML = '<div id="qmsg">'+
    (PRE.origen && PRE.origen.aviso ? '<div class="msg ok" style="line-height:1.5">'+PRE.origen.aviso+'</div>'
@@ -2821,6 +2863,23 @@ function pintarFichaPre(){
      '<div class="f"><label>ATO</label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
      '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+selOpts(M.mot,c.motivo_rechazo_id)+'</select></div>'+
    '</div>'+
+   /* La preferencia de pago se anota acá, que es donde se habla de plata, pero
+      se guarda en el CLIENTE: la promoción de mañana se le manda a la persona,
+      no al presupuesto. */
+   (M.mpg
+     ? '<div class="sec">Forma de pago que prefiere el cliente</div>'+
+       '<div class="muted" style="margin-bottom:8px">Con qué le gustaría pagar. No es la cobranza —eso se registra después— sino el dato para poder avisarle cuando haya una promoción con esa tarjeta.</div>'+
+       '<div class="grid">'+
+         '<div class="f"><label>Forma de pago preferida</label><select id="w_medio_pago_pref_id" '+d+'>'+
+           selOpts(M.mpg.filter(x=>x.activo), PRE.medioPagoPref||null)+'</select>'+
+           '<div class="muted" style="font-size:.85em;margin-top:4px" id="w_mp_nota">Queda guardado en la ficha del cliente.</div></div>'+
+         (P("maestra-modificar")
+           ? '<div class="f"><label>¿Falta la forma de pago?</label><div style="display:flex;gap:6px">'+
+             '<input id="w_mp_nueva" placeholder="Tarjeta nueva, billetera…"><button class="btn2 btn-sm" onclick="medioPagoAgregar()">Agregar</button></div>'+
+             '<div class="muted" style="font-size:.85em;margin-top:4px">Se suma a la lista y queda disponible para todos.</div></div>'
+           : '')+
+       '</div>'
+     : '')+
    '<div class="sec">Productos</div><div id="w_items"></div>'+
    (puede?'<div class="acciones"><button class="btn2 btn-sm" onclick="itemAgregar()">+ Agregar renglón</button></div>':'')+
    '<div class="sec">Adicionales · flete, colocación, extras</div><div id="w_adic"></div>'+
@@ -2960,10 +3019,29 @@ function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdi
 const CAMPOS_PRE = ["cliente_id","cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
   "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
 const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct"];
+/* Agregar una forma de pago sin salir del presupuesto, como los conceptos de
+   cobranza. Necesita maestra-modificar: la lista la comparten todos. */
+async function medioPagoAgregar(){
+  const caja = $("w_mp_nueva"); if (!caja) return;
+  const n = caja.value.trim(); if (!n) return;
+  const nota = $("w_mp_nota");
+  const r = await sb.from("medios_pago").insert({nombre:n, activo:true}).select("*").single();
+  if (r.error){ if (nota) nota.innerHTML = '<span style="color:#7a2415">No se pudo agregar: '+esc(r.error.message)+'</span>'; return; }
+  M.mpg = (M.mpg||[]).concat([r.data]).sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre),"es"));
+  const sel = $("w_medio_pago_pref_id");
+  if (sel) sel.innerHTML = selOpts(M.mpg.filter(x=>x.activo), r.data.id);
+  PRE.medioPagoPref = r.data.id;
+  caja.value = "";
+  if (nota) nota.textContent = 'Se agregó «'+n+'» y quedó elegida. Se guarda en la ficha del cliente.';
+}
+
 function presClienteElegido(){
   const id = $("w_cliente_id").value;
   const c = CLIS.find(x=>String(x.id)===String(id));
   if (!c) return;
+  /* al cambiar de cliente, la preferencia que se muestra es la de ese cliente */
+  const selMP = $("w_medio_pago_pref_id");
+  if (selMP && M.mpg){ PRE.medioPagoPref = c.medio_pago_pref_id||null; selMP.value = PRE.medioPagoPref||""; }
   $("w_cliente_nombre").value = c.nombre;
   $("w_cliente_tel").value = c.celular || c.telefono || "";
   $("w_cliente_email").value = c.email || "";
@@ -3023,6 +3101,8 @@ async function presProspectoElegido(){
   PRE.pros = p;
   PRE.cab.prospecto_id = p.id;
   PRE.cab.cliente_id   = cl ? cl.id : null;
+  const selMP = $("w_medio_pago_pref_id");
+  if (selMP && cl){ PRE.medioPagoPref = cl.medio_pago_pref_id||null; selMP.value = PRE.medioPagoPref||""; }
   const set = (k,v) => { const e = $(k); if (e && v != null && v !== "") e.value = v; };
   if ($("w_cliente_id")) $("w_cliente_id").innerHTML = selPer(CLIS, cl ? Number(cl.id) : null);
   if ($("w_cliente_nombre")) $("w_cliente_nombre").value = p.nombre || "";
@@ -3142,6 +3222,30 @@ async function guardarPresupuesto(){
   /* El presupuesto se carga en un solo lugar y desde acá vuelve a la ficha del
      prospecto: m², número de papel, fecha e importe. Así la planilla y los
      reportes siguen leyendo lo mismo que antes, sin cargarlo dos veces. */
+  /* La forma de pago preferida vive en el cliente: se anota en el presupuesto
+     porque es donde se habla de plata, pero la promoción se le manda a la
+     persona. Si no hay cliente todavía, no hay dónde guardarla. */
+  let avisoMP = "";
+  if (M.mpg && $("w_medio_pago_pref_id")){
+    const mp = $("w_medio_pago_pref_id").value ? Number($("w_medio_pago_pref_id").value) : null;
+    const cliId = o.cliente_id || PRE.cab.cliente_id;
+    const antes = (CLIS.find(x=>String(x.id)===String(cliId))||{}).medio_pago_pref_id || null;
+    if (cliId && mp !== antes){
+      if (!P("cliente-modificar")){
+        avisoMP = ' <b>Ojo:</b> la forma de pago no se guardó, tu rol no puede editar la ficha del cliente.';
+      } else {
+        const rm = await sb.from("clientes").update({medio_pago_pref_id: mp}).eq("id", cliId);
+        if (rm.error) avisoMP = ' <b>Ojo:</b> no se pudo guardar la forma de pago ('+esc(rm.error.message)+').';
+        else {
+          const nom0 = (M.mpg.find(x=>String(x.id)===String(mp))||{}).nombre;
+          avisoMP = mp ? ' Quedó anotado que prefiere pagar con <b>'+esc(nom0)+'</b>.'
+                       : ' Se borró la forma de pago preferida del cliente.';
+          await cargarClientes();
+        }
+      }
+    }
+    PRE.medioPagoPref = mp;
+  }
   let avisoPros = "";
   if (PRE.cab.prospecto_id && P("prospecto-modificar")){
     const val = k => { const e = $(k); return (e && e.value !== "") ? Number(e.value) : null; };
@@ -3161,7 +3265,7 @@ async function guardarPresupuesto(){
   }
   $("w_guardar").disabled = false;
   pintarFichaPre();
-  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.'+avisoCli+avisoPros+msgVenta+'</div>';
+  $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.'+avisoCli+avisoMP+avisoPros+msgVenta+'</div>';
   if (VISTA==="presup") pintarPresupuestos();
 }
 
@@ -5302,7 +5406,7 @@ async function anularLead(id){
 }
 
 /* ═══════════ CLIENTES Y CUENTA CORRIENTE ═══════════ */
-let CLIS = [], SALDOS = {}, FCLI = "", FDEUDA = false;
+let CLIS = [], SALDOS = {}, FCLI = "", FDEUDA = false, FMPG = "";
 async function cargarClientes(){
   if (!P("cliente-consultar")) return;
   const [c,s] = await Promise.all([
@@ -5345,6 +5449,20 @@ VISTAS.clientes = async function(){
   else if (SUBVISTA === "afavor") FDEUDA = false;
   const t = FCLI.toLowerCase();
   let rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)+" "+(c.observaciones||"")).toLowerCase().indexOf(t)>=0);
+  /* Filtro por forma de pago: para eso se anota la preferencia. «Todas las de
+     crédito» filtra por familia, así una promo de tarjetas no obliga a elegir
+     marca por marca. */
+  if (FMPG && M.mpg){
+    if (FMPG.indexOf("t:") === 0){
+      const fam = FMPG.slice(2);
+      const ids = M.mpg.filter(x=>String(x.tipo||"")===fam).map(x=>String(x.id));
+      rows = rows.filter(c => ids.indexOf(String(c.medio_pago_pref_id)) >= 0);
+    } else if (FMPG === "sin"){
+      rows = rows.filter(c => !c.medio_pago_pref_id);
+    } else {
+      rows = rows.filter(c => String(c.medio_pago_pref_id) === String(FMPG));
+    }
+  }
   const debe   = c => Math.max(saldoCli(c.id,'ARS'),0) + Math.max(saldoCli(c.id,'USD'),0);
   const aFavor = c => Math.max(-saldoCli(c.id,'ARS'),0) + Math.max(-saldoCli(c.id,'USD'),0);
   if (SUBVISTA === "afavor"){
@@ -5385,6 +5503,12 @@ VISTAS.clientes = async function(){
       ([0,15,30,60,90].indexOf(umbral)<0?'<option value="'+umbral+'" selected>'+umbral+' días o más</option>':'')+
       '</select></div>':'')+
    (SUBVISTA?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
+   (M.mpg? '<div><label>Forma de pago</label><select id="cf_mpg"><option value="">Todas</option>'+
+      Array.from(new Set(M.mpg.map(x=>x.tipo).filter(Boolean))).sort()
+        .map(f=>'<option value="t:'+esc(f)+'" '+(FMPG==="t:"+f?"selected":"")+'>Todas las de '+esc(f)+'</option>').join("")+
+      M.mpg.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" '+(String(FMPG)===String(x.id)?"selected":"")+'>'+esc(x.nombre)+'</option>').join("")+
+      '<option value="sin" '+(FMPG==="sin"?"selected":"")+'>Sin forma de pago cargada</option>'+
+      '</select></div>' : '')+
    '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
    ((FDEUDA||favor||totDeuda.ARS>0||totDeuda.USD>0)? '<div class="kpis" style="margin-bottom:10px">'+
@@ -5393,12 +5517,13 @@ VISTAS.clientes = async function(){
     '</div>':'')+
    (SUBVISTA==="morosos" && sinFecha ? '<div class="muted" style="margin-bottom:8px">'+sinFecha+' de estos deben plata que no viene de una venta con fecha (un ajuste de cuenta corriente, por ejemplo). No se les puede calcular atraso, así que se muestran siempre: nunca escondemos a alguien que te debe.</div>' : '')+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
-     ['Código','Nombre / Razón social','Localidad','Teléfono','Email','Saldo ARS','Saldo USD'].concat(SUBVISTA==="morosos"?['Atraso','Comprobante más viejo']:[]).map(h=>'<th>'+h+'</th>').join("")+
+     ['Código','Nombre / Razón social','Localidad','Teléfono','Email'].concat(M.mpg?['Forma de pago']:[]).concat(['Saldo ARS','Saldo USD']).concat(SUBVISTA==="morosos"?['Atraso','Comprobante más viejo']:[]).map(h=>'<th>'+h+'</th>').join("")+
      '</tr></thead><tbody>'+rows.map(function(c){
        const a = saldoCli(c.id,'ARS'), u = saldoCli(c.id,'USD'), at = ATRASO[c.id];
        return '<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCliente('+c.id+')">'+
         '<td><b>'+esc(c.codigo)+'</b></td><td>'+esc(c.nombre)+'</td><td>'+esc(nom(M.loc,c.localidad_id))+'</td>'+
         '<td>'+esc(c.celular||c.telefono||"")+'</td><td>'+esc(c.email)+'</td>'+
+        (M.mpg?'<td>'+esc(nom(M.mpg,c.medio_pago_pref_id))+'</td>':'')+
         '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
         '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td>'+
         (SUBVISTA==="morosos"
@@ -5407,14 +5532,15 @@ VISTAS.clientes = async function(){
           : '')+'</tr>';
      }).join("")+'</tbody></table></div>' : '<div class="muted">'+(SUBVISTA==="morosos"?'Ningún cliente te debe plata con más de '+umbral+' días de atraso.':(favor?'Ningún cliente tiene saldo a favor.':(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.'))))+'</div>')+
    '</div>';
-  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); if ($("cf_deuda")) FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
+  $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); if ($("cf_deuda")) FDEUDA = $("cf_deuda").value==="1"; if ($("cf_mpg")) FMPG = $("cf_mpg").value; VISTAS.clientes(); };
+  if ($("cf_mpg")) $("cf_mpg").onchange = function(){ FCLI = $("cf_txt").value.trim(); FMPG = this.value; VISTAS.clientes(); };
   if ($("cf_mora")) $("cf_mora").onchange = function(){ DIAS_MORA = Number(this.value); VISTAS.clientes(); };
   if ($("cf_deuda")) $("cf_deuda").onchange = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
   if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
 };
 
-const CAMPOS_CLI = ["nombre","tipo_doc","nro_doc","cat_iva","telefono","celular","email","direccion","localidad_id","origen_id","lista_id","observaciones"];
-const NUM_CLI = ["localidad_id","origen_id","lista_id"];
+const CAMPOS_CLI = ["nombre","tipo_doc","nro_doc","cat_iva","telefono","celular","email","direccion","localidad_id","origen_id","lista_id","medio_pago_pref_id","observaciones"];
+const NUM_CLI = ["localidad_id","origen_id","lista_id","medio_pago_pref_id"];
 const TIPOS_DOC = ["DNI","CUIT","CUIL","Pasaporte","Sin documento"];
 const CAT_IVA = ["Consumidor Final","Responsable Inscripto","Monotributista","Exento","No Responsable"];
 
@@ -5469,6 +5595,8 @@ async function fichaCliente(id){
      '<div class="f"><label>Localidad</label><select id="y_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select></div>'+
      '<div class="f"><label>Cómo nos conoció</label><select id="y_origen_id" '+d+'>'+selOpts(M.ori,v("origen_id"))+'</select></div>'+
      '<div class="f"><label>Lista de precios</label><select id="y_lista_id" '+d+'>'+selOpts(LISTAS,v("lista_id"))+'</select></div>'+
+     (M.mpg?'<div class="f"><label>Forma de pago preferida</label><select id="y_medio_pago_pref_id" '+d+'>'+selOpts(M.mpg.filter(x=>x.activo),v("medio_pago_pref_id"))+'</select>'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">También se carga desde el presupuesto. Sirve para el reporte de promociones por tarjeta.</div></div>':'')+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="y_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
    (puede?'<div class="acciones"><button class="btn" id="y_guardar">'+(c?"Guardar cambios":"Crear cliente")+'</button></div>':'')+
