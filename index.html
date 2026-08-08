@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.07-51";
+const VERSION = "v2026.08.08-52";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -844,7 +844,11 @@ function formHTML(p, ro, lig){
       (p.nro_presup_papel && p.nro_presup_papel !== lig.codigo
         ? '<br><span class="muted">En la planilla estaba anotado a mano: '+esc(p.nro_presup_papel)+'. No se borró.</span>'
         : '')+'</div>'
-    : '')+
+    : '<div class="msg" style="line-height:1.5">El <b>N° de presupuesto</b>, la <b>fecha</b> y el <b>importe</b> de acá abajo son '+
+      '<b>solo la anotación del papel</b>: lo que el ATO trae escrito a mano. Sirven para no perder el dato, pero '+
+      '<b>no arman ningún presupuesto en el sistema</b> ni generan venta.<br>'+
+      'El presupuesto de verdad se hace con el botón <b>«+ Crear presupuesto para este prospecto»</b>, al pie de esta ficha '+
+      '(aparece una vez que el prospecto está guardado). Ese es el que después se puede pasar a «Vendido».</div>')+
   '<div class="grid">'+
     '<div class="f"><label>Resultado / Venta</label><select id="c_resultado" '+d+'>'+selTxt(RESULTADOS,p.resultado)+'</select>'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">Se puede cambiar cuando quieras: el que no compró hoy y cierra en tres días se pasa a «Vendido».</div></div>'+
@@ -2616,7 +2620,7 @@ async function db12(){
   window._db12 = !t.error;
   return window._db12;
 }
-let FPRE = {estado:"", desde:"", hasta:"", texto:""};
+let FPRE = {estado:"", tipo:"", desde:"", hasta:"", texto:""};
 
 VISTAS.presup = function(){
   const rotP = SUBVISTA==="vendidos" ? "Presupuestos vendidos" : (SUBVISTA==="cancelados" ? "Presupuestos cancelados" : "Presupuestos abiertos");
@@ -2625,13 +2629,15 @@ VISTAS.presup = function(){
    '<div class="desc">Cada presupuesto arma su total solo: productos, descuentos, adicionales e IVA producto por producto.</div>'+
    '<div class="filtros">'+
      '<div><label>Estado</label><select id="qf_est"><option value="">Todos</option>'+ESTADOS_PRE.map(e=>'<option '+(FPRE.estado===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
+     /* pedido de Rocío: poder ver aparte lo que es producto suelto y lo que va instalado */
+     '<div><label>Tipo</label><select id="qf_tipo"><option value="">Todos</option>'+TIPOVENTA.map(e=>'<option '+(FPRE.tipo===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
      '<div><label>Desde</label><input type="date" id="qf_desde" value="'+FPRE.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="qf_hasta" value="'+FPRE.hasta+'"></div>'+
      '<div><label>Buscar</label><input id="qf_txt" placeholder="cliente, teléfono, dirección de obra, código…" value="'+esc(FPRE.texto)+'"></div>'+
      '<div style="min-width:auto"><button class="btn" id="qf_btn">Filtrar</button></div>'+
      (P("presupuesto-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="qf_nuevo">+ Presupuesto nuevo</button></div>':'')+
    '</div><div id="qlista" class="muted">Cargando…</div></div>';
-  $("qf_btn").onclick = function(){ FPRE={estado:$("qf_est").value,desde:$("qf_desde").value,hasta:$("qf_hasta").value,texto:$("qf_txt").value.trim()}; pintarPresupuestos(); };
+  $("qf_btn").onclick = function(){ FPRE={estado:$("qf_est").value,tipo:$("qf_tipo").value,desde:$("qf_desde").value,hasta:$("qf_hasta").value,texto:$("qf_txt").value.trim()}; pintarPresupuestos(); };
   if (P("presupuesto-agregar")) $("qf_nuevo").onclick = function(){ abrirPresupuesto(null); };
   pintarPresupuestos();
 };
@@ -2643,18 +2649,29 @@ async function pintarPresupuestos(){
   else if (SUBVISTA === "cancelados") q = q.in("estado",["Rechazado","Anulado","Vencido"]);
   else if (!SUBVISTA && !FPRE.estado) q = q.in("estado",["Abierto","Enviado"]);
   if (FPRE.estado) q = q.eq("estado", FPRE.estado);
+  if (FPRE.tipo)   q = q.eq("tipo", FPRE.tipo);
   if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
   if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
   if (FPRE.texto)  q = q.or("cliente_nombre.ilike.%"+FPRE.texto+"%,codigo.ilike.%"+FPRE.texto+"%,nro_papel.ilike.%"+FPRE.texto+"%,cliente_tel.ilike.%"+FPRE.texto+"%,cliente_email.ilike.%"+FPRE.texto+"%,direccion_obra.ilike.%"+FPRE.texto+"%");
   const {data,error} = await q;
   if (error){ $("qlista").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
   if (!data.length){ $("qlista").innerHTML = '<div class="muted">Todavía no hay presupuestos con ese filtro.</div>'; return; }
+  /* Un presupuesto sin cliente registrado no se puede vender: la venta necesita
+     a quién debitarle la cuenta corriente. Mejor avisarlo en la lista que
+     enterarse cuando el cliente ya dijo que sí. */
+  const sinCli = data.filter(x=>!x.cliente_id && ["Abierto","Enviado"].indexOf(x.estado)>=0);
   $("qlista").innerHTML = '<div class="muted" style="margin-bottom:8px">'+data.length+' presupuesto'+(data.length===1?"":"s")+'</div>'+
+   (sinCli.length
+     ? '<div class="msg err" style="line-height:1.5;margin-bottom:8px"><b>'+sinCli.length+' presupuesto'+(sinCli.length===1?"":"s")+' sin cliente registrado</b> ('+
+       sinCli.map(x=>esc(x.codigo)).join(", ")+'). Están con el nombre escrito pero sin ficha de cliente, y así <b>no se pueden pasar a venta</b>. '+
+       'Abrilos y elegí el cliente en «Cliente registrado».</div>'
+     : '')+
    '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
    ['Código','Fecha','Cliente','Localidad','Tipo','N° papel','Estado','Neto','IVA','Total'].map(h=>'<th>'+h+'</th>').join("")+
    '</tr></thead><tbody>'+data.map(function(p){
      return '<tr style="cursor:pointer" onclick="abrirPresupuesto('+p.id+')">'+
-       '<td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td><td>'+esc(p.cliente_nombre)+'</td>'+
+       '<td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td>'+
+       '<td>'+esc(p.cliente_nombre)+(!p.cliente_id?' <span class="muted" title="sin ficha de cliente: no se puede vender">⚠</span>':'')+'</td>'+
        '<td>'+esc(nom(M.loc,p.localidad_id))+'</td><td>'+esc(p.tipo)+'</td><td>'+esc(p.nro_papel)+'</td>'+
        '<td>'+pillE(p.estado)+'</td><td>'+fmtM(p.neto,p.moneda)+'</td><td>'+fmtM(p.iva,p.moneda)+'</td>'+
        '<td><b>'+fmtM(p.total,p.moneda)+'</b></td></tr>';
@@ -2673,6 +2690,16 @@ async function abrirPresupuesto(id, desde){
     if (c.error) return alert(c.error.message);
     PRE = {cab:c.data, items:(i.data||[]), adic:(a.data||[]), borrarItems:[], borrarAdic:[]};
   } else {
+    /* Pedido de Gustavo: el presupuesto también se puede arrancar desde acá y
+       elegir el prospecto de la lista. Así el prospecto no queda suelto y el
+       cliente se da de alta recién cuando hay un presupuesto de verdad. */
+    window._PROSSEL = [];
+    if (P("prospecto-consultar") && !(desde && desde.prospecto)){
+      const pr = await sb.from("prospectos")
+        .select("id,codigo,nombre,celular,telefono,email,direccion,localidad_id,origen_id,vl_id,ato_id,nro_presup_papel,fecha")
+        .order("id",{ascending:false}).limit(500);
+      window._PROSSEL = pr.data || [];
+    }
     const listaDef = LISTAS.filter(l=>l.activo)[0];
     /* los valores por defecto salen de Configuración > Configuraciones generales */
     PRE = {cab:{fecha:hoy(), validez_dias:Number(cfg("validez_dias",15)), moneda:cfg("moneda_default","ARS"),
@@ -2732,7 +2759,21 @@ function pintarFichaPre(){
    (PRE.origen && PRE.origen.aviso ? '<div class="msg ok" style="line-height:1.5">'+PRE.origen.aviso+'</div>'
     : (c.prospecto_id ? '<div class="msg" style="line-height:1.5">Este presupuesto nació del prospecto <b>#'+esc(c.prospecto_id)+'</b>.</div>' : ''))+
    '</div>'+
-   '<div class="sec">Cliente y obra</div><div class="grid">'+
+   '<div class="sec">Cliente y obra</div>'+
+   /* Presupuesto nuevo y sin prospecto atado todavía: se puede elegir de la
+      lista de prospectos. Al elegirlo se busca en clientes y, si no está,
+      se da de alta. Es el mismo camino que el botón de la ficha del prospecto,
+      entrando por la otra punta. */
+   ((!c.id && !c.prospecto_id && (window._PROSSEL||[]).length)
+     ? '<div class="grid"><div class="f"><label>¿Viene de un prospecto?</label>'+
+       '<select id="w_prospecto_id" onchange="presProspectoElegido()" '+d+'>'+
+         '<option value="">— no, es un presupuesto directo —</option>'+
+         (window._PROSSEL||[]).map(x=>'<option value="'+x.id+'">'+esc(x.codigo)+' · '+esc(x.nombre)+(x.celular?' · '+esc(x.celular):'')+'</option>').join("")+
+       '</select>'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">Elegilo y se completan solos el cliente, el teléfono, la localidad y la dirección de obra. Si el prospecto todavía no era cliente, se da de alta acá.</div>'+
+       '</div></div>'
+     : '')+
+   '<div class="grid">'+
      (P("cliente-consultar")?'<div class="f"><label>Cliente registrado</label><select id="w_cliente_id" onchange="presClienteElegido()" '+d+'>'+selPer(CLIS, c.cliente_id?Number(c.cliente_id):null)+'</select></div>':'')+
      '<div class="f"><label>Cliente *</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
      '<div class="f"><label>Teléfono</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
@@ -2902,6 +2943,52 @@ function presClienteElegido(){
   if (c.localidad_id) $("w_localidad_id").value = c.localidad_id;
   if (c.lista_id && $("w_lista_id")) $("w_lista_id").value = c.lista_id;
 }
+/* Eligieron un prospecto en el presupuesto nuevo: se busca al cliente en la
+   base (por marca, teléfono, mail y nombre, igual que desde la ficha) y si no
+   está se da de alta. No se redibuja la pantalla: se completan los campos,
+   igual que hace presClienteElegido, para no perder lo que ya se escribió. */
+async function presProspectoElegido(){
+  const sel = $("w_prospecto_id"); if (!sel) return;
+  const msg = t => { const e = $("qmsg"); if (e) e.innerHTML = t; };
+  const id = sel.value;
+  if (!id){ PRE.cab.prospecto_id = null; msg(""); return; }
+  const p = (window._PROSSEL||[]).find(x=>String(x.id)===String(id));
+  if (!p) return;
+  if (!p.nombre) return msg('<div class="msg err">Ese prospecto no tiene nombre cargado y el presupuesto lo necesita.</div>');
+  sel.disabled = true;
+  msg('<div class="msg">Buscando al cliente en la base…</div>');
+  const res = await clienteDeProspecto(p);
+  sel.disabled = false;
+  if (res.error) return msg('<div class="msg err">No se pudo preparar el cliente: '+esc(res.error)+'</div>');
+  const cl = res.cliente;
+  PRE.cab.prospecto_id = p.id;
+  PRE.cab.cliente_id   = cl.id;
+  const set = (k,v) => { const e = $(k); if (e && v != null && v !== "") e.value = v; };
+  if ($("w_cliente_id")) $("w_cliente_id").innerHTML = selPer(CLIS, Number(cl.id));
+  if ($("w_cliente_nombre")) $("w_cliente_nombre").value = p.nombre || "";
+  if ($("w_cliente_tel"))    $("w_cliente_tel").value    = p.celular || p.telefono || "";
+  if ($("w_cliente_email"))  $("w_cliente_email").value  = p.email || "";
+  set("w_localidad_id", p.localidad_id);
+  set("w_direccion_obra", p.direccion);
+  set("w_vl_id", p.vl_id);
+  set("w_ato_id", p.ato_id);
+  set("w_lista_id", cl.lista_id);
+  const np = $("w_nro_papel");
+  if (np && !np.value && p.nro_presup_papel) np.value = p.nro_presup_papel;
+  const otros = P("presupuesto-consultar") ? await presupuestosDeProspecto(p.id) : [];
+  const vivos = otros.filter(x=>x.estado!=="Anulado");
+  msg('<div class="msg ok" style="line-height:1.5">Ligado al prospecto <b>'+esc(p.codigo)+'</b>. '+
+    (res.creado
+      ? 'Como todavía no era cliente, se dio de alta <b>'+esc(cl.nombre)+'</b> con sus datos.'
+      : 'Ya existía el cliente <b>'+esc(cl.nombre)+'</b> y se usó ese, no se duplicó.')+
+    (vivos.length
+      ? '<br><b>Ojo:</b> este prospecto ya tiene '+vivos.length+' presupuesto'+(vivos.length===1?"":"s")+
+        ' cargado'+(vivos.length===1?"":"s")+' ('+vivos.map(x=>esc(x.codigo)).join(", ")+'). '+
+        'Si es el mismo, cerrá esta pantalla y abrí ese, para no cargarlo dos veces.'
+      : '')+
+    '</div>');
+}
+
 async function guardarPresupuesto(){
   sincro();
   await db9();
@@ -5447,17 +5534,33 @@ async function anularCC(movId, cliId){
 async function formCobranza(cliId){
   const cli = CLIS.find(x=>x.id===cliId);
   if (!BANCOS.length) await cargarCheques();
+  /* Lee de «cuentas», NO de v_saldos_cuenta: esa vista se apoya en los
+     movimientos de dinero, que están cerrados con finanzas-consultar. La VL
+     no tiene ese permiso —ni tiene que tenerlo, porque ahí se ven todos los
+     saldos— y la pantalla le decía «no hay caja registrada» habiendo doce.
+     Para cobrar alcanza con cuenta-consultar: el nombre y la moneda. */
   const [ct,cc] = await Promise.all([
-    sb.from("v_saldos_cuenta").select("*").order("nombre"),
+    sb.from("cuentas").select("*").order("nombre"),
     sb.from("conceptos_cobranza").select("*").order("id")
   ]);
   // dejamos las cuentas en la variable global asi monedaCta() funciona aunque
-  // todavia no se haya entrado a Finanzas en esta sesion
-  if ((ct.data||[]).length) CTAS = ct.data;
+  // todavia no se haya entrado a Finanzas en esta sesion. Si Finanzas ya las
+  // cargó con saldo, no las pisamos: esas traen mas datos.
+  if (!CTAS.length && (ct.data||[]).length) CTAS = ct.data;
   const cuentas = (ct.data||[]).filter(x=>x.activo);
   $("dtit").textContent = "Cobranza · " + cli.nombre;
   if (!cuentas.length){
-    $("dbody").innerHTML = avisoSinCuentas("Para registrar un cobro el sistema necesita saber en qué caja o banco entra la plata.")+
+    /* Dos causas distintas, y el mensaje tiene que decir cuál es: o no hay
+       ninguna cuenta creada, o el rol no las puede ver. Antes decía siempre
+       lo primero, que era mentira la mitad de las veces. */
+    const puedeVer = P("cuenta-consultar") || P("finanzas-consultar");
+    $("dbody").innerHTML =
+      (puedeVer
+        ? avisoSinCuentas("Para registrar un cobro el sistema necesita saber en qué caja o banco entra la plata.")
+        : '<div class="msg err" style="line-height:1.5"><b>No podés ver las cuentas de dinero.</b><br>'+
+          'Las cuentas pueden estar creadas, pero tu rol no tiene el permiso <b>cuenta-consultar</b>, '+
+          'así que el sistema no te muestra ninguna y sin cuenta no se puede registrar el cobro.<br><br>'+
+          'Pedile al dueño que te lo habilite en <b>Configuración → Roles</b>.</div>')+
       '<div class="acciones"><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
     try{ $("dlg").showModal(); }catch(e){}
     return;
