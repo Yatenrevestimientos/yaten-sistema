@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-58";
+const VERSION = "v2026.08.08-59";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1150,10 +1150,8 @@ async function abrir(id){
     (P("presupuesto-consultar")
       ? '<div class="sec">Presupuestos de este prospecto</div>'+
         '<div class="desc">El presupuesto se arma acá una sola vez y queda en el módulo Presupuestos. Cuando pasa a «Vendido» genera solo la venta y la deuda en la cuenta corriente.</div>'+
-        '<div id="dpres">'+listaPresupPros(presPros)+'</div>'+
-        (P("presupuesto-agregar")
-          ? '<div class="acciones"><button class="btn2" onclick="nuevoPresupuestoDeProspecto('+id+')">+ Crear presupuesto para este prospecto</button></div>'
-          : '')
+        /* el botón vive arriba, dentro del bloque Presupuesto: acá solo la lista */
+        '<div id="dpres">'+listaPresupPros(presPros)+'</div>'
       : '')+
     '<div class="sec">Seguimientos</div><div id="dseg">'+listaSeg(seg||[])+'</div>'+
     (P("seguimiento-agregar")?
@@ -2248,6 +2246,28 @@ const REPORTES = [
    tarjeta, poder filtrar y hacer un reporte de qué clientes tenían esa tarjeta
    para enviarles la promoción". Por eso las columnas son las de contacto:
    este reporte se baja en CSV y se usa como lista de envío. */
+{id:"presup_pago", t:"Presupuestos por forma de pago", g:"Comercial", perm:"presupuesto-consultar",
+ ay:"Los presupuestos agrupados por cómo iban a pagarse. Es el reporte de la promoción: si mañana hay tres cuotas sin interés con una tarjeta, acá salen los presupuestos abiertos que iban con esa tarjeta, con el teléfono del cliente para llamarlos. Respeta el período de arriba.",
+ run: async function(f){
+   if (!(await db38()) || !M.mpg) return {cols:[{t:"Forma de pago"}], filas:[],
+     nota:"falta correr la migración de formas de pago en los presupuestos."};
+   const p = await traer("presupuestos","id,codigo,fecha,estado,cliente_id,cliente_nombre,cliente_tel,moneda,total,medio_pago_pref_id",f,"fecha");
+   const rows = p.filter(x=>!f.moneda || x.moneda===f.moneda);
+   const filas = rows.map(function(x){
+     const mp = M.mpg.find(y=>String(y.id)===String(x.medio_pago_pref_id));
+     return [mp?mp.nombre:"— sin cargar —", mp?(mp.tipo||"—"):"—", x.estado, x.codigo, x.fecha,
+             x.cliente_nombre||"—", x.cliente_tel||"", x.moneda, x.total];
+   });
+   filas.sort(function(a,b){
+     const r = String(a[0]).localeCompare(String(b[0]),"es");
+     if (r) return r;
+     const r2 = String(a[2]).localeCompare(String(b[2]),"es");
+     return r2 || (b[8]-a[8]);
+   });
+   return {cols:[{t:"Forma de pago"},{t:"Tipo"},{t:"Estado"},{t:"Presupuesto"},{t:"Fecha",tipo:"f"},
+                 {t:"Cliente"},{t:"Teléfono"},{t:"Moneda"},{t:"Total",tipo:"m"}], filas:filas};
+ }},
+
 {id:"clientes_pago", t:"Clientes por forma de pago", g:"Comercial", perm:"cliente-consultar",
  ay:"A quién le gusta pagar con qué. Sirve para armar la lista de una promoción por tarjeta: filtrás la forma de pago y bajás el CSV con los teléfonos y los mails. No mira fechas: es la foto de la cartera de hoy.",
  run: async function(){
@@ -2669,9 +2689,10 @@ async function db12(){
   window._db12 = !t.error;
   return window._db12;
 }
-let FPRE = {estado:"", tipo:"", desde:"", hasta:"", texto:""};
+let FPRE = {estado:"", tipo:"", mpago:"", desde:"", hasta:"", texto:""};
 
-VISTAS.presup = function(){
+VISTAS.presup = async function(){
+  await db38();
   const rotP = SUBVISTA==="vendidos" ? "Presupuestos vendidos" : (SUBVISTA==="cancelados" ? "Presupuestos cancelados" : "Presupuestos abiertos");
   $("main").innerHTML =
    '<div class="panel"><h2>'+rotP+'</h2>'+
@@ -2680,13 +2701,21 @@ VISTAS.presup = function(){
      '<div><label>Estado</label><select id="qf_est"><option value="">Todos</option>'+ESTADOS_PRE.map(e=>'<option '+(FPRE.estado===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
      /* pedido de Rocío: poder ver aparte lo que es producto suelto y lo que va instalado */
      '<div><label>Tipo</label><select id="qf_tipo"><option value="">Todos</option>'+TIPOVENTA.map(e=>'<option '+(FPRE.tipo===e?"selected":"")+'>'+e+'</option>').join("")+'</select></div>'+
+     /* pedido de Gustavo: filtrar los presupuestos abiertos por forma de pago,
+        para ofrecerle una promoción a los que iban con esa tarjeta */
+     (M.mpg && window._db38 ? '<div><label>Forma de pago</label><select id="qf_mpago"><option value="">Todas</option>'+
+        Array.from(new Set(M.mpg.map(x=>x.tipo).filter(Boolean))).sort()
+          .map(f=>'<option value="t:'+esc(f)+'" '+(FPRE.mpago==="t:"+f?"selected":"")+'>Todas las de '+esc(f)+'</option>').join("")+
+        M.mpg.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" '+(String(FPRE.mpago)===String(x.id)?"selected":"")+'>'+esc(x.nombre)+'</option>').join("")+
+        '<option value="sin" '+(FPRE.mpago==="sin"?"selected":"")+'>Sin forma de pago cargada</option>'+
+        '</select></div>' : '')+
      '<div><label>Desde</label><input type="date" id="qf_desde" value="'+FPRE.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="qf_hasta" value="'+FPRE.hasta+'"></div>'+
      '<div><label>Buscar</label><input id="qf_txt" placeholder="cliente, teléfono, dirección de obra, código…" value="'+esc(FPRE.texto)+'"></div>'+
      '<div style="min-width:auto"><button class="btn" id="qf_btn">Filtrar</button></div>'+
      (P("presupuesto-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="qf_nuevo">+ Presupuesto nuevo</button></div>':'')+
    '</div><div id="qlista" class="muted">Cargando…</div></div>';
-  $("qf_btn").onclick = function(){ FPRE={estado:$("qf_est").value,tipo:$("qf_tipo").value,desde:$("qf_desde").value,hasta:$("qf_hasta").value,texto:$("qf_txt").value.trim()}; pintarPresupuestos(); };
+  $("qf_btn").onclick = function(){ FPRE={estado:$("qf_est").value,tipo:$("qf_tipo").value,mpago:$("qf_mpago")?$("qf_mpago").value:"",desde:$("qf_desde").value,hasta:$("qf_hasta").value,texto:$("qf_txt").value.trim()}; pintarPresupuestos(); };
   if (P("presupuesto-agregar")) $("qf_nuevo").onclick = function(){ abrirPresupuesto(null); };
   pintarPresupuestos();
 };
@@ -2699,6 +2728,13 @@ async function pintarPresupuestos(){
   else if (!SUBVISTA && !FPRE.estado) q = q.in("estado",["Abierto","Enviado"]);
   if (FPRE.estado) q = q.eq("estado", FPRE.estado);
   if (FPRE.tipo)   q = q.eq("tipo", FPRE.tipo);
+  if (FPRE.mpago && window._db38 && M.mpg){
+    if (FPRE.mpago.indexOf("t:") === 0){
+      const ids = M.mpg.filter(x=>String(x.tipo||"")===FPRE.mpago.slice(2)).map(x=>x.id);
+      q = ids.length ? q.in("medio_pago_pref_id", ids) : q.eq("id", -1);
+    } else if (FPRE.mpago === "sin") q = q.is("medio_pago_pref_id", null);
+    else q = q.eq("medio_pago_pref_id", Number(FPRE.mpago));
+  }
   if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
   if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
   if (FPRE.texto)  q = q.or("cliente_nombre.ilike.%"+FPRE.texto+"%,codigo.ilike.%"+FPRE.texto+"%,nro_papel.ilike.%"+FPRE.texto+"%,cliente_tel.ilike.%"+FPRE.texto+"%,cliente_email.ilike.%"+FPRE.texto+"%,direccion_obra.ilike.%"+FPRE.texto+"%");
@@ -2716,12 +2752,14 @@ async function pintarPresupuestos(){
        'Abrilos y elegí el cliente en «Cliente registrado».</div>'
      : '')+
    '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
-   ['Código','Fecha','Cliente','Localidad','Tipo','N° papel','Estado','Neto','IVA','Total'].map(h=>'<th>'+h+'</th>').join("")+
+   ['Código','Fecha','Cliente','Localidad','Tipo'].concat(window._db38&&M.mpg?['Forma de pago']:[]).concat(['N° papel','Estado','Neto','IVA','Total']).map(h=>'<th>'+h+'</th>').join("")+
    '</tr></thead><tbody>'+data.map(function(p){
      return '<tr style="cursor:pointer" onclick="abrirPresupuesto('+p.id+')">'+
        '<td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td>'+
        '<td>'+esc(p.cliente_nombre)+(!p.cliente_id?' <span class="muted" title="sin ficha de cliente: no se puede vender">⚠</span>':'')+'</td>'+
-       '<td>'+esc(nom(M.loc,p.localidad_id))+'</td><td>'+esc(p.tipo)+'</td><td>'+esc(p.nro_papel)+'</td>'+
+       '<td>'+esc(nom(M.loc,p.localidad_id))+'</td><td>'+esc(p.tipo)+'</td>'+
+       (window._db38&&M.mpg?'<td>'+esc(nom(M.mpg,p.medio_pago_pref_id))+'</td>':'')+
+       '<td>'+esc(p.nro_papel)+'</td>'+
        '<td>'+pillE(p.estado)+'</td><td>'+fmtM(p.neto,p.moneda)+'</td><td>'+fmtM(p.iva,p.moneda)+'</td>'+
        '<td><b>'+fmtM(p.total,p.moneda)+'</b></td></tr>';
    }).join("")+'</tbody></table></div>';
@@ -2730,6 +2768,7 @@ async function pintarPresupuestos(){
 async function abrirPresupuesto(id, desde){
   if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
   await db9();
+  await db38();
   if (id){
     const [c,i,a] = await Promise.all([
       sb.from("presupuestos").select("*").eq("id",id).single(),
@@ -2807,10 +2846,15 @@ function pintarFichaPre(){
   const c = PRE.cab;
   const puede = c.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
   const d = puede ? "" : "disabled";
-  /* la preferencia de pago sale de la ficha del cliente, no del presupuesto */
+  /* La forma de pago es DEL PRESUPUESTO: es lo que se va a filtrar cuando haya
+     una promoción («todos los presupuestos abiertos con tarjeta de crédito»).
+     En uno nuevo se propone la que el cliente venía usando, pero manda la de acá. */
   if (PRE.medioPagoPref === undefined){
-    const cl0 = CLIS.find(x=>String(x.id)===String(c.cliente_id));
-    PRE.medioPagoPref = cl0 ? (cl0.medio_pago_pref_id||null) : null;
+    if (c.medio_pago_pref_id != null) PRE.medioPagoPref = c.medio_pago_pref_id;
+    else {
+      const cl0 = CLIS.find(x=>String(x.id)===String(c.cliente_id));
+      PRE.medioPagoPref = cl0 ? (cl0.medio_pago_pref_id||null) : null;
+    }
   }
   $("dtit").textContent = c.codigo ? (c.codigo+" · "+(c.cliente_nombre||"")) : "Presupuesto nuevo";
   $("dbody").innerHTML = '<div id="qmsg">'+
@@ -2866,10 +2910,10 @@ function pintarFichaPre(){
       se guarda en el CLIENTE: la promoción de mañana se le manda a la persona,
       no al presupuesto. */
    (M.mpg
-     ? '<div class="sec">Forma de pago que prefiere el cliente</div>'+
-       '<div class="muted" style="margin-bottom:8px">Con qué le gustaría pagar. No es la cobranza —eso se registra después— sino el dato para poder avisarle cuando haya una promoción con esa tarjeta.</div>'+
+     ? '<div class="sec">Forma de pago</div>'+
+       '<div class="muted" style="margin-bottom:8px">Con qué piensa pagar este presupuesto. No es la cobranza —eso se registra cuando la plata entra— sino el dato para poder buscar después «todos los presupuestos abiertos que iban con tarjeta de crédito» y ofrecerles una promoción. En un presupuesto nuevo se propone la que el cliente venía usando; si acá se elige otra, manda esta.</div>'+
        '<div class="grid">'+
-         '<div class="f"><label>Forma de pago preferida</label><select id="w_medio_pago_pref_id" '+d+'>'+
+         '<div class="f"><label>Forma de pago</label><select id="w_medio_pago_pref_id" '+d+'>'+
            selOpts(M.mpg.filter(x=>x.activo), PRE.medioPagoPref||null)+'</select>'+
            '<div class="muted" style="font-size:.85em;margin-top:4px" id="w_mp_nota">Queda guardado en la ficha del cliente.</div></div>'+
          (P("maestra-modificar")
@@ -3017,7 +3061,15 @@ function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdi
 
 const CAMPOS_PRE = ["cliente_id","cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
   "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
-const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct"];
+const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct","medio_pago_pref_id"];
+/* ¿la base ya tiene la forma de pago en el presupuesto? (migración v38) */
+async function db38(){
+  if (window._db38 !== undefined) return window._db38;
+  const t = await sb.from("presupuestos").select("medio_pago_pref_id").limit(1);
+  window._db38 = !t.error;
+  return window._db38;
+}
+
 /* Agregar una forma de pago sin salir del presupuesto, como los conceptos de
    cobranza. Necesita maestra-modificar: la lista la comparten todos. */
 async function medioPagoAgregar(){
@@ -3225,25 +3277,25 @@ async function guardarPresupuesto(){
      porque es donde se habla de plata, pero la promoción se le manda a la
      persona. Si no hay cliente todavía, no hay dónde guardarla. */
   let avisoMP = "";
+  let mpElegido = null;
   if (M.mpg && $("w_medio_pago_pref_id")){
-    const mp = $("w_medio_pago_pref_id").value ? Number($("w_medio_pago_pref_id").value) : null;
-    const cliId = o.cliente_id || PRE.cab.cliente_id;
-    const antes = (CLIS.find(x=>String(x.id)===String(cliId))||{}).medio_pago_pref_id || null;
-    if (cliId && mp !== antes){
-      if (!P("cliente-modificar")){
-        avisoMP = ' <b>Ojo:</b> la forma de pago no se guardó, tu rol no puede editar la ficha del cliente.';
-      } else {
-        const rm = await sb.from("clientes").update({medio_pago_pref_id: mp}).eq("id", cliId);
-        if (rm.error) avisoMP = ' <b>Ojo:</b> no se pudo guardar la forma de pago ('+esc(rm.error.message)+').';
-        else {
-          const nom0 = (M.mpg.find(x=>String(x.id)===String(mp))||{}).nombre;
-          avisoMP = mp ? ' Quedó anotado que prefiere pagar con <b>'+esc(nom0)+'</b>.'
-                       : ' Se borró la forma de pago preferida del cliente.';
-          await cargarClientes();
-        }
+    mpElegido = $("w_medio_pago_pref_id").value ? Number($("w_medio_pago_pref_id").value) : null;
+    /* va en el PRESUPUESTO: es lo que se filtra cuando hay una promoción */
+    if (await db38()) o.medio_pago_pref_id = mpElegido;
+    PRE.medioPagoPref = mpElegido;
+  }
+  /* Y además se copia a la ficha del cliente, para el reporte de promociones por
+     cliente. El que manda es el presupuesto; el cliente guarda la última. */
+  if (M.mpg && mpElegido !== null && PRE.cab.cliente_id && P("cliente-modificar")){
+    const antes = (CLIS.find(x=>String(x.id)===String(PRE.cab.cliente_id))||{}).medio_pago_pref_id || null;
+    if (mpElegido !== antes){
+      const rm = await sb.from("clientes").update({medio_pago_pref_id: mpElegido}).eq("id", PRE.cab.cliente_id);
+      if (!rm.error){
+        const nom0 = (M.mpg.find(x=>String(x.id)===String(mpElegido))||{}).nombre;
+        avisoMP = ' Forma de pago: <b>'+esc(nom0)+'</b>, anotada también en la ficha del cliente.';
+        await cargarClientes();
       }
     }
-    PRE.medioPagoPref = mp;
   }
   let avisoPros = "";
   if (PRE.cab.prospecto_id && P("prospecto-modificar")){
@@ -5433,7 +5485,6 @@ async function cargarAtrasos(){
     if (!a || dias > a.dias) ATRASO[v.cliente_id] = {dias:dias, codigo:v.codigo, fecha:v.fecha};
   });
 }
-let DIAS_MORA = null;   // null = todavía no se tocó, se toma el de Configuración
 
 VISTAS.clientes = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
@@ -5469,24 +5520,22 @@ VISTAS.clientes = async function(){
   } else if (FDEUDA || SUBVISTA === "morosos"){
     rows = rows.filter(c => saldoCli(c.id,'ARS') > 0 || saldoCli(c.id,'USD') > 0).sort((a,b) => debe(b) - debe(a));
   }
-  /* Clientes morosos: además de deber, la deuda tiene que tener cierta antigüedad.
-     El umbral sale de Configuración > Configuraciones generales y se puede pisar acá. */
-  let umbral = 0, sinFecha = 0;
+  /* Clientes morosos: DEBE PLATA, punto.
+     Pedido de Gustavo (8/8/2026): "sacar el filtro de que para figurar como moroso
+     tenga que tener días de atraso. Cliente con saldo, cliente moroso."
+     Antes se escondía al que debía hace menos de 30 días —el umbral de
+     Configuración— y por eso Gustavo, que debía $272.240 de hace 6 días, no
+     aparecía y el cartel decía «me deben $0». La antigüedad sigue calculándose,
+     pero solo para mostrarla y para ordenar del más viejo al más nuevo. */
+  let sinFecha = 0;
   if (SUBVISTA === "morosos"){
     await cargarAtrasos();
-    if (DIAS_MORA === null) DIAS_MORA = Number(cfg("dias_moroso",30)) || 0;
-    umbral = DIAS_MORA;
-    const antes = rows.length;
-    rows = rows.filter(function(c){
-      const a = ATRASO[c.id];
-      if (!a) { sinFecha++; return true; }   // debe pero no sabemos de cuándo: nunca se esconde
-      return a.dias >= umbral;
-    });
+    rows.forEach(function(c){ if (!ATRASO[c.id]) sinFecha++; });
     rows.sort(function(a,b){
       const da = ATRASO[a.id]?ATRASO[a.id].dias:-1, db = ATRASO[b.id]?ATRASO[b.id].dias:-1;
-      return db - da;
+      if (db !== da) return db - da;
+      return debe(b) - debe(a);
     });
-    void antes;
   }
   const favor = SUBVISTA === "afavor";
   const totDeuda = {ARS:0, USD:0};
@@ -5495,12 +5544,8 @@ VISTAS.clientes = async function(){
   const rot = favor ? "Tienen a favor" : "Me deben";
   const cuenta = m => rows.filter(c => favor ? saldoCli(c.id,m)<0 : saldoCli(c.id,m)>0).length;
   $("main").innerHTML = '<div class="panel"><h2>'+(SUBVISTA==="morosos"?"Clientes morosos":(favor?"Clientes con saldo a favor":"Clientes"))+'</h2>'+
-   '<div class="desc">'+(SUBVISTA==="morosos"?'Los que te deben plata desde hace más de '+umbral+' día'+(umbral===1?"":"s")+', del más atrasado al menos atrasado. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
+   '<div class="desc">'+(SUBVISTA==="morosos"?'Todos los que te deben plata, del más atrasado al más nuevo. Si tiene saldo, está acá: no hace falta que la deuda tenga una antigüedad mínima. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
-   (SUBVISTA==="morosos"?'<div><label>Atraso mínimo</label><select id="cf_mora">'+
-      [0,15,30,60,90].map(d=>'<option value="'+d+'" '+(umbral===d?"selected":"")+'>'+(d?d+' días o más':'Cualquier deuda')+'</option>').join("")+
-      ([0,15,30,60,90].indexOf(umbral)<0?'<option value="'+umbral+'" selected>'+umbral+' días o más</option>':'')+
-      '</select></div>':'')+
    (SUBVISTA?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
    (M.mpg? '<div><label>Forma de pago</label><select id="cf_mpg"><option value="">Todas</option>'+
       Array.from(new Set(M.mpg.map(x=>x.tipo).filter(Boolean))).sort()
@@ -5514,7 +5559,7 @@ VISTAS.clientes = async function(){
       '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en pesos</div><div class="n">'+(fmtM(totDeuda.ARS,"ARS")||"$ 0")+'</div><div class="muted">'+cuenta("ARS")+' cliente'+(cuenta("ARS")===1?"":"s")+'</div></div>'+
       '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en dólares</div><div class="n">'+(fmtM(totDeuda.USD,"USD")||"US$ 0")+'</div><div class="muted">'+cuenta("USD")+' cliente'+(cuenta("USD")===1?"":"s")+'</div></div>'+
     '</div>':'')+
-   (SUBVISTA==="morosos" && sinFecha ? '<div class="muted" style="margin-bottom:8px">'+sinFecha+' de estos deben plata que no viene de una venta con fecha (un ajuste de cuenta corriente, por ejemplo). No se les puede calcular atraso, así que se muestran siempre: nunca escondemos a alguien que te debe.</div>' : '')+
+   (SUBVISTA==="morosos" && sinFecha ? '<div class="muted" style="margin-bottom:8px">'+sinFecha+' de estos deben plata que no viene de una venta con fecha (un ajuste de cuenta corriente, por ejemplo). Se muestran igual, con el atraso en blanco.</div>' : '')+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Nombre / Razón social','Localidad','Teléfono','Email'].concat(M.mpg?['Forma de pago']:[]).concat(['Saldo ARS','Saldo USD']).concat(SUBVISTA==="morosos"?['Atraso','Comprobante más viejo']:[]).map(h=>'<th>'+h+'</th>').join("")+
      '</tr></thead><tbody>'+rows.map(function(c){
@@ -5529,11 +5574,10 @@ VISTAS.clientes = async function(){
           ? '<td style="'+(at&&at.dias>=60?'color:#7a2415;font-weight:600':'')+'">'+(at?at.dias+' días':'—')+'</td>'+
             '<td>'+(at?esc(at.codigo)+' · '+fmtF(at.fecha):'ajuste de cuenta')+'</td>'
           : '')+'</tr>';
-     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(SUBVISTA==="morosos"?'Ningún cliente te debe plata con más de '+umbral+' días de atraso.':(favor?'Ningún cliente tiene saldo a favor.':(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.'))))+'</div>')+
+     }).join("")+'</tbody></table></div>' : '<div class="muted">'+(SUBVISTA==="morosos"?'Ningún cliente te debe plata ahora mismo.':(favor?'Ningún cliente tiene saldo a favor.':(FDEUDA?'Ningún cliente te debe plata ahora mismo.':(FCLI?'Ningún cliente con esa búsqueda.':'Todavía no hay clientes cargados.'))))+'</div>')+
    '</div>';
   $("cf_btn").onclick = function(){ FCLI = $("cf_txt").value.trim(); if ($("cf_deuda")) FDEUDA = $("cf_deuda").value==="1"; if ($("cf_mpg")) FMPG = $("cf_mpg").value; VISTAS.clientes(); };
   if ($("cf_mpg")) $("cf_mpg").onchange = function(){ FCLI = $("cf_txt").value.trim(); FMPG = this.value; VISTAS.clientes(); };
-  if ($("cf_mora")) $("cf_mora").onchange = function(){ DIAS_MORA = Number(this.value); VISTAS.clientes(); };
   if ($("cf_deuda")) $("cf_deuda").onchange = function(){ FCLI = $("cf_txt").value.trim(); FDEUDA = $("cf_deuda").value==="1"; VISTAS.clientes(); };
   if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
 };
