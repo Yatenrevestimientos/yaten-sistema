@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-67";
+const VERSION = "v2026.08.08-68";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6326,7 +6326,22 @@ async function finResumen(){
         linea("A favor de clientes (señas o pagos de más)", ef.favor, "ir('clientes','afavor')")+
         linea("Cuentas a pagar (deuda con proveedores)", ef.pagar||{}, P("compra-consultar")?"ir('provee','deuda')":null)+
         linea("A favor sobre proveedores", ef.favorProv||{}, P("compra-consultar")?"ir('provee')":null)+
-        linea("Cheques por cubrir (propios emitidos sin debitar)", ef.porCubrir||{}, P("finanzas-consultar")?"ir('cheques','propios')":null)
+        linea("Cheques por cubrir (propios emitidos sin debitar)", ef.porCubrir||{}, P("finanzas-consultar")?"ir('cheques','propios')":null)+
+        /* lo que se le debe a la otra unidad del negocio: sale del saldo negativo
+           de las cuentas «a rendir», que no son plata disponible */
+        (function(){
+          const aRendir = {};
+          const tipoNoPlata = {};
+          TCTAS.forEach(function(t){ if (t.es_plata === false) tipoNoPlata[t.id] = true; });
+          CTAS.forEach(function(c){
+            if (!c.activo || !tipoNoPlata[c.tipo_cuenta_id]) return;
+            const v = Number(c.saldo||0);
+            if (v < 0) aRendir[c.moneda||"ARS"] = (aRendir[c.moneda||"ARS"]||0) - v;
+          });
+          return (aRendir.ARS || aRendir.USD)
+            ? linea("A rendir a Pirka (gastos de Yaten que pagó Pirka)", aRendir, P("finanzas-consultar")?"ir('finanzas','cuentas')":null)
+            : "";
+        })()
       )+
       /* El IVA va aparte: no es plata que se cobra ni que se paga a alguien, es
          posición fiscal, y mezclarlo arriba hacía leer mal el cuadro. */
@@ -6346,15 +6361,20 @@ async function finResumen(){
   monedas.forEach(function(m){
     const grupos = TCTAS.map(function(t){
       const cs = CTAS.filter(c=>c.tipo_cuenta_id===t.id && c.moneda===m && c.activo);
-      return {t:t, cs:cs, total:cs.reduce((a,c)=>a+Number(c.saldo||0),0)};
+      return {t:t, cs:cs, total:cs.reduce((a,c)=>a+Number(c.saldo||0),0), plata: t.es_plata !== false};
     }).filter(g=>g.cs.length);
     const sinTipo = CTAS.filter(c=>!c.tipo_cuenta_id && c.moneda===m && c.activo);
-    if (sinTipo.length) grupos.push({t:{nombre:"Sin tipo asignado"}, cs:sinTipo, total:sinTipo.reduce((a,c)=>a+Number(c.saldo||0),0)});
-    const gran = grupos.reduce((a,g)=>a+g.total,0);
+    if (sinTipo.length) grupos.push({t:{nombre:"Sin tipo asignado"}, cs:sinTipo, total:sinTipo.reduce((a,c)=>a+Number(c.saldo||0),0), plata:true});
+    /* Las cuentas «a rendir» entre unidades NO son plata disponible: no suman al
+       total de caja. Decisión del 8/8/2026, cuando apareció que Pirka viene
+       pagando gastos de Yaten con sus propios fondos. */
+    const gran = grupos.filter(g=>g.plata).reduce((a,g)=>a+g.total,0);
+    const noPlata = grupos.filter(g=>!g.plata).reduce((a,g)=>a+g.total,0);
     html += '<div class="panel"><h2>Estado de cuentas en '+m+'</h2>'+
-      '<div class="kpi" style="margin-bottom:14px;border-left-color:var(--petroleo)"><div class="t">Total en '+m+'</div><div class="n">'+(fmtM(gran,m)||(m==="USD"?"US$ 0":"$ 0"))+'</div></div>'+
+      '<div class="kpi" style="margin-bottom:14px;border-left-color:var(--petroleo)"><div class="t">Plata disponible en '+m+'</div><div class="n">'+(fmtM(gran,m)||(m==="USD"?"US$ 0":"$ 0"))+'</div>'+
+      (noPlata ? '<div class="muted" style="font-size:12px">no incluye '+(fmtM(noPlata,m)||"—")+' de cuentas a rendir</div>' : '')+'</div>'+
       (grupos.length? grupos.map(function(g){
-        return '<div class="sec">'+esc(g.t.nombre)+'</div><div class="tablewrap"><table><tbody>'+
+        return '<div class="sec">'+esc(g.t.nombre)+(g.plata?'':' <span class="muted" style="font-weight:normal">· no es plata disponible</span>')+'</div><div class="tablewrap"><table><tbody>'+
           g.cs.map(c=>'<tr><td>'+esc(c.nombre)+'</td><td style="text-align:right">'+(fmtM(c.saldo,m)||"—")+'</td></tr>').join("")+
           '<tr style="background:#f6f3ee"><td><b>Total '+esc(g.t.nombre)+'</b></td><td style="text-align:right"><b>'+(fmtM(g.total,m)||"—")+'</b></td></tr>'+
           '</tbody></table></div>';
@@ -6402,27 +6422,30 @@ function finCuentas(){
           '<br>Si tenés una y no aparece acá, fijate el tipo que le pusiste: el filtro busca por el nombre del tipo de cuenta.</div>'
         : '<div class="msg err" style="line-height:1.5"><b>Todavía no creaste ninguna cuenta.</b><br>Hasta que exista al menos una, no vas a poder registrar cobranzas, gastos, transferencias ni retiros: el sistema no sabría de dónde sale o entra la plata.<br><br>Tocá <b>«+ Cuenta nueva»</b> acá arriba y creá por ejemplo «Caja Chica» en ARS. Al crearla podés cargarle el saldo con el que arranca.</div>'))+
    '</div>'+
-   '<div class="panel"><h2>Tipos de cuenta</h2><div class="desc">Esto <b>no</b> es plata: es solo la clasificación con la que se agrupan las cuentas en el resumen (caja, banco, fondo de inversión, Mercado Pago, tarjetas, cheques). Agregá los que necesites.<br><b>«Puede quedar en negativo»</b> decide si el sistema deja sacar plata que no está: un banco sí, porque tiene descubierto; una caja de efectivo o una tarjeta no.</div>'+
-   '<div id="tcmsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Orden</th><th>Puede quedar en negativo</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
-   (puede?'<tr style="background:#f6fbf7"><td><input id="ntc_nombre" placeholder="Ej: Criptomonedas"></td><td><input id="ntc_orden" type="number" style="width:80px" value="9"></td><td><select id="ntc_neg"><option value="0" selected>No</option><option value="1">Sí</option></select></td><td>—</td><td><button class="btn btn-sm" onclick="tipoCtaAgregar()">Agregar</button></td></tr>':'')+
+   '<div class="panel"><h2>Tipos de cuenta</h2><div class="desc">Esto <b>no</b> es plata: es solo la clasificación con la que se agrupan las cuentas en el resumen (caja, banco, fondo de inversión, Mercado Pago, tarjetas, cheques). Agregá los que necesites.<br><b>«Puede quedar en negativo»</b> decide si el sistema deja sacar plata que no está: un banco sí, porque tiene descubierto; una caja de efectivo o una tarjeta no.<br><b>«Es plata disponible»</b> en <b>No</b> marca las cuentas <i>a rendir</i>, como «Pirka — a rendir»: existen y se mueven, pero no son plata tuya, así que no suman al total de caja y aparecen aparte en el Estado financiero.</div>'+
+   '<div id="tcmsg"></div><div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Orden</th><th>Puede quedar en negativo</th><th>Es plata disponible</th><th>Activo</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   (puede?'<tr style="background:#f6fbf7"><td><input id="ntc_nombre" placeholder="Ej: Criptomonedas"></td><td><input id="ntc_orden" type="number" style="width:80px" value="9"></td><td><select id="ntc_neg"><option value="0" selected>No</option><option value="1">Sí</option></select></td><td><select id="ntc_pla"><option value="1" selected>Sí</option><option value="0">No</option></select></td><td>—</td><td><button class="btn btn-sm" onclick="tipoCtaAgregar()">Agregar</button></td></tr>':'')+
    TCTAS.map(t=>'<tr'+(t.activo?'':' style="opacity:.55"')+'>'+
      '<td>'+(puede?'<input id="etc_'+t.id+'_n" value="'+esc(t.nombre)+'">':esc(t.nombre))+'</td>'+
      '<td>'+(puede?'<input id="etc_'+t.id+'_o" type="number" style="width:80px" value="'+t.orden+'">':t.orden)+'</td>'+
      /* De una caja no se puede sacar plata que no está; un banco sí puede ir en
         descubierto. Lo decide el tipo, y se configura acá. Gustavo, 7/8/2026. */
      '<td>'+(puede?'<select id="etc_'+t.id+'_neg"><option value="0" '+(t.permite_negativo?"":"selected")+'>No</option><option value="1" '+(t.permite_negativo?"selected":"")+'>Sí</option></select>':(t.permite_negativo?"Sí":"No"))+'</td>'+
+     /* «No» marca las cuentas a rendir: existen, se mueven, pero no son plata
+        que tengas. No suman al total de caja. */
+     '<td>'+(puede?'<select id="etc_'+t.id+'_pla"><option value="1" '+(t.es_plata!==false?"selected":"")+'>Sí</option><option value="0" '+(t.es_plata===false?"selected":"")+'>No</option></select>':(t.es_plata!==false?"Sí":"No"))+'</td>'+
      '<td>'+(puede?'<select id="etc_'+t.id+'_a"><option value="1" '+(t.activo?"selected":"")+'>Sí</option><option value="0" '+(!t.activo?"selected":"")+'>No</option></select>':(t.activo?"Sí":"No"))+'</td>'+
      (puede?'<td><button class="btn2 btn-sm" onclick="tipoCtaGuardar('+t.id+')">Guardar</button></td>':'')+'</tr>').join("")+
    '</tbody></table></div></div>';
 }
 async function tipoCtaAgregar(){
   const n = $("ntc_nombre").value.trim(); if(!n){ $("tcmsg").innerHTML='<div class="msg err">Poné un nombre.</div>'; return; }
-  const {error} = await sb.from("tipos_cuenta").insert({nombre:n, orden:Number($("ntc_orden").value||9), activo:true, permite_negativo: ($("ntc_neg")||{}).value === "1"});
+  const {error} = await sb.from("tipos_cuenta").insert({nombre:n, orden:Number($("ntc_orden").value||9), activo:true, permite_negativo: ($("ntc_neg")||{}).value === "1", es_plata: ($("ntc_pla")||{}).value !== "0"});
   if (error){ $("tcmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   await cargarFin(); finCuentas();
 }
 async function tipoCtaGuardar(id){
-  const {error} = await sb.from("tipos_cuenta").update({nombre:$("etc_"+id+"_n").value.trim(), orden:Number($("etc_"+id+"_o").value||0), activo:$("etc_"+id+"_a").value==="1", permite_negativo: ($("etc_"+id+"_neg")||{}).value === "1"}).eq("id",id);
+  const {error} = await sb.from("tipos_cuenta").update({nombre:$("etc_"+id+"_n").value.trim(), orden:Number($("etc_"+id+"_o").value||0), activo:$("etc_"+id+"_a").value==="1", permite_negativo: ($("etc_"+id+"_neg")||{}).value === "1", es_plata: ($("etc_"+id+"_pla")||{}).value !== "0"}).eq("id",id);
   if (error){ $("tcmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   await cargarFin(); finCuentas();
 }
