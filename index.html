@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-70";
+const VERSION = "v2026.08.08-71";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3022,6 +3022,7 @@ async function abrirPresupuesto(id, desde){
   await db9();
   await db38();
   await db45();
+  await db48();
   if (id){
     const [c,i,a] = await Promise.all([
       sb.from("presupuestos").select("*").eq("id",id).single(),
@@ -3078,21 +3079,36 @@ async function abrirPresupuesto(id, desde){
   $("dlg").showModal();
 }
 
+/* El descuento general se puede poner en PORCENTAJE o en PLATA, y la plata va
+   en la moneda del presupuesto (pedido de Gustavo, 8/8/2026). Por dentro los dos
+   terminan en el mismo factor sobre los productos, así el IVA baja en la misma
+   proporción y no hay dos formas distintas de calcular lo mismo.
+   El descuento NO toca los adicionales: el flete o la colocación no se descuentan. */
 function calcTotales(){
-  const f = 1 - Number(PRE.cab.descuento_pct||0)/100;
   let n=0, i=0;
   PRE.items.forEach(function(x){
     const base = Number(x.cantidad||0) * Number(x.precio_unit||0) * (1 - Number(x.descuento_pct||0)/100);
     n += base;
     if (x.aplica_iva !== false) i += base * Number(x.iva_pct||0)/100;
   });
+  let f, exceso = 0;
+  if (PRE.cab.descuento_modo === "monto"){
+    let m = Number(PRE.cab.descuento_monto||0);
+    if (m < 0) m = 0;
+    /* no se puede descontar más de lo que suman los productos */
+    if (m > n){ exceso = m - n; m = n; }
+    f = n > 0 ? (1 - m/n) : 1;
+  } else {
+    f = 1 - Number(PRE.cab.descuento_pct||0)/100;
+  }
   let na=0, ia=0;
   PRE.adic.forEach(function(x){
     na += Number(x.importe||0);
     if (x.aplica_iva !== false) ia += Number(x.importe||0) * Number(x.iva_pct||0)/100;
   });
   const neto = n*f + na, iva = i*f + ia;
-  return {neto:neto, iva:iva, total:neto+iva, brutoItems:n, descItems:n*(1-f), adic:na};
+  return {neto:neto, iva:iva, total:neto+iva, brutoItems:n, descItems:n*(1-f), adic:na,
+          exceso:exceso, pctEquiv: n>0 ? Math.round((1-f)*1000)/10 : 0};
 }
 
 function pintarFichaPre(){
@@ -3197,7 +3213,14 @@ function pintarFichaPre(){
    '<div class="sec">Adicionales · flete, colocación, extras</div><div id="w_adic"></div>'+
    (puede?'<div class="acciones"><button class="btn2 btn-sm" onclick="adicAgregar()">+ Agregar adicional</button></div>':'')+
    '<div class="sec">Totales</div>'+
-   '<div class="grid"><div class="f"><label>Descuento general % (sobre productos)</label><input type="number" step="0.1" id="w_descuento_pct" value="'+(c.descuento_pct||0)+'" '+d+' oninput="sincro()"></div></div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Descuento general</label><select id="w_descuento_modo" '+d+' onchange="modoDescuento()">'+
+       '<option value="pct" '+(c.descuento_modo==="monto"?"":"selected")+'>En porcentaje (%)</option>'+
+       '<option value="monto" '+(c.descuento_modo==="monto"?"selected":"")+'>En plata ('+esc(c.moneda||"ARS")+')</option>'+
+     '</select><div class="muted" style="font-size:.85em;margin-top:4px">Se aplica sobre los productos, no sobre los adicionales: el flete y la colocación no se descuentan.</div></div>'+
+     '<div class="f" id="w_box_dpct"><label>Descuento %</label><input type="number" step="0.1" id="w_descuento_pct" value="'+(c.descuento_pct||0)+'" '+d+' oninput="sincro()"></div>'+
+     '<div class="f" id="w_box_dmon"><label>Descuento en <span id="w_lbl_moneda">'+esc(c.moneda||"ARS")+'</span></label><input type="number" step="0.01" id="w_descuento_monto" value="'+(c.descuento_monto||0)+'" '+d+' oninput="sincro()"></div>'+
+   '</div>'+
    '<div id="w_tot"></div>'+
    '<div class="sec">Notas</div>'+
    '<div class="f"><label>Notas del presupuesto (se imprimen)</label><textarea id="w_notas" rows="3" '+d+'>'+esc(c.notas)+'</textarea></div>'+
@@ -3222,7 +3245,7 @@ function pintarFichaPre(){
      (c.id?'<button class="btn2" onclick="imprimirPresupuesto()">Imprimir o guardar PDF</button>':'')+
      (c.id&&!vendido&&P("presupuesto-eliminar")?'<button class="btn3" id="w_borrar">Eliminar</button>':'')+
    '</div>';
-  pintarItems(); pintarAdic(); pintarTotales();
+  pintarItems(); pintarAdic(); modoDescuento(true); pintarTotales();
   if ($("w_vender")) $("w_vender").onclick = function(){
     const t = calcTotales();
     if (!(t.total > 0)){ $("qmsg").innerHTML = '<div class="msg err">El presupuesto tiene total cero. Cargale los renglones antes de venderlo.</div>'; return; }
@@ -3278,6 +3301,20 @@ function pintarAdic(){
      '</tr>';
    }).join("")+'</tbody></table></div>';
 }
+/* Muestra el casillero que corresponde y le pone la moneda del presupuesto.
+   silencioso = viene de sincro(), así que no vuelve a llamar a sincro. */
+function modoDescuento(silencioso){
+  const sel = $("w_descuento_modo"); if (!sel) return;
+  const esMonto = sel.value === "monto";
+  const bp = $("w_box_dpct"), bm = $("w_box_dmon"), lb = $("w_lbl_moneda"), mo = $("w_moneda");
+  if (bp) bp.style.display = esMonto ? "none" : "";
+  if (bm) bm.style.display = esMonto ? "" : "none";
+  const m = mo ? mo.value : (PRE.cab.moneda||"ARS");
+  if (lb) lb.textContent = m;
+  const op = sel.options[1]; if (op) op.text = "En plata ("+m+")";
+  if (!silencioso) sincro();
+}
+
 function pintarTotales(){
   const t = calcTotales(), m = PRE.cab.moneda||"ARS";
   PRE.items.forEach(function(x,k){
@@ -3286,7 +3323,11 @@ function pintarTotales(){
   });
   $("w_tot").innerHTML = '<div class="tablewrap"><table><tbody>'+
     '<tr><td>Productos</td><td style="text-align:right">'+(fmtM(t.brutoItems,m)||"—")+'</td></tr>'+
-    (t.descItems>0?'<tr><td>Descuento general</td><td style="text-align:right;color:#7a2415">− '+(fmtM(t.descItems,m)||"")+'</td></tr>':'')+
+    (t.descItems>0?'<tr><td>Descuento general'+
+      (PRE.cab.descuento_modo==="monto" ? ' <span class="muted">('+t.pctEquiv+' % de los productos)</span>'
+                                        : ' <span class="muted">('+(fmtM(t.descItems,m)||"")+')</span>')+
+      '</td><td style="text-align:right;color:#7a2415">− '+(fmtM(t.descItems,m)||"")+'</td></tr>':'')+
+    (t.exceso>0?'<tr><td colspan="2" style="color:#7a2415;white-space:normal">El descuento en plata es mayor que el total de productos. Se descontó '+(fmtM(t.brutoItems,m)||"")+', que es todo. Revisá el importe.</td></tr>':'')+
     (t.adic>0?'<tr><td>Adicionales</td><td style="text-align:right">'+(fmtM(t.adic,m)||"")+'</td></tr>':'')+
     '<tr><td><b>Neto</b></td><td style="text-align:right"><b>'+(fmtM(t.neto,m)||"—")+'</b></td></tr>'+
     '<tr><td>IVA</td><td style="text-align:right">'+(fmtM(t.iva,m)||"—")+'</td></tr>'+
@@ -3308,8 +3349,11 @@ function sincro(){
     if (c3) x.iva_pct = c3.value===""?0:Number(c3.value);
     if (c4) x.aplica_iva = c4.value==="1";
   });
-  const dg = $("w_descuento_pct"); if (dg) PRE.cab.descuento_pct = Number(dg.value||0);
+  const dm = $("w_descuento_modo"); if (dm) PRE.cab.descuento_modo = dm.value;
+  const dg = $("w_descuento_pct");   if (dg) PRE.cab.descuento_pct   = Number(dg.value||0);
+  const dp = $("w_descuento_monto"); if (dp) PRE.cab.descuento_monto = Number(dp.value||0);
   const mo = $("w_moneda"); if (mo) PRE.cab.moneda = mo.value;
+  modoDescuento(true);
   pintarTotales();
 }
 function itemAgregar(){ sincro(); PRE.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"m2", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, con_instalacion:false}); pintarItems(); pintarTotales(); }
@@ -3353,6 +3397,14 @@ function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdi
 const CAMPOS_PRE = ["cliente_id","cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
   "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
 const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct","medio_pago_pref_id"];
+/* ¿la base ya tiene el descuento por monto? (migración v48) */
+async function db48(){
+  if (window._db48 !== undefined) return window._db48;
+  const t = await sb.from("presupuestos").select("descuento_modo").limit(1);
+  window._db48 = !t.error;
+  return window._db48;
+}
+
 /* ¿la base ya tiene los m² en el presupuesto? (migración v45) */
 async function db45(){
   if (window._db45 !== undefined) return window._db45;
@@ -3544,6 +3596,14 @@ async function guardarPresupuesto(){
     }
   }
   if (o.descuento_pct == null) o.descuento_pct = 0;
+  if (await db48()){
+    o.descuento_modo  = (($("w_descuento_modo")||{}).value === "monto") ? "monto" : "pct";
+    o.descuento_monto = Number((($("w_descuento_monto")||{}).value) || 0) || null;
+    /* el modo que no se usa se guarda en cero, para que no quede un número
+       viejo escondido que confunda al que abra el presupuesto mañana */
+    if (o.descuento_modo === "monto") o.descuento_pct = 0;
+    else o.descuento_monto = null;
+  }
   $("w_guardar").disabled = true;
   let id = PRE.cab.id;
   if (id){
