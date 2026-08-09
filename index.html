@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-73";
+const VERSION = "v2026.08.09-74";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2173,7 +2173,51 @@ async function infoCompras(){
    con su consulta y sus columnas, y la pantalla es siempre la misma.
    Columnas: t=texto · f=fecha · n=número · m=plata (usa la columna Moneda si existe). */
 
-let FREP = {id:"", desde:"", hasta:"", moneda:""};
+let FREP = {id:"", desde:"", hasta:"", moneda:"", ext:{}};
+
+/* ── Filtros propios de cada reporte ──
+   Pedido de Gustavo (9/8/2026): "si yo quiero saber cuánto le vengo pagando de
+   sueldos a Jerónimo Arias en el mes, voy a reportes, egresos, pongo el período,
+   y ahí tendría que poder filtrar. Acá me aparece todo lo general".
+   Hasta ahora el único filtro de Reportes era fecha y moneda: cada reporte salía
+   entero y había que buscar el renglón a ojo. Ahora un reporte puede declarar sus
+   propios desplegables en «fx» y la pantalla los dibuja sola, igual que dibuja las
+   columnas. Lo elegido viaja en f.ext y cada reporte lo aplica. */
+const FX_GASTO = function(){
+  const a = [{k:"conc", t:"Concepto", lista:M.cga||[], sin:"Sin concepto"}];
+  if (M.agt) a.push({k:"area", t:"Área",     lista:M.agt, sin:"Sin área"});
+  if (M.per) a.push({k:"pers", t:"Persona",  lista:M.per, sin:"Sin persona"});
+  if (M.veh) a.push({k:"veh",  t:"Vehículo", lista:M.veh, sin:"Sin vehículo"});
+  return a;
+};
+/* Lo mismo del lado de la plata que entra. */
+const FX_COBRO = function(){ return [{k:"cconc", t:"Concepto", lista:M.cco||[], sin:"Sin concepto"}]; };
+/* Aplica los desplegables de arriba a una lista de gastos ya traída de la base. */
+function filtGasto(gs, f){
+  const e = (f && f.ext) || {};
+  const ok = function(v, sel){
+    if (!sel) return true;
+    if (sel === "__sin") return !v;
+    return String(v||"") === String(sel);
+  };
+  return gs.filter(function(x){
+    return ok(x.concepto_id, e.conc) && ok(x.area_id, e.area)
+        && ok(x.persona_id, e.pers) && ok(x.vehiculo_id, e.veh);
+  });
+}
+/* Deja escrito arriba del reporte qué filtros están puestos, para que el PDF y
+   el Excel no salgan sin decir de quién es el número. */
+function resumenFiltros(){
+  const rep = REPORTES.find(r=>r.id===FREP.id);
+  let fxs = []; try{ fxs = (rep && rep.fx) ? rep.fx() : []; }catch(e){ fxs = []; }
+  const e = FREP.ext || {}, out = [];
+  fxs.forEach(function(x){
+    const v = e[x.k]; if (!v) return;
+    out.push(x.t + ": " + (v === "__sin" ? x.sin : (nom(x.lista, Number(v)) || "?")));
+  });
+  return out.join(" · ");
+}
+function textoExtras(f){ return resumenFiltros(); }
 
 const sum = (arr, f) => arr.reduce((a,x)=>a+Number(f(x)||0), 0);
 const entre = (fecha, f) => (!f.desde || fecha >= f.desde) && (!f.hasta || fecha <= f.hasta);
@@ -2552,10 +2596,12 @@ const REPORTES = [
  }},
 
 /* ── Finanzas ── */
-{id:"ingresos", t:"Ingresos", g:"Finanzas", perm:"finanzas-consultar",
+{id:"ingresos", t:"Ingresos", g:"Finanzas", perm:"finanzas-consultar", fx:FX_COBRO,
  ay:"Toda la plata que entró de clientes en el período, agrupada por concepto de cobranza.",
  run: async function(f){
-   const c = (await traer("cobranzas","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const cc = (f.ext||{}).cconc;
+   const c = (await traer("cobranzas","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda))
+     .filter(x=> !cc || (cc==="__sin" ? !x.concepto_id : String(x.concepto_id||"")===String(cc)));
    const g = agrupar(c, x=>(nom(M.cco,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const p = k.split("|");
@@ -2564,11 +2610,11 @@ const REPORTES = [
    return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Cobranzas",tipo:"n"},{t:"Total",tipo:"m"}], filas:filas};
  }},
 
-{id:"egresos", t:"Egresos", g:"Finanzas", perm:"finanzas-consultar",
- ay:"Todos los gastos del período, cruzados por ÁREA y CONCEPTO: el área dice para qué fue el gasto (instalaciones, comercial, depósito) y el concepto qué se gastó (combustible, patentes, sueldos). Toma el mes al que corresponde el gasto, no el día en que se pagó.",
+{id:"egresos", t:"Egresos", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
+ ay:"Todos los gastos del período, cruzados por ÁREA y CONCEPTO: el área dice para qué fue el gasto (instalaciones, comercial, depósito) y el concepto qué se gastó (combustible, patentes, sueldos). Toma el mes al que corresponde el gasto, no el día en que se pagó. Con los filtros de arriba lo podés achicar a un concepto, un área, una persona o un vehículo.",
  run: async function(f){
    /* por imputación: el gasto pertenece al mes que corresponde, no al día que se pagó */
-   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda)), f);
    const hayArea = !!M.agt;
    const areaDe = x => hayArea ? (x.area_id ? (nom(M.agt,x.area_id)||"Sin área") : "— sin área —") : "";
    const g = agrupar(gs, x=>areaDe(x)+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
@@ -2592,11 +2638,40 @@ const REPORTES = [
      nota: sinArea ? (sinArea+" gasto(s) sin área cargada: aparecen agrupados en «— sin área —». Se corrigen abriendo el gasto, o cargándola de entrada en los nuevos.") : ""};
  }},
 
-{id:"gastos_persona", t:"Gastos por persona", g:"Finanzas", perm:"finanzas-consultar",
+/* Pedido de Gustavo (9/8/2026): el de arriba agrupa, y él necesita ver los gastos
+   uno por uno para responder «cuánto le vengo pagando de sueldos a Jerónimo Arias
+   este mes». Filtra por persona y por concepto y salen los pagos con su fecha, su
+   comprobante y el total arriba en el cartel. */
+{id:"egresos_detalle", t:"Egresos (uno por uno)", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
+ ay:"El listado de gastos sin agrupar, uno por renglón. Es el reporte para responder preguntas concretas: cuánto se le pagó de sueldo a una persona en el mes, cuánto combustible cargó una camioneta, qué se pagó de un concepto. Elegí el período arriba y después el concepto, el área, la persona o el vehículo. El total sale en el cartel de arriba y se baja a Excel con un botón.",
+ run: async function(f){
+   const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda)), f);
+   if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
+   gs.sort(function(a,b){ const fa=a.fecha_imputacion||a.fecha, fb=b.fecha_imputacion||b.fecha; return fa<fb?-1:(fa>fb?1:(a.id-b.id)); });
+   const cols = [{t:"Corresponde a",tipo:"f"},{t:"Fecha de pago",tipo:"f"},{t:"Concepto"}]
+     .concat(M.agt?[{t:"Área"}]:[]).concat(M.per?[{t:"Persona"}]:[]).concat(M.veh?[{t:"Vehículo"}]:[])
+     .concat([{t:"Detalle"},{t:"Proveedor"},{t:"Comprobante"},{t:"Cuenta"},{t:"Moneda"},
+              {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}]);
+   const filas = gs.map(function(x){
+     return [x.fecha_imputacion||x.fecha, x.fecha, nom(M.cga,x.concepto_id)||"Sin concepto"]
+       .concat(M.agt?[x.area_id?(nom(M.agt,x.area_id)||"?"):"— sin área —"]:[])
+       .concat(M.per?[x.persona_id?(nom(M.per,x.persona_id)||"?"):""]:[])
+       .concat(M.veh?[x.vehiculo_id?(nom(M.veh,x.vehiculo_id)||"?"):""]:[])
+       .concat([x.detalle_extra||"", x.proveedor||"", x.nro_comprobante||"",
+                (CTAS.length? (nom(CTAS,x.cuenta_id)||"") : ""), x.moneda||"ARS",
+                x.neto, x.iva, x.importe]);
+   });
+   const t = textoExtras(f);
+   return {cols:cols, filas:filas,
+     nota: filas.length ? (t ? "Filtrado por "+t+"." : "Sin filtro: salen todos los gastos del período. Usá los desplegables de arriba para achicarlo.")
+                        : (t ? "No hay gastos de "+t+" en ese período." : "")};
+ }},
+
+{id:"gastos_persona", t:"Gastos por persona", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
  ay:"Cuánto se le imputó a cada persona en el período: sueldo, cargas sociales, fondo de desempleo, combustible. Reemplaza la costumbre de crear un concepto nuevo por cada empleado, que en el sistema de Pirka llevó la lista a 226 entradas.",
  run: async function(f){
    if (!M.per) return {cols:[{t:"Persona"}], filas:[], nota:"falta correr la migración de personal en la base."};
-   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.persona_id && (!f.moneda||x.moneda===f.moneda));
+   const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.persona_id && (!f.moneda||x.moneda===f.moneda)), f);
    const g = agrupar(gs, x=>(nom(M.per,x.persona_id)||"?")+"§"+(M.agt&&x.area_id?(nom(M.agt,x.area_id)||"—"):"—")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
@@ -2605,11 +2680,11 @@ const REPORTES = [
    return {cols:[{t:"Persona"},{t:"Área"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
  }},
 
-{id:"gastos_vehiculo", t:"Gastos por vehículo", g:"Finanzas", perm:"finanzas-consultar",
+{id:"gastos_vehiculo", t:"Gastos por vehículo", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
  ay:"Cuánto cuesta mantener cada camioneta: combustible, patente, seguro, service. Es el reporte que dice si conviene seguir con un vehículo o cambiarlo.",
  run: async function(f){
    if (!M.veh) return {cols:[{t:"Vehículo"}], filas:[], nota:"falta correr la migración de vehículos en la base."};
-   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.vehiculo_id && (!f.moneda||x.moneda===f.moneda));
+   const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.vehiculo_id && (!f.moneda||x.moneda===f.moneda)), f);
    const g = agrupar(gs, x=>(nom(M.veh,x.vehiculo_id)||"?")+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
@@ -2619,11 +2694,11 @@ const REPORTES = [
  }},
 
 /* El resumen que pidió Gustavo: cuánto cuesta cada área, sin el detalle. */
-{id:"egresos_area", t:"Egresos por área", g:"Finanzas", perm:"finanzas-consultar",
+{id:"egresos_area", t:"Egresos por área", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
  ay:"Cuánto se gastó en cada área del negocio en el período: instalaciones, comercial, depósito, administración. Es el resumen del reporte de Egresos, sin el detalle por concepto. Sirve para saber qué le cuesta al negocio sostener cada área.",
  run: async function(f){
    if (!M.agt) return {cols:[{t:"Área"}], filas:[], nota:"falta correr la migración de áreas de gasto en la base."};
-   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda)), f);
    const g = agrupar(gs, x=>(x.area_id ? (nom(M.agt,x.area_id)||"Sin área") : "— sin área —")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const p = k.split("|");
@@ -2814,6 +2889,10 @@ VISTAS.reportes = async function(){
   }
   if (!FREP.id || !mios.find(r=>r.id===FREP.id)) FREP.id = mios[0].id;
   const rep = mios.find(r=>r.id===FREP.id);
+  /* los desplegables propios de este reporte, si declaró alguno */
+  let fxs = [];
+  try{ fxs = rep.fx ? rep.fx() : []; }catch(e){ fxs = []; }
+  if (!FREP.ext) FREP.ext = {};
   const grupos = [];
   mios.forEach(r=>{ if (grupos.indexOf(r.g)<0) grupos.push(r.g); });
   $("main").innerHTML =
@@ -2828,14 +2907,36 @@ VISTAS.reportes = async function(){
      '<div><label>Hasta</label><input type="date" id="rp_hasta" value="'+esc(FREP.hasta)+'"></div>'+
      '<div><label>Moneda</label><select id="rp_mon"><option value="">Las dos</option>'+
        ["ARS","USD"].map(m=>'<option '+(FREP.moneda===m?"selected":"")+'>'+m+'</option>').join("")+'</select></div>'+
+     fxs.map(function(x){
+       const sel = FREP.ext[x.k]||"";
+       return '<div><label>'+esc(x.t)+'</label><select class="rp_fx" data-k="'+esc(x.k)+'">'+
+         '<option value="">Todos</option>'+
+         (x.lista||[]).filter(y=>y.activo!==false || String(sel)===String(y.id))
+           .map(y=>'<option value="'+y.id+'" '+(String(sel)===String(y.id)?"selected":"")+'>'+esc(y.nombre)+'</option>').join("")+
+         (x.sin? '<option value="__sin" '+(sel==="__sin"?"selected":"")+'>— '+esc(x.sin)+' —</option>' : '')+
+         '</select></div>';
+     }).join("")+
      '<div style="min-width:auto"><button class="btn" id="rp_ver">Ver</button></div>'+
      '<div style="min-width:auto"><button class="btn2" id="rp_mes">Este mes</button></div>'+
      '<div style="min-width:auto"><button class="btn2" id="rp_anio">Este año</button></div>'+
+     (fxs.length? '<div style="min-width:auto"><button class="btn2" id="rp_limpiar">Limpiar filtros</button></div>' : '')+
    '</div>'+
    '<div class="muted" style="margin-bottom:6px">'+esc(rep.ay)+'</div>'+
    '<div id="rp_out"><div class="muted">Cargando…</div></div></div>';
-  $("rp_id").onchange = function(){ FREP.id = this.value; VISTAS.reportes(); };
-  $("rp_ver").onclick = function(){ FREP.desde=$("rp_desde").value; FREP.hasta=$("rp_hasta").value; FREP.moneda=$("rp_mon").value; correrReporte(); };
+  /* al cambiar de reporte se limpian los filtros propios del anterior: si no,
+     quedaba puesto un vehículo en un reporte que no tiene vehículos */
+  $("rp_id").onchange = function(){ FREP.id = this.value; FREP.ext = {}; VISTAS.reportes(); };
+  const leerFx = function(){
+    FREP.ext = {};
+    Array.prototype.forEach.call(document.querySelectorAll(".rp_fx"), function(s){
+      if (s.value) FREP.ext[s.getAttribute("data-k")] = s.value;
+    });
+  };
+  Array.prototype.forEach.call(document.querySelectorAll(".rp_fx"), function(s){
+    s.onchange = function(){ leerFx(); correrReporte(); };
+  });
+  if ($("rp_limpiar")) $("rp_limpiar").onclick = function(){ FREP.ext = {}; VISTAS.reportes(); };
+  $("rp_ver").onclick = function(){ FREP.desde=$("rp_desde").value; FREP.hasta=$("rp_hasta").value; FREP.moneda=$("rp_mon").value; leerFx(); correrReporte(); };
   $("rp_mes").onclick = function(){ const h=hoy(); FREP.desde=h.slice(0,8)+"01"; FREP.hasta=h; VISTAS.reportes(); };
   $("rp_anio").onclick = function(){ const h=hoy(); FREP.desde=h.slice(0,4)+"-01-01"; FREP.hasta=h; VISTAS.reportes(); };
   correrReporte();
@@ -2846,7 +2947,7 @@ async function correrReporte(){
   const rep = REPORTES.find(r=>r.id===FREP.id);
   $("rp_out").innerHTML = '<div class="muted">Calculando…</div>';
   let d;
-  try { d = await rep.run({desde:FREP.desde, hasta:FREP.hasta, moneda:FREP.moneda}); }
+  try { d = await rep.run({desde:FREP.desde, hasta:FREP.hasta, moneda:FREP.moneda, ext:FREP.ext||{}}); }
   catch(e){ $("rp_out").innerHTML = '<div class="msg err">No pude armar el reporte: '+esc(e.message)+'</div>'; return; }
   REP_DATOS = {rep:rep, d:d};
   const iMon = d.cols.findIndex(c=>c.t==="Moneda");
@@ -2914,7 +3015,9 @@ function imprimirReporte(){
   const iMon = d.cols.findIndex(c=>c.t==="Moneda");
   const cel = (v,c,fila) => (v==null||v==="") ? "" :
     c.tipo==="f" ? fmtF(v) : c.tipo==="n" ? fmtN(v) : c.tipo==="m" ? fmtM(v, iMon>=0?fila[iMon]:"ARS") : esc(String(v));
-  const per = (FREP.desde||FREP.hasta) ? ("Del "+(FREP.desde?fmtF(FREP.desde):"principio")+" al "+(FREP.hasta?fmtF(FREP.hasta):"hoy")) : "Todo el historial";
+  const fil = resumenFiltros();
+  const per = ((FREP.desde||FREP.hasta) ? ("Del "+(FREP.desde?fmtF(FREP.desde):"principio")+" al "+(FREP.hasta?fmtF(FREP.hasta):"hoy")) : "Todo el historial")
+            + (fil ? " · "+fil : "");
   const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(rep.t)+'</title><style>'+
    'body{font:12px Helvetica,Arial,sans-serif;color:#1b2426;margin:26px}'+
    'h1{font-size:19px;color:#24393C;margin:0}.sub{color:#6b7679;font-size:11px;margin-bottom:14px}'+
