@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-66";
+const VERSION = "v2026.08.08-67";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1552,6 +1552,12 @@ const MAESTRAS = [
   {k:"agt", extra:true, tabla:"areas_gasto", titulo:"Áreas de gasto", orden:"orden",
    ayuda:"El segundo eje de cada gasto. El CONCEPTO dice qué se gastó —combustible, patentes, sueldos— y el ÁREA dice para qué: instalaciones, comercial, depósito. Cruzados, el reporte de Egresos te dice cuánto te cuesta cada área. El sueldo del instalador va a Instalaciones, el del depósito a Depósito, la publicidad a Comercial. El «Orden» es el que se usa para listarlas.",
    cols:[{c:"orden", t:"Orden", num:true, ph:"1"}]},
+  {k:"per", extra:true, tabla:"personal", titulo:"Personal",
+   ayuda:"Las personas a las que se les puede imputar un gasto: sueldos, cargas sociales, fondo de desempleo, combustible. NO es la lista de usuarios del sistema —acá van también los que no entran a la computadora—. Cargar la persona acá evita lo que pasó en Pirka, donde cada empleado nuevo agregaba dos conceptos y la lista llegó a 226. Cuando alguien se va, se pone en «Activo: No» y desaparece del desplegable sin borrarse del historial.",
+   cols:[]},
+  {k:"veh", extra:true, tabla:"vehiculos", titulo:"Vehículos",
+   ayuda:"Las camionetas y autos del negocio. Sirve para que combustible, patente, seguro y service se puedan imputar a cada uno y saber cuánto cuesta mantener cada vehículo por separado.",
+   cols:[{c:"patente", t:"Patente", ph:"AB 123 CD"}]},
   {k:"mpg", extra:true, tabla:"medios_pago", titulo:"Formas de pago",
    ayuda:"Con qué paga la gente: efectivo, transferencia, débito, cada tarjeta y cada plan de cuotas. El «Tipo» agrupa la familia (Crédito, Débito, Efectivo…) para filtrar de a montones. El «Costo %» es lo que te descuenta esa forma de pago: el arancel de la tarjeta más lo que te cuesta el plan de cuotas. Es el dato con el que el Estado de resultado calcula cuánta plata se te va en financiación — si lo dejás vacío, esa venta se cuenta como si no te costara nada.",
    cols:[{c:"tipo", t:"Tipo", ph:"Crédito, Débito, Efectivo, Transferencia…"},
@@ -2530,6 +2536,32 @@ const REPORTES = [
    const sinArea = hayArea ? gs.filter(x=>!x.area_id).length : 0;
    return {cols:cols, filas:filas,
      nota: sinArea ? (sinArea+" gasto(s) sin área cargada: aparecen agrupados en «— sin área —». Se corrigen abriendo el gasto, o cargándola de entrada en los nuevos.") : ""};
+ }},
+
+{id:"gastos_persona", t:"Gastos por persona", g:"Finanzas", perm:"finanzas-consultar",
+ ay:"Cuánto se le imputó a cada persona en el período: sueldo, cargas sociales, fondo de desempleo, combustible. Reemplaza la costumbre de crear un concepto nuevo por cada empleado, que en el sistema de Pirka llevó la lista a 226 entradas.",
+ run: async function(f){
+   if (!M.per) return {cols:[{t:"Persona"}], filas:[], nota:"falta correr la migración de personal en la base."};
+   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.persona_id && (!f.moneda||x.moneda===f.moneda));
+   const g = agrupar(gs, x=>(nom(M.per,x.persona_id)||"?")+"§"+(M.agt&&x.area_id?(nom(M.agt,x.area_id)||"—"):"—")+"|"+x.moneda);
+   const filas = [];
+   g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
+     filas.push([pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)]); });
+   filas.sort((a,b)=>b[5]-a[5]);
+   return {cols:[{t:"Persona"},{t:"Área"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
+ }},
+
+{id:"gastos_vehiculo", t:"Gastos por vehículo", g:"Finanzas", perm:"finanzas-consultar",
+ ay:"Cuánto cuesta mantener cada camioneta: combustible, patente, seguro, service. Es el reporte que dice si conviene seguir con un vehículo o cambiarlo.",
+ run: async function(f){
+   if (!M.veh) return {cols:[{t:"Vehículo"}], filas:[], nota:"falta correr la migración de vehículos en la base."};
+   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.vehiculo_id && (!f.moneda||x.moneda===f.moneda));
+   const g = agrupar(gs, x=>(nom(M.veh,x.vehiculo_id)||"?")+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
+   const filas = [];
+   g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
+     filas.push([pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)]); });
+   filas.sort(function(a,b){ const r = String(a[0]).localeCompare(String(b[0]),"es"); return r || (b[5]-a[5]); });
+   return {cols:[{t:"Vehículo"},{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
  }},
 
 /* El resumen que pidió Gustavo: cuánto cuesta cada área, sin el detalle. */
@@ -6503,7 +6535,7 @@ async function finMovs(){
     }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
 }
 
-let FG = {desde:"", hasta:"", concepto:"", area:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
+let FG = {desde:"", hasta:"", concepto:"", area:"", persona:"", vehiculo:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
 async function finGastos(){
   const puede = P("finanzas-modificar");
   $("fbody").innerHTML = '<div class="panel"><h2>Gastos</h2>'+
@@ -6517,6 +6549,12 @@ async function finGastos(){
      (M.agt? '<div><label>Área</label><select id="gf_area"><option value="">Todas</option>'+
         M.agt.map(c=>'<option value="'+c.id+'" '+(String(FG.area)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+
         '<option value="sin" '+(FG.area==="sin"?"selected":"")+'>Sin área cargada</option></select></div>' : '')+
+     (M.per? '<div><label>Persona</label><select id="gf_persona"><option value="">Todas</option>'+
+        M.per.map(c=>'<option value="'+c.id+'" '+(String(FG.persona)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+
+        '</select></div>' : '')+
+     (M.veh? '<div><label>Vehículo</label><select id="gf_vehiculo"><option value="">Todos</option>'+
+        M.veh.map(c=>'<option value="'+c.id+'" '+(String(FG.vehiculo)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+
+        '</select></div>' : '')+
      '<div><label>Cuenta</label><select id="gf_cuenta"><option value="">Todas</option>'+CTAS.map(c=>'<option value="'+c.id+'" '+(String(FG.cuenta)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
      '<div><label>Buscar</label><input id="gf_txt" placeholder="detalle, proveedor o comprobante" value="'+esc(FG.texto)+'"></div>'+
      '<div><label>Anulados</label><select id="gf_anul"><option value="0" '+(FG.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FG.anulados?"selected":"")+'>Mostrar</option></select></div>'+
@@ -6524,8 +6562,8 @@ async function finGastos(){
      '<div style="min-width:auto"><button class="btn2" id="gf_clr">Limpiar</button></div>'+
      (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formGasto()">+ Gasto nuevo</button></div>':'')+
    '</div><div id="glista" class="muted">Cargando…</div></div>';
-  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,area:($("gf_area")||{}).value||"",cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1",campo:$("gf_campo").value}; finGastos(); };
-  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",area:"",cuenta:"",anulados:false,texto:"",campo:"fecha_imputacion"}; finGastos(); };
+  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,area:($("gf_area")||{}).value||"",persona:($("gf_persona")||{}).value||"",vehiculo:($("gf_vehiculo")||{}).value||"",cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1",campo:$("gf_campo").value}; finGastos(); };
+  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",area:"",persona:"",vehiculo:"",cuenta:"",anulados:false,texto:"",campo:"fecha_imputacion"}; finGastos(); };
   let q = sb.from("gastos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(1000);
   const campoF = FG.campo === "fecha" ? "fecha" : "fecha_imputacion";
   if (FG.desde) q = q.gte(campoF, FG.desde);
@@ -6533,6 +6571,8 @@ async function finGastos(){
   if (FG.concepto) q = q.eq("concepto_id", Number(FG.concepto));
   if (FG.area === "sin") q = q.is("area_id", null);
   else if (FG.area) q = q.eq("area_id", Number(FG.area));
+  if (FG.persona)  q = q.eq("persona_id", Number(FG.persona));
+  if (FG.vehiculo) q = q.eq("vehiculo_id", Number(FG.vehiculo));
   if (FG.cuenta) q = q.eq("cuenta_id", Number(FG.cuenta));
   if (!FG.anulados) q = q.eq("anulado", false);
   const {data,error} = await q;
@@ -6554,14 +6594,16 @@ async function finGastos(){
   $("glista").innerHTML = (resumen?'<div class="kpis">'+resumen+'</div>':'')+
    '<div class="muted" style="margin-bottom:8px">'+rows.length+' gasto'+(rows.length===1?"":"s")+(FG.anulados?" (incluye anulados)":"")+'</div>'+
    '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
-   ['Fecha de pago','Corresponde a','Cuenta','Concepto'].concat(M.agt?['Área']:[]).concat(['Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle','']).map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+   ['Fecha de pago','Corresponde a','Cuenta','Concepto'].concat(M.agt?['Área']:[]).concat(M.per?['Persona']:[]).concat(M.veh?['Vehículo']:[]).concat(['Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle','']).map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
    rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.5;text-decoration:line-through':'')+'">'+
      '<td>'+fmtF(g.fecha)+'</td>'+
      '<td'+((g.fecha_imputacion && g.fecha_imputacion !== g.fecha)?' style="font-weight:600"':'')+'>'+fmtF(g.fecha_imputacion||g.fecha)+'</td>'+
      '<td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
      (M.agt?'<td>'+((P("finanzas-modificar") && !g.anulado)
-        ? '<button class="btn2 btn-sm" style="font-weight:normal" onclick="formAreaGasto('+g.id+')">'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">+ asignar</span>')+'</button>'
+        ? '<button class="btn2 btn-sm" style="font-weight:normal" onclick="formAreaGasto('+g.id+')">'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">+ clasificar</span>')+'</button>'
         : (g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">— sin área —</span>'))+'</td>':'')+
+     (M.per?'<td>'+(g.persona_id? esc(nom(M.per,g.persona_id)) : '<span class="muted">—</span>')+'</td>':'')+
+     (M.veh?'<td>'+(g.vehiculo_id? esc(nom(M.veh,g.vehiculo_id)) : '<span class="muted">—</span>')+'</td>':'')+
      '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
      '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
      celdaSaldo(SALG, g.mov_id, g.moneda, g.anulado)+
@@ -6609,6 +6651,19 @@ function formGasto(){
           ? '<div class="f"><label>¿Falta el área?</label><div style="display:flex;gap:6px"><input id="g_area_nueva" placeholder="Área nueva"><button class="btn2 btn-sm" onclick="areaGastoAgregar()">Agregar</button></div></div>'
           : '')
       : '')+
+    /* Persona y vehículo: los otros dos ejes. Los tres son opcionales — un
+       alquiler no tiene persona ni vehículo — pero cuando corresponden, evitan
+       que el concepto se multiplique. */
+    (M.per
+      ? '<div class="f"><label>Persona</label><select id="g_persona" onchange="gastoPersonaElegida()"><option value="">— ninguna —</option>'+
+        M.per.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" data-area="'+(x.area_id||"")+'">'+esc(x.nombre)+'</option>').join("")+'</select>'+
+        '<div class="muted" style="font-size:.85em;margin-top:4px">Para sueldos, cargas sociales y fondo de desempleo. Si la persona tiene área, se completa sola.</div></div>'
+      : '')+
+    (M.veh
+      ? '<div class="f"><label>Vehículo</label><select id="g_vehiculo"><option value="">— ninguno —</option>'+
+        M.veh.filter(x=>x.activo).map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+(x.patente?' ('+esc(x.patente)+')':'')+'</option>').join("")+'</select>'+
+        '<div class="muted" style="font-size:.85em;margin-top:4px">Para combustible, patente, seguro y service.</div></div>'
+      : '')+
     '<div class="f"><label>Proveedor</label><input id="g_proveedor" placeholder="opcional"></div>'+
     '<div class="f"><label>N° de comprobante</label><input id="g_comprobante" placeholder="opcional"></div>'+
     '<div class="f"><label>CUIT del proveedor</label><input id="g_cuit" placeholder="opcional"></div>'+
@@ -6629,8 +6684,12 @@ function formGasto(){
     const fi = ($("g_fecha_imp")||{}).value || $("g_fecha").value || hoy();
     if (r.data) { try{ await sb.rpc("imputar_gasto",{p_gasto:Number(r.data), p_fecha:fi}); }catch(e){} }
     /* el área también va aparte, por la misma razón: no se toca la función que mueve la plata */
-    const ar = ($("g_area")||{}).value;
-    if (r.data && ar) { try{ await sb.rpc("set_area_gasto",{p_gasto:Number(r.data), p_area:Number(ar)}); }catch(e){} }
+    const ar = ($("g_area")||{}).value, pe = ($("g_persona")||{}).value, ve = ($("g_vehiculo")||{}).value;
+    if (r.data && (ar || pe || ve)){
+      try{ await sb.rpc("set_clasificacion_gasto",{p_gasto:Number(r.data), p_area: ar?Number(ar):null,
+             p_persona: pe?Number(pe):null, p_vehiculo: ve?Number(ve):null}); }
+      catch(e){ try{ if (ar) await sb.rpc("set_area_gasto",{p_gasto:Number(r.data), p_area:Number(ar)}); }catch(e2){} }
+    }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
   };
   $("dlg").showModal();
@@ -6648,26 +6707,34 @@ async function concGastoAgregar(){
   $("g_concepto").innerHTML = selOpts(CGASTOS, (CGASTOS.find(x=>x.nombre===n)||{}).id);
   $("g_conc_nuevo").value = "";
 }
-/* Ponerle o cambiarle el área a un gasto ya cargado. Sin esto el área solo se
-   podía elegir al crearlo, y todo lo que Gilda ya cargó quedaba sin clasificar
-   para siempre. Va por la misma función que el alta: no toca la plata. */
+/* Clasificar un gasto ya cargado. Sin esto los tres ejes solo se podían elegir
+   al crearlo, y todo lo ya cargado quedaba sin clasificar para siempre.
+   Va por una función security definer: no toca la plata. */
 function formAreaGasto(id){
   const g = (window._GASTOS_LISTA||[]).find(function(x){ return x.id===id; });
-  $("dtit").textContent = "Área del gasto";
+  const sel = function(k, arr, val, extra){
+    if (!arr) return "";
+    return '<div class="f"><label>'+k+'</label><select id="cg_'+k.toLowerCase()+'"><option value="">— sin '+k.toLowerCase()+' —</option>'+
+      arr.filter(function(x){ return x.activo || String(x.id)===String(val); })
+         .map(function(x){ return '<option value="'+x.id+'" '+(String(val)===String(x.id)?"selected":"")+'>'+esc(x.nombre)+(extra&&x[extra]?' ('+esc(x[extra])+')':'')+'</option>'; }).join("")+
+      '</select></div>';
+  };
+  $("dtit").textContent = "Clasificar el gasto";
   $("dbody").innerHTML = '<div id="agmsg"></div>'+
    '<div class="muted" style="margin-bottom:10px">'+
      (g? '<b>'+esc(nom(CGASTOS,g.concepto_id))+'</b> · '+fmtM(g.importe,g.moneda)+' · '+fmtF(g.fecha)+(g.detalle_extra?' · '+esc(g.detalle_extra):'')+'<br>' : '')+
-     'Para qué fue este gasto. No cambia el importe ni la cuenta: solo lo clasifica para el reporte de Egresos.</div>'+
-   '<div class="f"><label>Área</label><select id="ag_area"><option value="">— sin área —</option>'+
-     (M.agt||[]).filter(function(x){return x.activo;}).map(function(x){
-       return '<option value="'+x.id+'" '+((g&&String(g.area_id)===String(x.id))?"selected":"")+'>'+esc(x.nombre)+'</option>';
-     }).join("")+'</select></div>'+
+     'No cambia el importe ni la cuenta: solo lo clasifica para los reportes. Los tres son opcionales.</div>'+
+   '<div class="grid">'+
+     sel("Área", M.agt, g?g.area_id:null)+
+     sel("Persona", M.per, g?g.persona_id:null)+
+     sel("Vehículo", M.veh, g?g.vehiculo_id:null, "patente")+
+   '</div>'+
    '<div class="acciones"><button class="btn" id="ag_guardar">Guardar</button>'+
    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
   $("ag_guardar").onclick = async function(){
-    const v = $("ag_area").value;
+    const v = k => { const e = $("cg_"+k); return (e && e.value) ? Number(e.value) : null; };
     $("ag_guardar").disabled = true;
-    const {error} = await sb.rpc("set_area_gasto", {p_gasto:id, p_area: v? Number(v) : null});
+    const {error} = await sb.rpc("set_clasificacion_gasto", {p_gasto:id, p_area:v("área"), p_persona:v("persona"), p_vehiculo:v("vehículo")});
     $("ag_guardar").disabled = false;
     if (error){ $("agmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
     try{ $("dlg").close(); }catch(e){}
