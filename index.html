@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-68";
+const VERSION = "v2026.08.08-69";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -789,6 +789,40 @@ async function db9(){
   return window._db9;
 }
 
+/* ══════════════════════════════════════════════════════════════
+   DATOS QUE NO PUEDEN FALTAR
+   Pedido de Gustavo (8/8/2026): "estaría bueno que algunos campos sean
+   obligatorios —el cliente, el teléfono, la localidad, la dirección si es con
+   instalación, la validez del presupuesto, el tipo de producto— para que nunca
+   quede un prospecto, un presupuesto o una venta con datos incompletos".
+
+   Un solo lugar para todas las reglas, así el prospecto, el presupuesto, la
+   venta y el cliente exigen exactamente lo mismo y no se van separando con el
+   tiempo. Devuelve la lista de lo que falta, no el primer error: es peor
+   corregir de a uno que ver todo junto.
+
+   Criterio sobre el teléfono: se acepta CELULAR O TELÉFONO, no el mail solo.
+   Una visita a domicilio se coordina por teléfono; si el mail alcanzara, el
+   día de la visita no habría a quién llamar.
+   ══════════════════════════════════════════════════════════════ */
+function faltan(reglas){
+  const f = [];
+  reglas.forEach(function(r){ if (!r.ok) f.push(r.q); });
+  return f;
+}
+function avisoFaltan(idMsg, lista, queEs){
+  const el = $(idMsg); if (!el) return;
+  el.innerHTML = '<div class="msg err" style="line-height:1.5"><b>Falta cargar '+
+    (lista.length===1?'un dato':lista.length+' datos')+' para guardar '+(queEs||'')+':</b><br>· '+
+    lista.map(esc).join('<br>· ')+'</div>';
+  try{ el.scrollIntoView({behavior:"smooth", block:"center"}); }catch(e){}
+}
+/* ¿hay algún renglón que se instala? */
+function llevaInstalacion(items, tipo){
+  if (tipo === "Instalado" || tipo === "Mixto") return true;
+  return (items||[]).some(function(x){ return x.con_instalacion; });
+}
+
 /* La ficha sigue el proceso real, no el orden en que se fue construyendo:
    1) ENTRADA — se carga el prospecto y se decide la derivación.
    2) VISITA   — solo si se derivó a domicilio. Sirve para PROGRAMARLA.
@@ -1119,7 +1153,14 @@ VISTAS.nuevo = function(){
   $("ncancel").onclick = VISTAS.nuevo;
   $("nguardar").onclick = async function(){
     const o = leerForm();
-    if (!o.nombre){ $("nmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
+    const f = faltan([
+      {ok:!!o.nombre,                          q:"Cliente"},
+      {ok:!!(o.celular || o.telefono),         q:"Celular o teléfono (con uno alcanza)"},
+      {ok:!!o.localidad_id,                    q:"Localidad"},
+      {ok:o.derivacion !== "Visita a domicilio" || !!o.direccion, q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
+      {ok:o.resultado !== "No Vendido" || !!o.motivo_descarte_id, q:"Motivo de descarte (el resultado es «No Vendido»: hay que decir por qué no se cerró)"}
+    ]);
+    if (f.length){ avisoFaltan("nmsg", f, "el prospecto"); return; }
     $("nguardar").disabled = true;
     const {data,error} = await sb.from("prospectos").insert(o).select("id,codigo").single();
     $("nguardar").disabled = false;
@@ -1165,8 +1206,16 @@ async function abrir(id){
   togglePorDerivacion();
 
   if (puedeEditar) $("dguardar").onclick = async function(){
-    $("dguardar").disabled = true;
     const o = leerForm();
+    const fv = faltan([
+      {ok:!!o.nombre,                  q:"Cliente"},
+      {ok:!!(o.celular || o.telefono), q:"Celular o teléfono (con uno alcanza)"},
+      {ok:!!o.localidad_id,            q:"Localidad"},
+      {ok:o.derivacion !== "Visita a domicilio" || !!o.direccion, q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
+      {ok:o.resultado !== "No Vendido" || !!o.motivo_descarte_id, q:"Motivo de descarte (el resultado es «No Vendido»: hay que decir por qué no se cerró)"}
+    ]);
+    if (fv.length){ avisoFaltan("dmsg", fv, "el prospecto"); return; }
+    $("dguardar").disabled = true;
     const pasaAVendido = o.resultado === "Vendido" && p.resultado !== "Vendido";
     const {error} = await sb.from("prospectos").update(o).eq("id",id);
     if (error){
@@ -1500,7 +1549,12 @@ async function guardarProducto(id){
   const o = {};
   CAMPOS_PROD.forEach(function(c){ const el=$("q_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PROD.indexOf(c)>=0) v=Number(v); o[c]=v; });
   ["disponible_venta","se_instala","activo","registra_stock"].forEach(function(c){ const el=$("q_"+c); if(el) o[c] = el.value==="1"; });
-  if (!o.codigo || !o.nombre){ $("fpmsg").innerHTML = '<div class="msg err">El código y el nombre son obligatorios.</div>'; return; }
+  const f = faltan([
+    {ok:!!o.codigo,  q:"Código"},
+    {ok:!!o.nombre,  q:"Nombre"},
+    {ok:!!o.tipo_id, q:"Tipo de producto (sin él, los reportes por tipo lo dejan afuera)"}
+  ]);
+  if (f.length){ avisoFaltan("fpmsg", f, "el producto"); return; }
   const r = id ? await sb.from("productos").update(o).eq("id",id) : await sb.from("productos").insert(o);
   if (r.error){ $("fpmsg").innerHTML = '<div class="msg err">'+(r.error.message.indexOf("duplicate")>=0?"Ya existe un producto con ese código.":esc(r.error.message))+'</div>'; return; }
   await cargarCatalogo();
@@ -2967,6 +3021,7 @@ async function abrirPresupuesto(id, desde){
   if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
   await db9();
   await db38();
+  await db45();
   if (id){
     const [c,i,a] = await Promise.all([
       sb.from("presupuestos").select("*").eq("id",id).single(),
@@ -3042,7 +3097,12 @@ function calcTotales(){
 
 function pintarFichaPre(){
   const c = PRE.cab;
-  const puede = c.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
+  /* Un presupuesto VENDIDO no se toca más: ya generó la venta y la deuda en la
+     cuenta corriente. Si se pudiera editar, el presupuesto y la venta dirían
+     cosas distintas. Se destraba anulando la venta, y eso solo lo puede hacer
+     el dueño. Pedido de Gustavo, 8/8/2026. */
+  const vendido = c.estado === "Vendido";
+  const puede = vendido ? false : (c.id ? P("presupuesto-modificar") : P("presupuesto-agregar"));
   const d = puede ? "" : "disabled";
   /* La forma de pago es DEL PRESUPUESTO: es lo que se va a filtrar cuando haya
      una promoción («todos los presupuestos abiertos con tarjeta de crédito»).
@@ -3089,17 +3149,28 @@ function pintarFichaPre(){
      '<div class="f"><label>Fecha</label><input type="date" id="w_fecha" value="'+(c.fecha||hoy())+'" '+d+'></div>'+
      '<div class="f"><label>Validez (días)</label><input type="number" id="w_validez_dias" value="'+(c.validez_dias==null?15:c.validez_dias)+'" '+d+'></div>'+
      '<div class="f"><label>Tipo</label><select id="w_tipo" '+d+'>'+selTxt(TIPOVENTA,c.tipo)+'</select></div>'+
-     '<div class="f"><label>Estado</label><select id="w_estado" '+d+'>'+selTxt(ESTADOS_PRE,c.estado||"Abierto")+'</select></div>'+
+     /* «Vendido» no se elige a mano: se pasa con el botón de abajo, que además
+        genera la venta. Si ya está vendido, se muestra igual. */
+     '<div class="f"><label>Estado</label><select id="w_estado" '+(vendido?"disabled":d)+'>'+
+       selTxt(ESTADOS_PRE.filter(function(e){ return e !== "Vendido" || vendido; }), c.estado||"Abierto")+'</select>'+
+       (vendido
+         ? '<div class="muted" style="font-size:.85em;margin-top:4px">Vendido. Solo se cambia anulando la venta, y eso lo hace el dueño.</div>'
+         : '<div class="muted" style="font-size:.85em;margin-top:4px">Para venderlo usá el botón «Pasar a venta», al pie.</div>')+
+     '</div>'+
      '<div class="f"><label>Lista de precios</label><select id="w_lista_id" '+d+'>'+selOpts(LISTAS,c.lista_id)+'</select></div>'+
      '<div class="f"><label>Moneda</label><select id="w_moneda" '+d+' onchange="sincro()">'+selTxt(["ARS","USD"],c.moneda||"ARS")+'</select></div>'+
      '<div class="f"><label>Cotización USD</label><input type="number" step="0.01" id="w_cotizacion_usd" value="'+(c.cotizacion_usd==null?"":c.cotizacion_usd)+'" '+d+'></div>'+
-     '<div class="f"><label>N° de presupuesto en papel</label><input id="w_nro_papel" value="'+esc(c.nro_papel)+'" '+d+' placeholder="el que escribió el ATO a mano">'+
+     '<div class="f"><label>N° de presupuesto en papel *</label><input id="w_nro_papel" value="'+esc(c.nro_papel)+'" '+d+' placeholder="el que escribió el ATO a mano">'+
        '<div class="muted" style="font-size:.85em;margin-top:4px">Se carga acá, no en la ficha del prospecto.</div></div>'+
      /* Los m² viven en el prospecto, pero se cargan de este lado: el pedido de
         Gustavo fue que el presupuesto se complete en un solo lugar. Al guardar
         vuelven a la ficha del prospecto solos. */
-     '<div class="f" id="w_boxm2c" style="'+(c.prospecto_id?'':'display:none')+'"><label>m² cotizados</label><input type="number" step="0.01" id="w_pros_m2c" value="'+((PRE.pros&&PRE.pros.m2_cotizados!=null)?PRE.pros.m2_cotizados:"")+'" '+d+'></div>'+
-     '<div class="f" id="w_boxm2p" style="'+(c.prospecto_id?'':'display:none')+'"><label>m² a colocar</label><input type="number" step="0.01" id="w_pros_m2p" value="'+((PRE.pros&&PRE.pros.m2_colocar!=null)?PRE.pros.m2_colocar:"")+'" '+d+'></div>'+
+     /* Los m² son del presupuesto (v45). Se muestran siempre, también en un
+        presupuesto directo, y se copian al prospecto cuando hay uno. */
+     '<div class="f" id="w_boxm2c"><label>m² cotizados</label><input type="number" step="0.01" id="w_pros_m2c" value="'+
+       (c.m2_cotizados!=null ? c.m2_cotizados : ((PRE.pros&&PRE.pros.m2_cotizados!=null)?PRE.pros.m2_cotizados:""))+'" '+d+'></div>'+
+     '<div class="f" id="w_boxm2p"><label>m² a colocar <span class="muted">(obligatorio si se instala)</span></label><input type="number" step="0.01" id="w_pros_m2p" value="'+
+       (c.m2_colocar!=null ? c.m2_colocar : ((PRE.pros&&PRE.pros.m2_colocar!=null)?PRE.pros.m2_colocar:""))+'" '+d+'></div>'+
      '<div class="f"><label>VL</label><select id="w_vl_id" '+d+'>'+selPer(VLS(),c.vl_id)+'</select></div>'+
      '<div class="f"><label>ATO</label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
      '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+selOpts(M.mot,c.motivo_rechazo_id)+'</select></div>'+
@@ -3131,12 +3202,34 @@ function pintarFichaPre(){
    '<div class="sec">Notas</div>'+
    '<div class="f"><label>Notas del presupuesto (se imprimen)</label><textarea id="w_notas" rows="3" '+d+'>'+esc(c.notas)+'</textarea></div>'+
    '<div class="f"><label>Condiciones comerciales</label><textarea id="w_condiciones" rows="2" '+d+'>'+esc(c.condiciones)+'</textarea></div>'+
+   /* Pedido de Gustavo (8/8/2026): pasar a venta con un BOTÓN a la vista, no
+      cambiando el estado en un desplegable. Por dentro hace exactamente lo
+      mismo que antes —pone el estado en Vendido y guarda— así que no hay dos
+      caminos distintos para la misma operación, que es como aparecen los bugs. */
+   ((c.id && puede && !vendido && c.estado !== "Anulado" && P("venta-agregar"))
+     ? '<div class="msg ok" style="line-height:1.5;margin-top:14px">Cuando el cliente confirma, tocá <b>Pasar a venta</b>. '+
+       'Eso genera la venta, le carga la deuda en la cuenta corriente y deja el presupuesto cerrado. '+
+       'Guardá antes cualquier cambio que hayas hecho.</div>'+
+       '<div class="acciones"><button class="btn" id="w_vender" style="font-size:16px;padding:12px 22px">✓ Pasar a venta</button></div>'
+     : '')+
+   (vendido
+     ? '<div class="msg ok" style="line-height:1.5;margin-top:14px"><b>Este presupuesto ya se pasó a venta y quedó cerrado.</b><br>'+
+       'No se puede editar: si cambiara acá, el presupuesto y la venta dirían cosas distintas. La venta está en el módulo <b>Ventas</b>.<br>'+
+       'Si hay que dar marcha atrás, se <b>anula la venta</b> desde ahí, y eso <b>solo lo puede hacer el dueño</b>. Al anularla, este presupuesto vuelve a quedar editable.</div>'
+     : '')+
    '<div class="acciones">'+
-     (puede?'<button class="btn" id="w_guardar">Guardar presupuesto</button>':'<span class="muted">Tu rol consulta los presupuestos y no los modifica.</span>')+
+     (puede?'<button class="btn2" id="w_guardar">Guardar presupuesto</button>':'<span class="muted">Tu rol consulta los presupuestos y no los modifica.</span>')+
      (c.id?'<button class="btn2" onclick="imprimirPresupuesto()">Imprimir o guardar PDF</button>':'')+
-     (c.id&&P("presupuesto-eliminar")?'<button class="btn3" id="w_borrar">Eliminar</button>':'')+
+     (c.id&&!vendido&&P("presupuesto-eliminar")?'<button class="btn3" id="w_borrar">Eliminar</button>':'')+
    '</div>';
   pintarItems(); pintarAdic(); pintarTotales();
+  if ($("w_vender")) $("w_vender").onclick = function(){
+    const t = calcTotales();
+    if (!(t.total > 0)){ $("qmsg").innerHTML = '<div class="msg err">El presupuesto tiene total cero. Cargale los renglones antes de venderlo.</div>'; return; }
+    if (!confirm("Vas a pasar este presupuesto a VENTA por "+fmtM(t.total, PRE.cab.moneda)+".\n\nEso genera la venta y le carga la deuda al cliente en su cuenta corriente. ¿Confirmás?")) return;
+    $("w_estado").value = "Vendido";
+    guardarPresupuesto();
+  };
   if (puede) $("w_guardar").onclick = guardarPresupuesto;
   if (c.id && P("presupuesto-eliminar")) $("w_borrar").onclick = async function(){
     if (!confirm("¿Eliminar "+c.codigo+"? No se puede deshacer.")) return;
@@ -3260,6 +3353,14 @@ function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdi
 const CAMPOS_PRE = ["cliente_id","cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
   "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
 const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct","medio_pago_pref_id"];
+/* ¿la base ya tiene los m² en el presupuesto? (migración v45) */
+async function db45(){
+  if (window._db45 !== undefined) return window._db45;
+  const t = await sb.from("presupuestos").select("m2_colocar").limit(1);
+  window._db45 = !t.error;
+  return window._db45;
+}
+
 /* ¿la base ya tiene la forma de pago en el presupuesto? (migración v38) */
 async function db38(){
   if (window._db38 !== undefined) return window._db38;
@@ -3334,8 +3435,8 @@ async function presProspectoElegido(){
   const sel = $("w_prospecto_id"); if (!sel) return;
   const msg = t => { const e = $("qmsg"); if (e) e.innerHTML = t; };
   const id = sel.value;
-  const verM2 = v => { ["w_boxm2c","w_boxm2p"].forEach(function(k){ const e=$(k); if(e) e.style.display = v ? "" : "none"; }); };
-  if (!id){ PRE.cab.prospecto_id = null; PRE.pros = null; verM2(false); msg(""); return; }
+  const verM2 = function(){};   /* los m² ahora se ven siempre: son del presupuesto */
+  if (!id){ PRE.cab.prospecto_id = null; PRE.pros = null; msg(""); return; }
   const p = (window._PROSSEL||[]).find(x=>String(x.id)===String(id));
   if (!p) return;
   if (!p.nombre) return msg('<div class="msg err">Ese prospecto no tiene nombre cargado y el presupuesto lo necesita.</div>');
@@ -3392,7 +3493,28 @@ async function guardarPresupuesto(){
   /* el vínculo con el prospecto no es un campo de pantalla: viaja en la cabecera */
   if (PRE.cab.prospecto_id) o.prospecto_id = PRE.cab.prospecto_id;
   if (o.cliente_id == null && PRE.cab.cliente_id) o.cliente_id = PRE.cab.cliente_id;
-  if (!o.cliente_nombre){ $("qmsg").innerHTML = '<div class="msg err">Falta el nombre del cliente.</div>'; return; }
+  const conInst = llevaInstalacion(PRE.items, o.tipo);
+  const m2col = Number((($("w_pros_m2p")||{}).value) || 0);
+  const m2cot = Number((($("w_pros_m2c")||{}).value) || 0);
+  const noCerro = ["Rechazado","Vencido","Anulado"].indexOf(o.estado) >= 0;
+  const f = faltan([
+    {ok:!!o.cliente_nombre,                 q:"Cliente"},
+    {ok:!!o.cliente_tel,                    q:"Teléfono del cliente"},
+    {ok:!!o.localidad_id,                   q:"Localidad"},
+    {ok:Number(o.validez_dias) > 0,         q:"Validez del presupuesto, en días (mayor a cero)"},
+    {ok:!!o.nro_papel,                      q:"N° de presupuesto en papel"},
+    {ok:!!o.vl_id,                          q:"VL (la vendedora responsable)"},
+    {ok:!!o.ato_id,                         q:"ATO (el asesor técnico de obra)"},
+    {ok:!conInst || !!o.direccion_obra,     q:"Dirección de obra (este presupuesto lleva instalación: la cuadrilla tiene que saber adónde ir)"},
+    {ok:!conInst || m2col > 0,              q:"m² a colocar (lleva instalación: sin los metros reales no se puede planificar ni costear la obra)"},
+    {ok:!noCerro || !!o.motivo_rechazo_id,  q:"Motivo de rechazo (el presupuesto quedó en «"+esc(o.estado)+"»: hay que decir por qué no se cerró)"}
+  ]);
+  if (f.length){ avisoFaltan("qmsg", f, "el presupuesto"); return; }
+  /* los m² viajan en la cabecera del presupuesto */
+  if (await db45()){
+    o.m2_cotizados = m2cot > 0 ? m2cot : null;
+    o.m2_colocar   = m2col > 0 ? m2col : null;
+  }
   /* La forma de pago es del presupuesto: es lo que se filtra cuando haya una
      promoción («todos los abiertos que iban con tarjeta de crédito»). Se lee
      ACÁ, antes de grabar, no después. */
@@ -5296,6 +5418,19 @@ async function guardarVentaDirecta(){
   const err = t => { $("vnmsg").innerHTML = '<div class="msg err">'+esc(t)+'</div>'; };
   if (!VTA.cliente_id) return err("Elegí el cliente al que le vas a vender.");
   if (!VTA.items.length) return err("La venta no tiene renglones.");
+  /* La venta hereda los datos del cliente: si su ficha está incompleta, la venta
+     nace incompleta. Se avisa acá y no cuando ya está cerrada. */
+  const cli = CLIS.find(function(x){ return String(x.id)===String(VTA.cliente_id); }) || {};
+  const fv = faltan([
+    {ok:!!(cli.celular || cli.telefono), q:"Celular o teléfono del cliente"},
+    {ok:!!cli.localidad_id,              q:"Localidad del cliente"},
+    {ok:!llevaInstalacion(VTA.items) || !!cli.direccion, q:"Dirección del cliente (esta venta lleva instalación)"}
+  ]);
+  if (fv.length){
+    avisoFaltan("vnmsg", fv, "la venta");
+    $("vnmsg").innerHTML += '<div class="muted" style="margin-top:6px">Se corrigen en la ficha del cliente <b>'+esc(cli.nombre||"")+'</b> y volvés acá.</div>';
+    return;
+  }
   const t = calcVentaTotales();
   if (!(t.total>0)) return err("El total tiene que ser mayor a cero. Revisá cantidades y precios.");
   const items = VTA.items.map(x=>({producto_id:x.es_adicional?null:(x.producto_id||null), descripcion:x.descripcion||"", cantidad:Number(x.cantidad||0),
@@ -6028,7 +6163,12 @@ function armarAccionesCC(){}
 async function guardarCliente(id){
   const o = {};
   CAMPOS_CLI.forEach(function(k){ const el=$("y_"+k); if(!el) return; let x=el.value; if(x==="") x=null; else if(NUM_CLI.indexOf(k)>=0) x=Number(x); o[k]=x; });
-  if (!o.nombre){ $("clmsg").innerHTML='<div class="msg err">Falta el nombre.</div>'; return; }
+  const f = faltan([
+    {ok:!!o.nombre,                  q:"Nombre o razón social"},
+    {ok:!!(o.celular || o.telefono), q:"Celular o teléfono (con uno alcanza)"},
+    {ok:!!o.localidad_id,            q:"Localidad"}
+  ]);
+  if (f.length){ avisoFaltan("clmsg", f, "el cliente"); return; }
   const r = id ? await sb.from("clientes").update(o).eq("id",id) : await sb.from("clientes").insert(o);
   if (r.error){ $("clmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
   await cargarClientes();
