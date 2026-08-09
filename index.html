@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-62";
+const VERSION = "v2026.08.08-63";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2509,6 +2509,61 @@ const REPORTES = [
      filas.push([p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]); });
    filas.sort((a,b)=>b[5]-a[5]);
    return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
+ }},
+
+/* Pedido de Gustavo (8/8/2026). Es el reporte que cierra la doble fecha del
+   gasto que definimos el 7/8: el gasto se paga un día y PERTENECE a un mes, y
+   este cuadro lee el mes al que pertenece, no el día en que salió la plata. */
+{id:"resultado", t:"Estado de resultado", g:"Finanzas", perm:"reporte-utilidades",
+ ay:"Mes por mes: lo vendido sin IVA, lo que costó esa mercadería, y los gastos del mes. El resultado es lo que quedó. Las ventas van por su fecha; los gastos, por el mes al que corresponden, no por el día en que se pagaron. Ojo con el costo: sale del «Costo USD» de cada producto, y mientras ese dato esté vacío el resultado se lee de más.",
+ run: async function(f){
+   const v  = (await traer("ventas","id,fecha,moneda,neto,anulado",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   if (!PRODS.length) await cargarCatalogo();
+   const cot = Number(cfg("cotizacion_usd",0))||0;
+   const mes = d => String(d||"").slice(0,7);
+   const acc = {};
+   const tocar = function(k){ if (!acc[k]) acc[k] = {ventas:0, costo:0, gastos:0, sinCosto:0}; return acc[k]; };
+
+   v.forEach(function(x){ tocar(mes(x.fecha)+"|"+(x.moneda||"ARS")).ventas += Number(x.neto||0); });
+
+   /* El costo de lo vendido sale de los renglones de cada venta contra el costo
+      cargado en el producto. Lo que no tiene costo NO se estima: se cuenta y se
+      avisa. Un costo inventado convierte este cuadro en un cuento. */
+   if (v.length){
+     const it = await sb.from("venta_items").select("venta_id,producto_id,cantidad").in("venta_id", v.map(x=>x.id)).limit(5000);
+     if (it.error) throw new Error(it.error.message);
+     const porVenta = {}; v.forEach(function(x){ porVenta[x.id] = x; });
+     (it.data||[]).forEach(function(y){
+       const ven = porVenta[y.venta_id]; if (!ven) return;
+       const m = ven.moneda||"ARS";
+       const k = mes(ven.fecha)+"|"+m;
+       tocar(k);
+       const pr = PRODS.find(function(z){ return z.id === y.producto_id; });
+       const cu = pr ? Number(pr.costo_usd||0) : 0;
+       if (!cu || (m === "ARS" && !cot)){ acc[k].sinCosto++; return; }
+       acc[k].costo += (m === "USD" ? cu : cu*cot) * Number(y.cantidad||0);
+     });
+   }
+
+   /* el gasto va al mes que corresponde, no al día que se pagó */
+   gs.forEach(function(x){
+     const k = mes(x.fecha_imputacion || x.fecha)+"|"+(x.moneda||"ARS");
+     tocar(k).gastos += Number(x.neto != null ? x.neto : (x.importe||0));
+   });
+
+   const filas = Object.keys(acc).sort().map(function(k){
+     const p = k.split("|"), a = acc[k];
+     const bruto = a.ventas - a.costo;
+     return [p[0], p[1], a.ventas, a.costo||null, bruto, a.gastos, bruto - a.gastos];
+   });
+   const sinCosto = Object.keys(acc).reduce(function(n,k){ return n + acc[k].sinCosto; }, 0);
+   return {cols:[{t:"Mes"},{t:"Moneda"},{t:"Ventas sin IVA",tipo:"m"},{t:"Costo de lo vendido",tipo:"m"},
+                 {t:"Margen bruto",tipo:"m"},{t:"Gastos del mes",tipo:"m"},{t:"Resultado",tipo:"m"}],
+           filas: filas,
+           nota: sinCosto
+             ? (sinCosto+" renglón(es) de venta sin costo cargado en el producto, o sin cotización del dólar en Configuración. Ese costo NO se estimó: quedó en cero, así que el margen y el resultado de esos meses se leen de más. Se arregla cargando el «Costo USD» de cada producto.")
+             : ""};
  }},
 
 /* ── Depósito ── */
