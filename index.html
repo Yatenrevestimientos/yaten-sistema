@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-65";
+const VERSION = "v2026.08.08-66";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6542,6 +6542,7 @@ async function finGastos(){
   const SALG = await saldosAcumulados(rows.map(g=>g.cuenta_id));
   if (FG.soloAnulados) rows = rows.filter(g=>g.anulado);
   if (!rows.length){ $("glista").innerHTML='<div class="muted">No hay gastos con esos filtros.</div>'; return; }
+  window._GASTOS_LISTA = rows;
   const vivos = rows.filter(g=>!g.anulado);
   const tot = m => vivos.filter(g=>g.moneda===m);
   const resumen = ["ARS","USD"].map(function(m){
@@ -6558,7 +6559,9 @@ async function finGastos(){
      '<td>'+fmtF(g.fecha)+'</td>'+
      '<td'+((g.fecha_imputacion && g.fecha_imputacion !== g.fecha)?' style="font-weight:600"':'')+'>'+fmtF(g.fecha_imputacion||g.fecha)+'</td>'+
      '<td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
-     (M.agt?'<td>'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">— sin área —</span>')+'</td>':'')+
+     (M.agt?'<td>'+((P("finanzas-modificar") && !g.anulado)
+        ? '<button class="btn2 btn-sm" style="font-weight:normal" onclick="formAreaGasto('+g.id+')">'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">+ asignar</span>')+'</button>'
+        : (g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">— sin área —</span>'))+'</td>':'')+
      '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
      '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
      celdaSaldo(SALG, g.mov_id, g.moneda, g.anulado)+
@@ -6645,6 +6648,34 @@ async function concGastoAgregar(){
   $("g_concepto").innerHTML = selOpts(CGASTOS, (CGASTOS.find(x=>x.nombre===n)||{}).id);
   $("g_conc_nuevo").value = "";
 }
+/* Ponerle o cambiarle el área a un gasto ya cargado. Sin esto el área solo se
+   podía elegir al crearlo, y todo lo que Gilda ya cargó quedaba sin clasificar
+   para siempre. Va por la misma función que el alta: no toca la plata. */
+function formAreaGasto(id){
+  const g = (window._GASTOS_LISTA||[]).find(function(x){ return x.id===id; });
+  $("dtit").textContent = "Área del gasto";
+  $("dbody").innerHTML = '<div id="agmsg"></div>'+
+   '<div class="muted" style="margin-bottom:10px">'+
+     (g? '<b>'+esc(nom(CGASTOS,g.concepto_id))+'</b> · '+fmtM(g.importe,g.moneda)+' · '+fmtF(g.fecha)+(g.detalle_extra?' · '+esc(g.detalle_extra):'')+'<br>' : '')+
+     'Para qué fue este gasto. No cambia el importe ni la cuenta: solo lo clasifica para el reporte de Egresos.</div>'+
+   '<div class="f"><label>Área</label><select id="ag_area"><option value="">— sin área —</option>'+
+     (M.agt||[]).filter(function(x){return x.activo;}).map(function(x){
+       return '<option value="'+x.id+'" '+((g&&String(g.area_id)===String(x.id))?"selected":"")+'>'+esc(x.nombre)+'</option>';
+     }).join("")+'</select></div>'+
+   '<div class="acciones"><button class="btn" id="ag_guardar">Guardar</button>'+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  $("ag_guardar").onclick = async function(){
+    const v = $("ag_area").value;
+    $("ag_guardar").disabled = true;
+    const {error} = await sb.rpc("set_area_gasto", {p_gasto:id, p_area: v? Number(v) : null});
+    $("ag_guardar").disabled = false;
+    if (error){ $("agmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    try{ $("dlg").close(); }catch(e){}
+    finGastos();
+  };
+  $("dlg").showModal();
+}
+
 async function areaGastoAgregar(){
   const caja = $("g_area_nueva"); if (!caja) return;
   const n = caja.value.trim(); if (!n) return;
