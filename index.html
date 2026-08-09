@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-71";
+const VERSION = "v2026.08.08-72";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3599,10 +3599,24 @@ async function guardarPresupuesto(){
   if (await db48()){
     o.descuento_modo  = (($("w_descuento_modo")||{}).value === "monto") ? "monto" : "pct";
     o.descuento_monto = Number((($("w_descuento_monto")||{}).value) || 0) || null;
-    /* el modo que no se usa se guarda en cero, para que no quede un número
-       viejo escondido que confunda al que abra el presupuesto mañana */
-    if (o.descuento_modo === "monto") o.descuento_pct = 0;
-    else o.descuento_monto = null;
+    if (o.descuento_modo === "monto"){
+      /* CLAVE: el total del presupuesto lo calcula la BASE a partir de
+         descuento_pct. Si acá se guardara cero, la pantalla mostraría el
+         descuento y la base lo ignoraría —y la venta saldría por el importe sin
+         descontar—. Así que el monto se guarda como su porcentaje equivalente,
+         SIN redondear, para que la base llegue al mismo número al centavo.
+         descuento_monto queda como registro de lo que se escribió a mano.
+         (Se descubrió probando el 8/8/2026: la pantalla decía $108.900 y la base
+         guardaba $121.000.) */
+      const tt = calcTotales();
+      const bruto = Number(tt.brutoItems||0);
+      let m = Number(o.descuento_monto||0);
+      if (m < 0) m = 0;
+      if (m > bruto) m = bruto;
+      o.descuento_pct = bruto > 0 ? (m / bruto) * 100 : 0;
+    } else {
+      o.descuento_monto = null;
+    }
   }
   $("w_guardar").disabled = true;
   let id = PRE.cab.id;
