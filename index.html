@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-76";
+const VERSION = "v2026.08.09-77";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -423,24 +423,29 @@ const VLS  = () => equipoRol("VL").length  ? equipoRol("VL")  : EQUIPO.filter(p=
 const ATOS = () => equipoRol("ATO").length ? equipoRol("ATO") : EQUIPO.filter(p=>p.activo);
 
 /* ─────────── NAVEGACIÓN ─────────── */
+/* Orden pedido por Gustavo el 9/8/2026: el menú sigue el camino real del trabajo
+   —Tablero, Planilla, Nuevo prospecto, Clientes, Visitas, Presupuestos, Ventas—
+   y recién después viene el resto. Antes Clientes estaba después de Ventas y
+   Visitas antes que el prospecto, que es al revés de como se usa.
+   «Leads» se sacó: no se usa en Yaten. La vista sigue existiendo por si algún día
+   entra tráfico de la web; simplemente no ocupa un lugar en el menú. */
 const MENU = [
   {id:"tablero",  t:"Tablero",         perm:"planilla-tablero"},
   {id:"planilla", t:"Planilla",        perm:"planilla-consultar"},
   {id:"nuevo",    t:"Nuevo prospecto", perm:"prospecto-agregar"},
+  {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"agenda",   t:"Visitas",         perm:"visita-consultar"},
+  {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
+  {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
   {id:"segui",    t:"Seguimientos",    perm:"seguimiento-consultar"},
   {id:"docs",     t:"Documentos",      perm:"documento-consultar"},
   {id:"tags",     t:"Tags",            perm:"documento-consultar"},
-  {id:"presup",   t:"Presupuestos",    perm:"presupuesto-consultar"},
-  {id:"ventas",   t:"Ventas",          perm:"venta-consultar"},
-  {id:"clientes", t:"Clientes",        perm:"cliente-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
   {id:"compras",  t:"Compras",         perm:"compra-consultar"},
   {id:"import",   t:"Importaciones",   perm:"compra-consultar"},
   {id:"stock",    t:"Stock",           perm:"stock-consultar"},
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
-  {id:"leads",    t:"Leads",           perm:"lead-consultar"},
   {id:"reportes", t:"Reportes",        perm:"reporte-ventas"},
   {id:"info",     t:"Información",     perm:"venta-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
@@ -2312,22 +2317,101 @@ async function traer(tabla, campos, f, campoFecha){
 const nomProd = id => { const p = PRODS.find(x=>x.id===id); return p ? p.nombre : (id?("producto #"+id):"—"); };
 const tipoDeProd = id => { const p = PRODS.find(x=>x.id===id); return p ? (nom(TIPOSP, p.tipo_id) || "Sin tipo") : "Sin tipo"; };
 
+/* ── Con instalación o sin instalación ──
+   Pedido de Gustavo (9/8/2026): "en reportes ventas agregar todo, sin instalación,
+   con instalación, distribuidores".
+   El tipo NO está en la venta: está en el PRESUPUESTO del que nació (Producto
+   suelto / Instalado / Mixto). Se trae de ahí. Una venta cargada a mano, sin
+   presupuesto detrás, queda «— sin presupuesto —»: es información real, no un
+   hueco que convenga tapar poniéndole un tipo inventado.
+   «Distribuidores» todavía no se puede: la tabla «clientes» NO tiene columna de
+   tipo de cliente, aunque la lista Tipo de clientes exista en Tablas básicas.
+   Falta la migración; está anotado. */
+let TIPO_PRE = null;
+async function cargarTipoDeVenta(ids){
+  TIPO_PRE = {};
+  if (!ids.length) return TIPO_PRE;
+  const r = await sb.from("presupuestos").select("id,tipo").in("id", ids).limit(2000);
+  (r.data||[]).forEach(function(x){ TIPO_PRE[x.id] = x.tipo || ""; });
+  return TIPO_PRE;
+}
+const tipoDeVenta = v => (v.presupuesto_id && TIPO_PRE && TIPO_PRE[v.presupuesto_id]) || "— sin presupuesto —";
+const FX_VENTA = function(){
+  return [{k:"tipov", t:"Tipo de venta",
+           lista: TIPOVENTA.map(function(t,i){ return {id:t, nombre:t}; }),
+           sin:"Sin presupuesto"}];
+};
+/* El id de esta lista ES el texto, así que la comparación va por texto. */
+function filtVenta(vs, f){
+  const sel = ((f&&f.ext)||{}).tipov;
+  if (!sel) return vs;
+  if (sel === "__sin") return vs.filter(v=>!v.presupuesto_id || !(TIPO_PRE||{})[v.presupuesto_id]);
+  return vs.filter(v=>tipoDeVenta(v) === sel);
+}
+
+/* Pedido de Gustavo (9/8/2026): "reporte compras poder tener filtros por proveedor
+   y por sector". Sector = familia de producto (tipos_producto), que es como se
+   agrupa el catálogo en el resto del sistema. El filtro por tipo de producto solo
+   tiene sentido donde el reporte baja a los renglones de la factura; en el cuadro
+   de facturas, que no abre el detalle, solo se filtra por proveedor. */
+const FX_COMPRA_PROV = function(){ return [{k:"prov", t:"Proveedor", lista:(PROVS||[])}]; };
+const FX_COMPRA = function(){
+  return [{k:"prov", t:"Proveedor", lista:(PROVS||[])},
+          {k:"tipop", t:"Sector / tipo", lista:(TIPOSP||[])}];
+};
+
 const REPORTES = [
 
 /* ── Comercial ── */
-{id:"ventas", t:"Ventas", g:"Comercial", perm:"reporte-ventas",
- ay:"Todas las ventas del período, de la más nueva a la más vieja. Las anuladas se muestran tachadas y no suman.",
+{id:"ventas", t:"Ventas", g:"Comercial", perm:"reporte-ventas", fx:FX_VENTA,
+ ay:"Todas las ventas del período, de la más nueva a la más vieja. Las anuladas se muestran tachadas y no suman. Con el filtro de arriba lo separás entre lo que va instalado y el producto suelto: el tipo lo trae del presupuesto del que nació la venta.",
  run: async function(f){
-   const v = await traer("ventas","id,codigo,fecha,cliente_id,moneda,neto,iva,total,estado,anulado,vl_id",f,"fecha");
+   const v = await traer("ventas","id,codigo,fecha,cliente_id,moneda,neto,iva,total,estado,anulado,vl_id,presupuesto_id",f,"fecha");
    if (!CLIS.length) await cargarClientes();
-   const rows = v.filter(x=>!f.moneda || x.moneda===f.moneda).sort((a,b)=>b.fecha<a.fecha?-1:1);
+   await cargarTipoDeVenta(v.map(x=>x.presupuesto_id).filter(Boolean));
+   const rows = filtVenta(v.filter(x=>!f.moneda || x.moneda===f.moneda), f).sort((a,b)=>b.fecha<a.fecha?-1:1);
+   const sinPre = rows.filter(x=>!x.anulado && !x.presupuesto_id).length;
    return {
-     cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Vendedor"},{t:"Estado"},{t:"Moneda"},
+     cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Tipo"},{t:"Vendedor"},{t:"Estado"},{t:"Moneda"},
            {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}],
      filas: rows.map(x=>[x.codigo, x.fecha, (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—",
-       nomP(x.vl_id)||"—", x.anulado?"Anulada":x.estado, x.moneda, x.neto, x.iva, x.total, x.anulado]),
-     anuladaEn: 9
+       tipoDeVenta(x), nomP(x.vl_id)||"—", x.anulado?"Anulada":x.estado, x.moneda, x.neto, x.iva, x.total, x.anulado]),
+     anuladaEn: 10,
+     nota: [ resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : "",
+       sinPre ? (sinPre+" venta(s) no tienen presupuesto detrás, así que no se sabe si iban instaladas: aparecen como «— sin presupuesto —» y quedan afuera de cualquier filtro por tipo.") : ""
+     ].filter(Boolean).join(" ")
    };
+ }},
+
+/* El mismo cuadro pero resumido: cuánto se vendió instalado y cuánto suelto. Es
+   la lectura que Gustavo pidió primero —"todo, sin instalación, con instalación"—
+   sin tener que contar renglones. */
+{id:"ventas_tipo", t:"Ventas con y sin instalación", g:"Comercial", perm:"reporte-ventas", fx:FX_VENTA,
+ ay:"Cuánto se vendió instalado y cuánto de producto suelto en el período, con el peso de cada uno sobre el total. El tipo sale del presupuesto del que nació cada venta. El botón Detalle abre las ventas de cada renglón.",
+ run: async function(f){
+   const v = await traer("ventas","id,codigo,fecha,cliente_id,moneda,neto,iva,total,estado,anulado,vl_id,presupuesto_id",f,"fecha");
+   if (!CLIS.length) await cargarClientes();
+   await cargarTipoDeVenta(v.map(x=>x.presupuesto_id).filter(Boolean));
+   const vivas = filtVenta(v.filter(x=>!x.anulado && (!f.moneda || x.moneda===f.moneda)), f);
+   const g = agrupar(vivas, x=>tipoDeVenta(x)+"|"+x.moneda);
+   const pares = [];
+   g.forEach(function(arr,k){ const p = k.split("|");
+     pares.push({fila:[p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.total)], arr:arr}); });
+   const or = ordenarConDetalle(pares, (a,b)=>b[4]-a[4]);
+   const filas = or.filas, dets = or.dets;
+   const totMon = {};
+   filas.forEach(function(r){ totMon[r[1]] = (totMon[r[1]]||0) + Number(r[4]||0); });
+   filas.forEach(function(r){ const t = totMon[r[1]]||0; r.push(t? Math.round(Number(r[4])/t*1000)/10 : null); });
+   return {cols:[{t:"Tipo"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"},{t:"% del total",tipo:"n"}],
+     filas:filas,
+     det: function(i){
+       const arr = (dets[i]||[]).slice().sort((a,b)=> a.fecha<b.fecha?-1:(a.fecha>b.fecha?1:(a.id-b.id)));
+       return {titulo:(filas[i]||[])[0],
+         cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Vendedor"},{t:"Estado"},{t:"Moneda"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}],
+         filas: arr.map(x=>[x.codigo, x.fecha, (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—",
+           nomP(x.vl_id)||"—", x.estado, x.moneda, x.neto, x.total])};
+     },
+     nota: resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : ""};
  }},
 
 {id:"detalle_venta", t:"Detalles venta", g:"Comercial", perm:"reporte-ventas",
@@ -2535,35 +2619,46 @@ const REPORTES = [
  }},
 
 /* ── Compras e importaciones ── */
-{id:"compras", t:"Compras", g:"Compras", perm:"compra-consultar",
- ay:"Las facturas de compra del período por proveedor.",
+{id:"compras", t:"Compras", g:"Compras", perm:"compra-consultar", fx:FX_COMPRA_PROV,
+ ay:"Las facturas de compra del período por proveedor. Con el filtro de arriba se acota a un proveedor.",
  run: async function(f){
-   const fc = (await traer("facturas_compra","fecha,proveedor_id,tipo,punto_venta,nro_comprobante,moneda,neto,impuestos,total,anulado",f,"fecha"))
-     .filter(x=>!f.moneda||x.moneda===f.moneda);
    if (!PROVS.length) await cargarProveedores();
+   const pv = (f.ext||{}).prov;
+   const fc = (await traer("facturas_compra","fecha,proveedor_id,tipo,punto_venta,nro_comprobante,moneda,neto,impuestos,total,anulado",f,"fecha"))
+     .filter(x=>!f.moneda||x.moneda===f.moneda)
+     .filter(x=>!pv || String(x.proveedor_id||"")===String(pv));
    return {cols:[{t:"Fecha",tipo:"f"},{t:"Proveedor"},{t:"Comprobante"},{t:"Moneda"},{t:"Neto",tipo:"m"},{t:"Impuestos",tipo:"m"},{t:"Total",tipo:"m"}],
      filas: fc.sort((a,b)=>b.fecha<a.fecha?-1:1).map(x=>[x.fecha, (PROVS.find(p=>p.id===x.proveedor_id)||{}).nombre||"—",
        (x.tipo||"")+" "+(x.punto_venta||"")+" "+(x.nro_comprobante||""), x.moneda, x.neto, x.impuestos, x.total, x.anulado]),
-     anuladaEn: 7};
+     anuladaEn: 7,
+     nota: resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : ""};
  }},
 
-{id:"compras_detalle", t:"Compras (Detalle)", g:"Compras", perm:"compra-consultar",
- ay:"Renglón por renglón de cada factura de compra: a qué precio te vendió cada cosa cada proveedor.",
+{id:"compras_detalle", t:"Compras (Detalle)", g:"Compras", perm:"compra-consultar", fx:FX_COMPRA,
+ ay:"Renglón por renglón de cada factura de compra: a qué precio te vendió cada cosa cada proveedor. Se puede acotar a un proveedor y a un sector del catálogo. Los reportes de «Productos comprados» y los de «por tipo» salen de este, así que el filtro les llega a todos.",
  run: async function(f){
-   const fc = (await traer("facturas_compra","id,fecha,proveedor_id,nro_comprobante,moneda,anulado",f,"fecha")).filter(x=>!x.anulado);
-   if (!fc.length) return {cols:[{t:"Fecha"}], filas:[]};
    if (!PROVS.length) await cargarProveedores();
+   if (!PRODS.length) await cargarCatalogo();
+   const pv = (f.ext||{}).prov, tp = (f.ext||{}).tipop;
+   const fc = (await traer("facturas_compra","id,fecha,proveedor_id,nro_comprobante,moneda,anulado",f,"fecha"))
+     .filter(x=>!x.anulado).filter(x=>!pv || String(x.proveedor_id||"")===String(pv));
+   if (!fc.length) return {cols:[{t:"Fecha"}], filas:[], nota: resumenFiltros()? "No hay facturas de "+resumenFiltros()+" en ese período." : ""};
    const it = await sb.from("factura_items").select("*").in("factura_id", fc.map(x=>x.id)).limit(5000);
    if (it.error) throw new Error(it.error.message);
    const por = {}; fc.forEach(x=>por[x.id]=x);
+   const nomTipo = tp ? (nom(TIPOSP||[], Number(tp))||"") : "";
+   const items = (it.data||[]).filter(function(y){
+     return !tp || String(tipoDeProd(y.producto_id)) === String(nomTipo);
+   });
    return {cols:[{t:"Fecha",tipo:"f"},{t:"Proveedor"},{t:"Comprobante"},{t:"Producto"},{t:"Tipo"},{t:"Cantidad",tipo:"n"},{t:"Moneda"},{t:"Precio unit.",tipo:"m"},{t:"Subtotal",tipo:"m"}],
-     filas:(it.data||[]).map(function(y){ const c = por[y.factura_id]||{};
+     filas: items.map(function(y){ const c = por[y.factura_id]||{};
        return [c.fecha, (PROVS.find(p=>p.id===c.proveedor_id)||{}).nombre||"—", c.nro_comprobante||"",
          y.descripcion||nomProd(y.producto_id), tipoDeProd(y.producto_id), y.cantidad, c.moneda, y.precio_unit,
-         Number(y.cantidad||0)*Number(y.precio_unit||0)]; })};
+         Number(y.cantidad||0)*Number(y.precio_unit||0)]; }),
+     nota: resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : ""};
  }},
 
-{id:"prod_comprados", t:"Productos comprados", g:"Compras", perm:"compra-consultar",
+{id:"prod_comprados", t:"Productos comprados", g:"Compras", perm:"compra-consultar", fx:FX_COMPRA,
  ay:"Qué compraste y cuánto pagaste, agrupado por producto. Cruzado con «Productos» de ventas te dice qué te sobra y qué te falta traer.",
  run: async function(f){
    const base = await REPORTES.find(r=>r.id==="compras_detalle").run(f);
@@ -2576,7 +2671,7 @@ const REPORTES = [
    return {cols:[{t:"Producto"},{t:"Tipo"},{t:"Moneda"},{t:"Cantidad",tipo:"n"},{t:"Pagado",tipo:"m"},{t:"Precio promedio",tipo:"m"}], filas:filas};
  }},
 
-{id:"prod_comprados_tipo", t:"Productos comprados por tipo", g:"Compras", perm:"compra-consultar",
+{id:"prod_comprados_tipo", t:"Productos comprados por tipo", g:"Compras", perm:"compra-consultar", fx:FX_COMPRA,
  ay:"Lo comprado agrupado por familia de producto.",
  run: async function(f){
    const base = await REPORTES.find(r=>r.id==="prod_comprados").run(f);
@@ -2588,7 +2683,7 @@ const REPORTES = [
    return {cols:[{t:"Tipo de producto"},{t:"Moneda"},{t:"Productos distintos",tipo:"n"},{t:"Cantidad",tipo:"n"},{t:"Pagado",tipo:"m"}], filas:filas};
  }},
 
-{id:"prod_tipo_compra", t:"Productos por tipo (Compra)", g:"Compras", perm:"compra-consultar",
+{id:"prod_tipo_compra", t:"Productos por tipo (Compra)", g:"Compras", perm:"compra-consultar", fx:FX_COMPRA,
  ay:"Lo pedido en órdenes de compra, agrupado por familia de producto. Se diferencia de «Productos comprados por tipo» en que ese mira facturas —lo que ya te facturaron— y este mira las órdenes —lo que pediste, te haya llegado o no.",
  run: async function(f){
    const oc = (await traer("ordenes_compra","id,fecha,moneda,anulado",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
@@ -2606,7 +2701,7 @@ const REPORTES = [
      {t:"Recibido",tipo:"n"},{t:"Importe",tipo:"m"}], filas:filas};
  }},
 
-{id:"compras_det_tipo", t:"Compras (Detalle por tipo)", g:"Compras", perm:"compra-consultar",
+{id:"compras_det_tipo", t:"Compras (Detalle por tipo)", g:"Compras", perm:"compra-consultar", fx:FX_COMPRA,
  ay:"Lo facturado por los proveedores, cruzando proveedor con familia de producto. Responde a quién le comprás cada línea.",
  run: async function(f){
    const base = await REPORTES.find(r=>r.id==="compras_detalle").run(f);
@@ -2671,14 +2766,22 @@ const REPORTES = [
 
 /* ── Finanzas ── */
 {id:"ingresos", t:"Ingresos", g:"Finanzas", perm:"finanzas-consultar", fx:FX_COBRO,
- ay:"Toda la plata que entró de clientes en el período, agrupada por concepto de cobranza.",
+ ay:"Toda la plata que entró de clientes en el período, agrupada por concepto de cobranza. La moneda es la de la cuenta corriente del cliente: si te debe en pesos y te paga en dólares, el ingreso se cuenta en pesos y el dólar queda en el detalle.",
  run: async function(f){
+   /* CORREGIDO 9/8/2026. Gustavo: "en reportes ingresos la columna moneda aparece
+      indefinida y cobranzas no muestra registro tampoco".
+      La tabla cobranzas NO tiene columna «moneda»: tiene moneda_cc —la de la deuda—
+      y moneda_pago —la de con qué pagó—. El reporte leía x.moneda, que no existe:
+      la columna salía vacía, y al elegir ARS o USD arriba el filtro comparaba
+      undefined contra "ARS" y el reporte quedaba en cero. Cinco cobranzas vivas
+      invisibles. Se lee moneda_cc, que es la que corresponde al ingreso. */
    const cc = (f.ext||{}).cconc;
-   const c = (await traer("cobranzas","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda))
+   const monDe = x => x.moneda_cc || x.moneda_pago || "ARS";
+   const c = (await traer("cobranzas","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||monDe(x)===f.moneda))
      .filter(x=> !cc || (cc==="__sin" ? !x.concepto_id : String(x.concepto_id||"")===String(cc)));
    if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
    if (!CLIS.length){ try{ await cargarClientes(); }catch(e){} }
-   const g = agrupar(c, x=>(nom(M.cco,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
+   const g = agrupar(c, x=>(nom(M.cco,x.concepto_id)||"Sin concepto")+"|"+monDe(x));
    const pares = [];
    g.forEach(function(arr,k){ const p = k.split("|");
      pares.push({fila:[p[0], p[1], arr.length, sum(arr,x=>x.importe)], arr:arr}); });
@@ -2688,12 +2791,13 @@ const REPORTES = [
      det: function(i){
        const arr = (dets[i]||[]).slice().sort((a,b)=> a.fecha<b.fecha?-1:(a.fecha>b.fecha?1:(a.id-b.id)));
        return {titulo:(filas[i]||[])[0],
-         cols:[{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Concepto"},{t:"Cuenta"},{t:"Observaciones"},{t:"Moneda"},{t:"Importe",tipo:"m"}],
+         cols:[{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Concepto"},{t:"Cuenta"},{t:"Observaciones"},{t:"Moneda"},{t:"Importe",tipo:"m"},{t:"Pagó en"},{t:"Importe pagado",tipo:"n"},{t:"Cotización",tipo:"n"}],
          filas: arr.map(function(x){ return [x.fecha,
            ((CLIS.find(function(cl){ return cl.id===x.cliente_id; })||{}).nombre)||"—",
            nom(M.cco,x.concepto_id)||"Sin concepto",
            ((CTAS&&CTAS.length)? (nom(CTAS,x.cuenta_id)||"") : ""),
-           x.observaciones||"", x.moneda||"ARS", x.importe]; })};
+           x.observaciones||"", monDe(x), x.importe,
+           x.moneda_pago||"", x.importe_pago, x.cotizacion]; })};
      }};
  }},
 
@@ -2999,6 +3103,15 @@ VISTAS.reportes = async function(){
   }
   if (!FREP.id || !mios.find(r=>r.id===FREP.id)) FREP.id = mios[0].id;
   const rep = mios.find(r=>r.id===FREP.id);
+  /* Los desplegables de Compras salen de proveedores y del catálogo, que se cargan
+     en otra pantalla: si Reportes es lo primero que abrís, todavía están vacíos y el
+     filtro saldría sin opciones. Se cargan acá antes de dibujar. */
+  if (rep.fx === FX_COMPRA || rep.fx === FX_COMPRA_PROV){
+    try{
+      if (!PROVS.length) await cargarProveedores();
+      if (!PRODS.length && P("producto-consultar")) await cargarCatalogo();
+    }catch(e){}
+  }
   /* los desplegables propios de este reporte, si declaró alguno */
   let fxs = [];
   try{ fxs = rep.fx ? rep.fx() : []; }catch(e){ fxs = []; }
@@ -5494,6 +5607,20 @@ VISTAS.ventas = async function(){
   // saldo por venta: lo que falta cobrar de cada una
   const sv = await sb.from("v_saldos_venta").select("venta_id,saldo");
   const saldoDe = {}; (sv.data||[]).forEach(x=>{ saldoDe[x.venta_id] = Number(x.saldo||0); });
+  /* Gustavo, 9/8/2026: "si entro a ventas historial no me aparece nada en la columna
+     Instalación". No estaba rota: esa columna es la FECHA de instalación, y está
+     vacía porque todavía nadie agendó ninguna. Lo que falta es lo otro —saber si la
+     venta VA instalada o no— y eso vive en el presupuesto, no en la venta. Se agrega
+     como columna Tipo, al lado. */
+  const tipoV = {};
+  {
+    const ids = (data||[]).map(x=>x.presupuesto_id).filter(Boolean);
+    if (ids.length){
+      const rp = await sb.from("presupuestos").select("id,tipo").in("id", ids).limit(1000);
+      (rp.data||[]).forEach(function(x){ tipoV[x.id] = x.tipo||""; });
+    }
+  }
+  const tipoDe = v => (v.presupuesto_id && tipoV[v.presupuesto_id]) || "—";
   const nomCli = id => { const c = CLIS.find(x=>x.id===id); return c ? c.nombre : ("cliente #"+id); };
   const t = FVEN.texto.toLowerCase();
   const rows = (data||[]).filter(v => !t || ((v.codigo||"")+" "+nomCli(v.cliente_id)+" "+(v.observaciones||"")).toLowerCase().indexOf(t)>=0);
@@ -5508,10 +5635,11 @@ VISTAS.ventas = async function(){
      '<div style="min-width:auto"><button class="btn" id="vf_btn">Filtrar</button></div>'+
      (P("venta-agregar")?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formVentaNueva(null)">+ Venta nueva</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
-     ['Código','Fecha','Cliente','Entrega','Instalación','Total','Saldo','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     ['Código','Fecha','Cliente','Tipo','Entrega','Instalación','Total','Saldo','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(function(v){ const sal = saldoDe[v.id];
        return '<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
        '<td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td><td>'+esc(nomCli(v.cliente_id))+'</td>'+
+       '<td>'+(tipoDe(v)==="—"?'<span class="muted">—</span>':esc(tipoDe(v)))+'</td>'+
        '<td>'+(v.fecha_entrega?fmtF(v.fecha_entrega):'<span class="muted">—</span>')+'</td>'+
        '<td>'+(v.fecha_instalacion?fmtF(v.fecha_instalacion):'<span class="muted">—</span>')+'</td>'+
        '<td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
