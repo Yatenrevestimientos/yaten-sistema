@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-69";
+const VERSION = "v2026.08.08-70";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3231,7 +3231,7 @@ function pintarFichaPre(){
     guardarPresupuesto();
   };
   if (puede) $("w_guardar").onclick = guardarPresupuesto;
-  if (c.id && P("presupuesto-eliminar")) $("w_borrar").onclick = async function(){
+  if (c.id && !vendido && P("presupuesto-eliminar")) $("w_borrar").onclick = async function(){
     if (!confirm("¿Eliminar "+c.codigo+"? No se puede deshacer.")) return;
     const {error} = await sb.from("presupuestos").delete().eq("id",c.id);
     if (error) return alert(error.message);
