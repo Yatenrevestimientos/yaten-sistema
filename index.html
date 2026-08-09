@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-64";
+const VERSION = "v2026.08.08-65";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1549,6 +1549,9 @@ const MAESTRAS = [
   {k:"ctr", extra:true, tabla:"conceptos_transferencia", titulo:"Concepto de Transferencias",
    ayuda:"Por qué movés plata de una cuenta propia a otra: reposición de caja chica, depósito de efectivo, compra de dólares. No es ni ingreso ni egreso, la plata sigue siendo tuya.",
    cols:[]},
+  {k:"agt", extra:true, tabla:"areas_gasto", titulo:"Áreas de gasto", orden:"orden",
+   ayuda:"El segundo eje de cada gasto. El CONCEPTO dice qué se gastó —combustible, patentes, sueldos— y el ÁREA dice para qué: instalaciones, comercial, depósito. Cruzados, el reporte de Egresos te dice cuánto te cuesta cada área. El sueldo del instalador va a Instalaciones, el del depósito a Depósito, la publicidad a Comercial. El «Orden» es el que se usa para listarlas.",
+   cols:[{c:"orden", t:"Orden", num:true, ph:"1"}]},
   {k:"mpg", extra:true, tabla:"medios_pago", titulo:"Formas de pago",
    ayuda:"Con qué paga la gente: efectivo, transferencia, débito, cada tarjeta y cada plan de cuotas. El «Tipo» agrupa la familia (Crédito, Débito, Efectivo…) para filtrar de a montones. El «Costo %» es lo que te descuenta esa forma de pago: el arancel de la tarjeta más lo que te cuesta el plan de cuotas. Es el dato con el que el Estado de resultado calcula cuánta plata se te va en financiación — si lo dejás vacío, esa venta se cuenta como si no te costara nada.",
    cols:[{c:"tipo", t:"Tipo", ph:"Crédito, Débito, Efectivo, Transferencia…"},
@@ -2502,16 +2505,49 @@ const REPORTES = [
  }},
 
 {id:"egresos", t:"Egresos", g:"Finanzas", perm:"finanzas-consultar",
- ay:"Todos los gastos del período por concepto. Es el reporte para ver en qué se va la plata. Toma la fecha de imputación, o sea el mes al que corresponde el gasto, no el día en que se pagó.",
+ ay:"Todos los gastos del período, cruzados por ÁREA y CONCEPTO: el área dice para qué fue el gasto (instalaciones, comercial, depósito) y el concepto qué se gastó (combustible, patentes, sueldos). Toma el mes al que corresponde el gasto, no el día en que se pagó.",
  run: async function(f){
    /* por imputación: el gasto pertenece al mes que corresponde, no al día que se pagó */
    const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
-   const g = agrupar(gs, x=>(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
+   const hayArea = !!M.agt;
+   const areaDe = x => hayArea ? (x.area_id ? (nom(M.agt,x.area_id)||"Sin área") : "— sin área —") : "";
+   const g = agrupar(gs, x=>areaDe(x)+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
+   const filas = [];
+   g.forEach(function(arr,k){
+     const p = k.split("|"), ac = p[0].split("§");
+     const fila = hayArea ? [ac[0], ac[1]] : [ac[1]];
+     filas.push(fila.concat([p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]));
+   });
+   const iTot = hayArea ? 6 : 5;
+   /* primero por área y adentro por lo que más pesa: así se lee «cuánto me cuesta
+      instalaciones» sin tener que sumar a mano */
+   filas.sort(function(a,b){
+     if (hayArea){ const r = String(a[0]).localeCompare(String(b[0]),"es"); if (r) return r; }
+     return b[iTot]-a[iTot];
+   });
+   const cols = (hayArea?[{t:"Área"}]:[]).concat([{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},
+     {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}]);
+   const sinArea = hayArea ? gs.filter(x=>!x.area_id).length : 0;
+   return {cols:cols, filas:filas,
+     nota: sinArea ? (sinArea+" gasto(s) sin área cargada: aparecen agrupados en «— sin área —». Se corrigen abriendo el gasto, o cargándola de entrada en los nuevos.") : ""};
+ }},
+
+/* El resumen que pidió Gustavo: cuánto cuesta cada área, sin el detalle. */
+{id:"egresos_area", t:"Egresos por área", g:"Finanzas", perm:"finanzas-consultar",
+ ay:"Cuánto se gastó en cada área del negocio en el período: instalaciones, comercial, depósito, administración. Es el resumen del reporte de Egresos, sin el detalle por concepto. Sirve para saber qué le cuesta al negocio sostener cada área.",
+ run: async function(f){
+   if (!M.agt) return {cols:[{t:"Área"}], filas:[], nota:"falta correr la migración de áreas de gasto en la base."};
+   const gs = (await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const g = agrupar(gs, x=>(x.area_id ? (nom(M.agt,x.area_id)||"Sin área") : "— sin área —")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const p = k.split("|");
      filas.push([p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]); });
    filas.sort((a,b)=>b[5]-a[5]);
-   return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
+   const totales = {};
+   filas.forEach(function(r){ totales[r[1]] = (totales[r[1]]||0) + Number(r[5]||0); });
+   filas.forEach(function(r){ const t = totales[r[1]]||0; r.push(t? Math.round(Number(r[5])/t*1000)/10 : null); });
+   return {cols:[{t:"Área"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},
+                 {t:"Total",tipo:"m"},{t:"% del total",tipo:"n"}], filas:filas};
  }},
 
 /* Pedido de Gustavo (8/8/2026). Es el reporte que cierra la doble fecha del
@@ -6467,7 +6503,7 @@ async function finMovs(){
     }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
 }
 
-let FG = {desde:"", hasta:"", concepto:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
+let FG = {desde:"", hasta:"", concepto:"", area:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
 async function finGastos(){
   const puede = P("finanzas-modificar");
   $("fbody").innerHTML = '<div class="panel"><h2>Gastos</h2>'+
@@ -6478,6 +6514,9 @@ async function finGastos(){
      '<div><label>Desde</label><input type="date" id="gf_desde" value="'+FG.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="gf_hasta" value="'+FG.hasta+'"></div>'+
      '<div><label>Concepto</label><select id="gf_concepto"><option value="">Todos</option>'+CGASTOS.map(c=>'<option value="'+c.id+'" '+(String(FG.concepto)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
+     (M.agt? '<div><label>Área</label><select id="gf_area"><option value="">Todas</option>'+
+        M.agt.map(c=>'<option value="'+c.id+'" '+(String(FG.area)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+
+        '<option value="sin" '+(FG.area==="sin"?"selected":"")+'>Sin área cargada</option></select></div>' : '')+
      '<div><label>Cuenta</label><select id="gf_cuenta"><option value="">Todas</option>'+CTAS.map(c=>'<option value="'+c.id+'" '+(String(FG.cuenta)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
      '<div><label>Buscar</label><input id="gf_txt" placeholder="detalle, proveedor o comprobante" value="'+esc(FG.texto)+'"></div>'+
      '<div><label>Anulados</label><select id="gf_anul"><option value="0" '+(FG.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FG.anulados?"selected":"")+'>Mostrar</option></select></div>'+
@@ -6485,13 +6524,15 @@ async function finGastos(){
      '<div style="min-width:auto"><button class="btn2" id="gf_clr">Limpiar</button></div>'+
      (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formGasto()">+ Gasto nuevo</button></div>':'')+
    '</div><div id="glista" class="muted">Cargando…</div></div>';
-  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1",campo:$("gf_campo").value}; finGastos(); };
-  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",cuenta:"",anulados:false,texto:"",campo:"fecha_imputacion"}; finGastos(); };
+  $("gf_btn").onclick = function(){ FG={desde:$("gf_desde").value,hasta:$("gf_hasta").value,concepto:$("gf_concepto").value,area:($("gf_area")||{}).value||"",cuenta:$("gf_cuenta").value,texto:$("gf_txt").value.trim(),anulados:$("gf_anul").value==="1",campo:$("gf_campo").value}; finGastos(); };
+  $("gf_clr").onclick = function(){ FG={desde:"",hasta:"",concepto:"",area:"",cuenta:"",anulados:false,texto:"",campo:"fecha_imputacion"}; finGastos(); };
   let q = sb.from("gastos").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(1000);
   const campoF = FG.campo === "fecha" ? "fecha" : "fecha_imputacion";
   if (FG.desde) q = q.gte(campoF, FG.desde);
   if (FG.hasta) q = q.lte(campoF, FG.hasta);
   if (FG.concepto) q = q.eq("concepto_id", Number(FG.concepto));
+  if (FG.area === "sin") q = q.is("area_id", null);
+  else if (FG.area) q = q.eq("area_id", Number(FG.area));
   if (FG.cuenta) q = q.eq("cuenta_id", Number(FG.cuenta));
   if (!FG.anulados) q = q.eq("anulado", false);
   const {data,error} = await q;
@@ -6512,11 +6553,12 @@ async function finGastos(){
   $("glista").innerHTML = (resumen?'<div class="kpis">'+resumen+'</div>':'')+
    '<div class="muted" style="margin-bottom:8px">'+rows.length+' gasto'+(rows.length===1?"":"s")+(FG.anulados?" (incluye anulados)":"")+'</div>'+
    '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
-   ['Fecha de pago','Corresponde a','Cuenta','Concepto','Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+   ['Fecha de pago','Corresponde a','Cuenta','Concepto'].concat(M.agt?['Área']:[]).concat(['Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle','']).map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
    rows.map(function(g){ return '<tr style="'+(g.anulado?'opacity:.5;text-decoration:line-through':'')+'">'+
      '<td>'+fmtF(g.fecha)+'</td>'+
      '<td'+((g.fecha_imputacion && g.fecha_imputacion !== g.fecha)?' style="font-weight:600"':'')+'>'+fmtF(g.fecha_imputacion||g.fecha)+'</td>'+
      '<td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
+     (M.agt?'<td>'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">— sin área —</span>')+'</td>':'')+
      '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
      '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
      celdaSaldo(SALG, g.mov_id, g.moneda, g.anulado)+
@@ -6556,6 +6598,14 @@ function formGasto(){
     '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
     '<div class="f"><label>Concepto</label><select id="g_concepto">'+selOpts(CGASTOS,null)+'</select></div>'+
     '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="g_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concGastoAgregar()">Agregar</button></div></div>'+
+    /* El área es el segundo eje: el concepto dice qué se gastó, el área para qué. */
+    (M.agt
+      ? '<div class="f"><label>Área</label><select id="g_area">'+selOpts(M.agt.filter(x=>x.activo),null)+'</select>'+
+        '<div class="muted" style="font-size:.85em;margin-top:4px">A qué área corresponde: instalaciones, comercial, depósito. Es lo que ordena el reporte de Egresos.</div></div>'+
+        (P("maestra-modificar")
+          ? '<div class="f"><label>¿Falta el área?</label><div style="display:flex;gap:6px"><input id="g_area_nueva" placeholder="Área nueva"><button class="btn2 btn-sm" onclick="areaGastoAgregar()">Agregar</button></div></div>'
+          : '')
+      : '')+
     '<div class="f"><label>Proveedor</label><input id="g_proveedor" placeholder="opcional"></div>'+
     '<div class="f"><label>N° de comprobante</label><input id="g_comprobante" placeholder="opcional"></div>'+
     '<div class="f"><label>CUIT del proveedor</label><input id="g_cuit" placeholder="opcional"></div>'+
@@ -6575,6 +6625,9 @@ function formGasto(){
     /* la imputación va en un segundo paso, para no tocar la función que mueve la plata */
     const fi = ($("g_fecha_imp")||{}).value || $("g_fecha").value || hoy();
     if (r.data) { try{ await sb.rpc("imputar_gasto",{p_gasto:Number(r.data), p_fecha:fi}); }catch(e){} }
+    /* el área también va aparte, por la misma razón: no se toca la función que mueve la plata */
+    const ar = ($("g_area")||{}).value;
+    if (r.data && ar) { try{ await sb.rpc("set_area_gasto",{p_gasto:Number(r.data), p_area:Number(ar)}); }catch(e){} }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
   };
   $("dlg").showModal();
@@ -6592,6 +6645,17 @@ async function concGastoAgregar(){
   $("g_concepto").innerHTML = selOpts(CGASTOS, (CGASTOS.find(x=>x.nombre===n)||{}).id);
   $("g_conc_nuevo").value = "";
 }
+async function areaGastoAgregar(){
+  const caja = $("g_area_nueva"); if (!caja) return;
+  const n = caja.value.trim(); if (!n) return;
+  const r = await sb.from("areas_gasto").insert({nombre:n, activo:true}).select("*").single();
+  if (r.error){ $("fgmsg").innerHTML = '<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  await cargarMaestrasExtra();
+  $("g_area").innerHTML = selOpts((M.agt||[]).filter(x=>x.activo), r.data.id);
+  caja.value = "";
+  $("fgmsg").innerHTML = '<div class="msg ok">Área «'+esc(n)+'» agregada y elegida.</div>';
+}
+
 async function anularGasto(id){
   const m = prompt("¿Por qué anulás este gasto?"); if (m===null) return;
   const {error} = await sb.rpc("anular_gasto",{p_id:id,p_motivo:m||"Sin motivo"});
