@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-77";
+const VERSION = "v2026.08.09-78";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2337,16 +2337,34 @@ async function cargarTipoDeVenta(ids){
 }
 const tipoDeVenta = v => (v.presupuesto_id && TIPO_PRE && TIPO_PRE[v.presupuesto_id]) || "— sin presupuesto —";
 const FX_VENTA = function(){
-  return [{k:"tipov", t:"Tipo de venta",
-           lista: TIPOVENTA.map(function(t,i){ return {id:t, nombre:t}; }),
-           sin:"Sin presupuesto"}];
+  const a = [{k:"tipov", t:"Tipo de venta",
+              lista: TIPOVENTA.map(function(t){ return {id:t, nombre:t}; }),
+              sin:"Sin presupuesto"}];
+  /* «Distribuidores» sale de acá: es un tipo de cliente, no un tipo de venta.
+     Habilitado por la migración v49, que agregó clientes.tipo_cliente_id. */
+  if (M.tcl) a.push({k:"tipocli", t:"Tipo de cliente", lista:M.tcl, sin:"Sin tipo cargado"});
+  return a;
 };
-/* El id de esta lista ES el texto, así que la comparación va por texto. */
+/* El id de la lista de tipo de venta ES el texto, así que esa comparación va por
+   texto; la de tipo de cliente va por id, como todas las demás. */
+function tipoCliDe(v){
+  const c = CLIS.find(function(x){ return x.id === v.cliente_id; });
+  return c ? c.tipo_cliente_id : null;
+}
 function filtVenta(vs, f){
-  const sel = ((f&&f.ext)||{}).tipov;
-  if (!sel) return vs;
-  if (sel === "__sin") return vs.filter(v=>!v.presupuesto_id || !(TIPO_PRE||{})[v.presupuesto_id]);
-  return vs.filter(v=>tipoDeVenta(v) === sel);
+  const e = (f&&f.ext)||{};
+  let r = vs;
+  if (e.tipov){
+    r = (e.tipov === "__sin")
+      ? r.filter(v=>!v.presupuesto_id || !(TIPO_PRE||{})[v.presupuesto_id])
+      : r.filter(v=>tipoDeVenta(v) === e.tipov);
+  }
+  if (e.tipocli){
+    r = (e.tipocli === "__sin")
+      ? r.filter(v=>!tipoCliDe(v))
+      : r.filter(v=>String(tipoCliDe(v)||"") === String(e.tipocli));
+  }
+  return r;
 }
 
 /* Pedido de Gustavo (9/8/2026): "reporte compras poder tener filtros por proveedor
@@ -2372,11 +2390,12 @@ const REPORTES = [
    const rows = filtVenta(v.filter(x=>!f.moneda || x.moneda===f.moneda), f).sort((a,b)=>b.fecha<a.fecha?-1:1);
    const sinPre = rows.filter(x=>!x.anulado && !x.presupuesto_id).length;
    return {
-     cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Tipo"},{t:"Vendedor"},{t:"Estado"},{t:"Moneda"},
+     cols:[{t:"Comprobante"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Tipo de cliente"},{t:"Tipo"},{t:"Vendedor"},{t:"Estado"},{t:"Moneda"},
            {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}],
      filas: rows.map(x=>[x.codigo, x.fecha, (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—",
+       (M.tcl? (nom(M.tcl, tipoCliDe(x))||"—") : "—"),
        tipoDeVenta(x), nomP(x.vl_id)||"—", x.anulado?"Anulada":x.estado, x.moneda, x.neto, x.iva, x.total, x.anulado]),
-     anuladaEn: 10,
+     anuladaEn: 11,
      nota: [ resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : "",
        sinPre ? (sinPre+" venta(s) no tienen presupuesto detrás, así que no se sabe si iban instaladas: aparecen como «— sin presupuesto —» y quedan afuera de cualquier filtro por tipo.") : ""
      ].filter(Boolean).join(" ")
@@ -3620,6 +3639,7 @@ function pintarFichaPre(){
      '<div class="f" id="w_box_dpct"><label>Descuento %</label><input type="number" step="0.1" id="w_descuento_pct" value="'+(c.descuento_pct||0)+'" '+d+' oninput="sincro()"></div>'+
      '<div class="f" id="w_box_dmon"><label>Descuento en <span id="w_lbl_moneda">'+esc(c.moneda||"ARS")+'</span></label><input type="number" step="0.01" id="w_descuento_monto" value="'+(c.descuento_monto||0)+'" '+d+' oninput="sincro()"></div>'+
    '</div>'+
+   '<div class="muted" id="w_nota_desc" style="margin-top:-4px"></div>'+
    '<div id="w_tot"></div>'+
    '<div class="sec">Notas</div>'+
    '<div class="f"><label>Notas del presupuesto (se imprimen)</label><textarea id="w_notas" rows="3" '+d+'>'+esc(c.notas)+'</textarea></div>'+
@@ -3848,6 +3868,30 @@ function presClienteElegido(){
   $("w_cliente_email").value = c.email || "";
   if (c.localidad_id) $("w_localidad_id").value = c.localidad_id;
   if (c.lista_id && $("w_lista_id")) $("w_lista_id").value = c.lista_id;
+  /* Descuento sugerido por tipo de cliente (v49, 9/8/2026). SUGERIDO, no impuesto:
+     solo se completa si el presupuesto todavía no tiene descuento propio, y se
+     avisa de dónde salió. Pisar un descuento que la vendedora ya negoció sería
+     peor que no sugerir nada. */
+  sugerirDescuentoPorTipo(c);
+}
+function sugerirDescuentoPorTipo(c){
+  if (!c || !M.tcl || !c.tipo_cliente_id) return;
+  const t = M.tcl.find(function(x){ return x.id === c.tipo_cliente_id; });
+  const pct = t ? Number(t.descuento_pct||0) : 0;
+  if (!(pct > 0)) return;
+  const modo = $("w_descuento_modo"), dp = $("w_descuento_pct"), nota = $("w_nota_desc");
+  if (!dp) return;
+  const yaTiene = Number(dp.value||0) > 0 || Number((PRE.cab||{}).descuento_monto||0) > 0;
+  if (yaTiene){
+    if (nota) nota.textContent = "Ojo: «"+t.nombre+"» tiene "+pct+"% de descuento cargado, pero este presupuesto ya tenía uno puesto y no se tocó.";
+    return;
+  }
+  if (modo && modo.value === "monto"){ modo.value = "pct"; if (window.modoDescuento) modoDescuento(true); }
+  dp.value = pct;
+  PRE.cab.descuento_pct = pct;
+  PRE.cab.descuento_modo = "pct";
+  if (nota) nota.textContent = "Descuento del "+pct+"% sugerido por ser «"+t.nombre+"». Cambialo si corresponde.";
+  if (window.sincro) sincro();
 }
 /* Cada prospecto de la lista, con lo que sirve para reconocerlo de un vistazo. */
 function optProspectos(arr){
@@ -6446,8 +6490,8 @@ VISTAS.clientes = async function(){
   if (puede) $("cf_nuevo").onclick = function(){ fichaCliente(null); };
 };
 
-const CAMPOS_CLI = ["nombre","tipo_doc","nro_doc","cat_iva","telefono","celular","email","direccion","localidad_id","origen_id","lista_id","medio_pago_pref_id","observaciones"];
-const NUM_CLI = ["localidad_id","origen_id","lista_id","medio_pago_pref_id"];
+const CAMPOS_CLI = ["nombre","tipo_doc","nro_doc","cat_iva","telefono","celular","email","direccion","localidad_id","origen_id","lista_id","medio_pago_pref_id","tipo_cliente_id","observaciones"];
+const NUM_CLI = ["localidad_id","origen_id","lista_id","medio_pago_pref_id","tipo_cliente_id"];
 const TIPOS_DOC = ["DNI","CUIT","CUIL","Pasaporte","Sin documento"];
 const CAT_IVA = ["Consumidor Final","Responsable Inscripto","Monotributista","Exento","No Responsable"];
 
@@ -6502,6 +6546,13 @@ async function fichaCliente(id){
      '<div class="f"><label>Localidad</label><select id="y_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select></div>'+
      '<div class="f"><label>Cómo nos conoció</label><select id="y_origen_id" '+d+'>'+selOpts(M.ori,v("origen_id"))+'</select></div>'+
      '<div class="f"><label>Lista de precios</label><select id="y_lista_id" '+d+'>'+selOpts(LISTAS,v("lista_id"))+'</select></div>'+
+     /* Migración v49 (9/8/2026). La lista «Tipo de clientes» existía en Tablas
+        básicas desde el principio, con su descuento, y la tabla clientes no tenía
+        la columna: no se podía elegir en ninguna pantalla. Ahora sí, y con eso
+        funcionan el filtro «Distribuidores» de los reportes y el descuento
+        sugerido al armarle un presupuesto. */
+     (M.tcl?'<div class="f"><label>Tipo de cliente</label><select id="y_tipo_cliente_id" '+d+'>'+selOpts(M.tcl.filter(x=>x.activo),v("tipo_cliente_id"))+'</select>'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">Consumidor final, arquitecto, constructora, distribuidor. Si el tipo tiene descuento cargado, se sugiere solo en el presupuesto. Se amplía desde Tablas básicas.</div></div>':'')+
      (M.mpg?'<div class="f"><label>Forma de pago preferida</label><select id="y_medio_pago_pref_id" '+d+'>'+selOpts(M.mpg.filter(x=>x.activo),v("medio_pago_pref_id"))+'</select>'+
        '<div class="muted" style="font-size:.85em;margin-top:4px">También se carga desde el presupuesto. Sirve para el reporte de promociones por tarjeta.</div></div>':'')+
    '</div>'+
@@ -6620,6 +6671,7 @@ async function presupuestoDesdeCliente(cliId){
   if (c.localidad_id) PRE.cab.localidad_id = c.localidad_id;
   if (c.lista_id) PRE.cab.lista_id = c.lista_id;
   pintarFichaPre();
+  sugerirDescuentoPorTipo(c);
 }
 function seccionCC(c, seg){
   const bloque = function(m){
