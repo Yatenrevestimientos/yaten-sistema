@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-72";
+const VERSION = "v2026.08.09-73";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6875,6 +6875,12 @@ function formGasto(){
       '<div class="muted" style="font-size:.85em;margin-top:4px">El día que sale la plata. Es la que mueve el saldo de la cuenta.</div></div>'+
     '<div class="f"><label>Mes al que corresponde</label><input type="date" id="g_fecha_imp" value="'+hoy()+'">'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">A qué período pertenece el gasto. Es la que usan los reportes. Si es el mismo día, dejala igual.</div></div>'+
+    /* Igual que en Pirka y que en la cobranza: primero el tipo —efectivo, banco,
+       tarjeta— y después la cuenta. Con trece cuentas, buscar la correcta en una
+       lista sola es incómodo. Pedido de Gustavo, 9/8/2026. */
+    '<div class="f"><label>Tipo de cuenta</label><select id="g_tipo_cta" onchange="filtrarCtasGasto()"><option value="">Todas</option>'+
+      TCTAS.filter(function(t){ return t.activo; }).map(function(t){ return '<option value="'+t.id+'">'+esc(t.nombre)+'</option>'; }).join("")+
+    '</select></div>'+
     '<div class="f"><label>Cuenta de donde sale</label><select id="g_cuenta">'+optCtas(cuentas)+'</select></div>'+
     '<div class="f"><label>Importe total</label><input type="number" step="0.01" id="g_importe" oninput="calcGasto()"></div>'+
     '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
@@ -6909,6 +6915,7 @@ function formGasto(){
    '<div class="f"><label>Detalle</label><input id="g_extra" placeholder="A qué corresponde"></div>'+
    '<div class="acciones"><button class="btn" id="g_guardar">Registrar gasto</button></div>';
   _gFechaPrev = hoy();
+  window._CTAS_GASTO = cuentas;
   calcGasto();
   $("g_guardar").onclick = async function(){
     const imp = Number($("g_importe").value||0);
@@ -6931,6 +6938,16 @@ function formGasto(){
   };
   $("dlg").showModal();
 }
+/* El tipo acota la lista de cuentas, sin perder la que ya estaba elegida. */
+function filtrarCtasGasto(){
+  const t = ($("g_tipo_cta")||{}).value || "";
+  const lista = (window._CTAS_GASTO||[]).filter(function(c){ return !t || String(c.tipo_cuenta_id)===String(t); });
+  const sel = $("g_cuenta"); if (!sel) return;
+  const antes = sel.value;
+  sel.innerHTML = lista.length ? optCtas(lista) : '<option value="">— no hay cuentas de ese tipo —</option>';
+  if (lista.some(function(c){ return String(c.id)===String(antes); })) sel.value = antes;
+}
+
 function calcGasto(){
   const t = Number($("g_importe").value||0), p = Number($("g_imp").value||0);
   const neto = p? Math.round(t/(1+p/100)*100)/100 : t;
