@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.08-60";
+const VERSION = "v2026.08.08-61";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1439,6 +1439,10 @@ function fichaProducto(id){
      '<div class="f"><label>Código *</label><input id="q_codigo" value="'+esc(v("codigo"))+'" placeholder="SPC-EVO-1220-N01" '+d+'></div>'+
      '<div class="f"><label>Nombre *</label><input id="q_nombre" value="'+esc(v("nombre"))+'" '+d+'></div>'+
      '<div class="f"><label>Tipo</label><select id="q_tipo_id" '+d+'>'+selOpts(TIPOSP, v("tipo_id"))+'</select></div>'+
+     /* Color: la columna existía en la base desde el principio y no se podía cargar
+        desde ninguna pantalla. En Pirka es columna del listado de stock, porque el
+        mismo código viene en varios colores y el depósito los separa. */
+     '<div class="f"><label>Color</label><input id="q_color" value="'+esc(v("color"))+'" placeholder="Nogal, Roble claro, Grafito…" '+d+'></div>'+
      (puede?'<div class="f"><label>¿No está el tipo?</label><div style="display:flex;gap:6px"><input id="q_tipo_nuevo" placeholder="Tipo nuevo"><button class="btn2 btn-sm" onclick="tipoAgregar()">Agregar</button></div></div>':'')+
    '</div>'+
    '<div class="sec">Medida y presentación</div><div class="grid">'+
@@ -1467,6 +1471,10 @@ function fichaProducto(id){
      '<div class="f"><label>Stock mínimo</label><input type="number" step="0.01" id="q_stock_minimo" value="'+v("stock_minimo",0)+'" '+d+'></div>'+
      '<div class="f"><label>Se vende</label><select id="q_disponible_venta" '+d+'><option value="1" '+(p&&!p.disponible_venta?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.disponible_venta?"selected":"")+'>No</option></select></div>'+
      '<div class="f"><label>Se instala</label><select id="q_se_instala" '+d+'><option value="1" '+(p&&!p.se_instala?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.se_instala?"selected":"")+'>No</option></select></div>'+
+     /* Lo que no lleva stock —flete, colocación, un adicional— no tiene que
+        ensuciar el listado del depósito ni el planeamiento de reposición. */
+     '<div class="f"><label>Lleva stock</label><select id="q_registra_stock" '+d+'><option value="1" '+(p&&!p.registra_stock?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.registra_stock?"selected":"")+'>No</option></select>'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">En «No» para lo que no es mercadería: flete, colocación, adicionales. Deja de aparecer en Stock y en el planeamiento.</div></div>'+
      '<div class="f"><label>Activo</label><select id="q_activo" '+d+'><option value="1" '+(p&&!p.activo?"":"selected")+'>Sí</option><option value="0" '+(p&&!p.activo?"selected":"")+'>No</option></select></div>'+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="q_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
@@ -1486,12 +1494,12 @@ async function tipoAgregar(){
   $("fpmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y seleccionado.</div>';
 }
 const CAMPOS_PROD = ["codigo","nombre","tipo_id","unidad","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja",
-  "iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","moneda_base","costo_usd","stock_minimo","m3_por_caja","observaciones"];
+  "iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","moneda_base","costo_usd","stock_minimo","m3_por_caja","color","observaciones"];
 const NUM_PROD = ["tipo_id","m2_por_caja","piezas_por_caja","ml_por_unidad","largo_cm","ancho_cm","espesor_mm","peso_kg_caja","iva_pct","precio_ars","precio_usd","precio_inst_ars","precio_inst_usd","costo_usd","stock_minimo","m3_por_caja"];
 async function guardarProducto(id){
   const o = {};
   CAMPOS_PROD.forEach(function(c){ const el=$("q_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PROD.indexOf(c)>=0) v=Number(v); o[c]=v; });
-  ["disponible_venta","se_instala","activo"].forEach(function(c){ const el=$("q_"+c); if(el) o[c] = el.value==="1"; });
+  ["disponible_venta","se_instala","activo","registra_stock"].forEach(function(c){ const el=$("q_"+c); if(el) o[c] = el.value==="1"; });
   if (!o.codigo || !o.nombre){ $("fpmsg").innerHTML = '<div class="msg err">El código y el nombre son obligatorios.</div>'; return; }
   const r = id ? await sb.from("productos").update(o).eq("id",id) : await sb.from("productos").insert(o);
   if (r.error){ $("fpmsg").innerHTML = '<div class="msg err">'+(r.error.message.indexOf("duplicate")>=0?"Ya existe un producto con ese código.":esc(r.error.message))+'</div>'; return; }
@@ -3755,7 +3763,14 @@ function pintarStockProductos(rows, disp, falt){
    '<div style="min-width:auto"><button class="btn" id="st_btn">Buscar</button></div></div>'+
    (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Producto','Ubicación','Stock','Comprometido','Disponible','Mínimo'].concat(puede?['Ajustar']:[]).map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     rows.map(x=>'<tr><td>'+esc(x.codigo)+'</td><td><b>'+esc(x.nombre)+'</b></td><td>'+esc(x.ubicacion)+'</td>'+
+     /* La ubicación se edita acá, en Stock, no en la ficha del producto: la sabe
+        el depósito. Va como botón y no como casillero de carga a propósito —una
+        fila con un input queda clavada arriba al ordenar la tabla. */
+     rows.map(x=>'<tr><td>'+esc(x.codigo)+'</td><td><b>'+esc(x.nombre)+'</b></td>'+
+       '<td>'+(puede
+         ? '<button class="btn2 btn-sm" style="font-weight:normal" onclick="formUbicacion('+x.producto_id+')">'+
+           (x.ubicacion? esc(x.ubicacion) : '<span class="muted">+ ubicar</span>')+'</button>'
+         : esc(x.ubicacion))+'</td>'+
        '<td><b>'+fmtN(x.stock)+'</b></td><td>'+fmtN(x.comprometido)+'</td>'+
        '<td style="'+(disp(x)<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(disp(x))+'</td><td>'+fmtN(x.stock_minimo)+'</td>'+
        (puede?'<td><button class="btn2 btn-sm" onclick="formAjusteStock('+x.producto_id+')">Ajustar</button></td>':'')+'</tr>').join("")+
@@ -3763,6 +3778,42 @@ function pintarStockProductos(rows, disp, falt){
    '</div>';
   $("st_btn").onclick = function(){ FSTK = $("st_txt").value.trim(); VISTAS.stock(); };
 }
+/* Dónde está guardada la mercadería. Se escribe por una función que pide
+   stock-modificar, no por un update directo: el rol DEPOSITO no puede tocar
+   la tabla de productos, y no corresponde que pueda. */
+function formUbicacion(prodId){
+  const x = STK.find(y=>y.producto_id===prodId);
+  $("dtit").textContent = "Ubicación en depósito · " + (x?x.nombre:"");
+  $("dbody").innerHTML = '<div id="ubmsg"></div>'+
+   '<div class="muted" style="margin-bottom:10px">Dónde está guardada esta mercadería, escrito como lo dice el depósito. Sirve para encontrarla cuando hay que preparar un remito.</div>'+
+   '<div class="f"><label>Ubicación</label><input id="ub_txt" value="'+esc(x?x.ubicacion:"")+'" placeholder="Estantería 3 · Pasillo B · Fondo galpón"></div>'+
+   '<div class="acciones"><button class="btn" id="ub_guardar">Guardar</button>'+
+   (x&&x.ubicacion?'<button class="btn3" id="ub_borrar">Dejar sin ubicación</button>':'')+
+   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  const grabar = async function(txt){
+    $("ub_guardar").disabled = true;
+    let {error} = await sb.rpc("set_ubicacion_producto", {p_id:prodId, p_ubicacion:txt});
+    /* Si todavía no se corrió la migración v39, el dueño puede igual: escribe
+       directo. Quien no tiene producto-modificar ve el aviso de que falta. */
+    if (error && /function|does not exist|schema cache/i.test(error.message||"")){
+      if (P("producto-modificar")){
+        const r2 = await sb.from("productos").update({ubicacion: txt.trim()||null}).eq("id", prodId);
+        error = r2.error || null;
+      } else {
+        error = {message:"Falta correr la migración v39 en la base para que el depósito pueda cargar la ubicación."};
+      }
+    }
+    $("ub_guardar").disabled = false;
+    if (error){ $("ubmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    try{ $("dlg").close(); }catch(e){}
+    await cargarCatalogo();
+    VISTAS.stock();
+  };
+  $("ub_guardar").onclick = function(){ grabar($("ub_txt").value); };
+  if ($("ub_borrar")) $("ub_borrar").onclick = function(){ grabar(""); };
+  $("dlg").showModal();
+}
+
 function formAjusteStock(prodId){
   const x = STK.find(y=>y.producto_id===prodId);
   $("dtit").textContent = "Ajustar stock · " + (x?x.nombre:"");
