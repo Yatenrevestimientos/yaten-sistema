@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-75";
+const VERSION = "v2026.08.09-76";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2257,6 +2257,42 @@ function resumenFiltros(){
 }
 function textoExtras(f){ return resumenFiltros(); }
 
+/* ── El botón «Detalle» de los reportes agrupados ──
+   Pedido de Gustavo (9/8/2026): "dice comercial, combustible, dos gastos por
+   veintisiete mil doscientos setenta y tres, pero necesito un botón que me diga
+   detalle y me ponga el detalle de esos gastos".
+   Un reporte agrupado puede devolver, además de las filas, la lista de registros
+   que armó cada fila. La pantalla dibuja una columna con el botón y abre el detalle
+   en una ventana, con su propio botón de Excel. El renglón agrupado deja de ser un
+   número al que hay que creerle: se abre y se ve de dónde salió. */
+function detGastos(arr){
+  return {
+    cols: [{t:"Corresponde a",tipo:"f"},{t:"Fecha de pago",tipo:"f"},{t:"Concepto"}]
+      .concat(M.agt?[{t:"Área"}]:[]).concat(M.per?[{t:"Persona"}]:[]).concat(M.veh?[{t:"Vehículo"}]:[])
+      .concat([{t:"Detalle"},{t:"Proveedor"},{t:"Comprobante"},{t:"Cuenta"},{t:"Moneda"},
+               {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}]),
+    filas: (arr||[]).slice().sort(function(a,b){
+        const fa=a.fecha_imputacion||a.fecha, fb=b.fecha_imputacion||b.fecha;
+        return fa<fb?-1:(fa>fb?1:(a.id-b.id));
+      }).map(function(x){
+      return [x.fecha_imputacion||x.fecha, x.fecha, nom(M.cga,x.concepto_id)||"Sin concepto"]
+        .concat(M.agt?[(function(){ const a=areaIdGasto(x);
+           return a ? ((nom(M.agt,a)||"?")+(x.area_id?"":" (por la persona)")) : "— sin área —"; })()]:[])
+        .concat(M.per?[x.persona_id?(nom(M.per,x.persona_id)||"?"):""]:[])
+        .concat(M.veh?[x.vehiculo_id?(nom(M.veh,x.vehiculo_id)||"?"):""]:[])
+        .concat([x.detalle_extra||"", x.proveedor||"", x.nro_comprobante||"",
+                 ((CTAS&&CTAS.length)? (nom(CTAS,x.cuenta_id)||"") : ""), x.moneda||"ARS",
+                 x.neto, x.iva, x.importe]);
+    })
+  };
+}
+/* Ordena las filas agrupadas y su detalle JUNTOS. Si se ordenaran por separado, el
+   botón de la fila abriría el detalle de otra fila: el error más silencioso posible. */
+function ordenarConDetalle(pares, cmp){
+  pares.sort(function(a,b){ return cmp(a.fila, b.fila); });
+  return {filas: pares.map(p=>p.fila), dets: pares.map(p=>p.arr)};
+}
+
 const sum = (arr, f) => arr.reduce((a,x)=>a+Number(f(x)||0), 0);
 const entre = (fecha, f) => (!f.desde || fecha >= f.desde) && (!f.hasta || fecha <= f.hasta);
 function agrupar(arr, clave){
@@ -2640,12 +2676,25 @@ const REPORTES = [
    const cc = (f.ext||{}).cconc;
    const c = (await traer("cobranzas","*",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda))
      .filter(x=> !cc || (cc==="__sin" ? !x.concepto_id : String(x.concepto_id||"")===String(cc)));
+   if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
+   if (!CLIS.length){ try{ await cargarClientes(); }catch(e){} }
    const g = agrupar(c, x=>(nom(M.cco,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
-   const filas = [];
+   const pares = [];
    g.forEach(function(arr,k){ const p = k.split("|");
-     filas.push([p[0], p[1], arr.length, sum(arr,x=>x.importe)]); });
-   filas.sort((a,b)=>b[3]-a[3]);
-   return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Cobranzas",tipo:"n"},{t:"Total",tipo:"m"}], filas:filas};
+     pares.push({fila:[p[0], p[1], arr.length, sum(arr,x=>x.importe)], arr:arr}); });
+   const or = ordenarConDetalle(pares, (a,b)=>b[3]-a[3]);
+   const filas = or.filas, dets = or.dets;
+   return {cols:[{t:"Concepto"},{t:"Moneda"},{t:"Cobranzas",tipo:"n"},{t:"Total",tipo:"m"}], filas:filas,
+     det: function(i){
+       const arr = (dets[i]||[]).slice().sort((a,b)=> a.fecha<b.fecha?-1:(a.fecha>b.fecha?1:(a.id-b.id)));
+       return {titulo:(filas[i]||[])[0],
+         cols:[{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Concepto"},{t:"Cuenta"},{t:"Observaciones"},{t:"Moneda"},{t:"Importe",tipo:"m"}],
+         filas: arr.map(function(x){ return [x.fecha,
+           ((CLIS.find(function(cl){ return cl.id===x.cliente_id; })||{}).nombre)||"—",
+           nom(M.cco,x.concepto_id)||"Sin concepto",
+           ((CTAS&&CTAS.length)? (nom(CTAS,x.cuenta_id)||"") : ""),
+           x.observaciones||"", x.moneda||"ARS", x.importe]; })};
+     }};
  }},
 
 {id:"egresos", t:"Egresos", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
@@ -2656,26 +2705,30 @@ const REPORTES = [
    const hayArea = !!M.agt;
    const areaDe = function(x){ if (!hayArea) return "";
      const a = areaIdGasto(x); return a ? (nom(M.agt,a)||"Sin área") : "— sin área —"; };
+   if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
    const g = agrupar(gs, x=>areaDe(x)+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
-   const filas = [];
+   const pares = [];
    g.forEach(function(arr,k){
      const p = k.split("|"), ac = p[0].split("§");
      const fila = hayArea ? [ac[0], ac[1]] : [ac[1]];
-     filas.push(fila.concat([p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]));
+     pares.push({fila: fila.concat([p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]), arr:arr});
    });
    const iTot = hayArea ? 6 : 5;
    /* primero por área y adentro por lo que más pesa: así se lee «cuánto me cuesta
       instalaciones» sin tener que sumar a mano */
-   filas.sort(function(a,b){
+   const or = ordenarConDetalle(pares, function(a,b){
      if (hayArea){ const r = String(a[0]).localeCompare(String(b[0]),"es"); if (r) return r; }
      return b[iTot]-a[iTot];
    });
+   const filas = or.filas, dets = or.dets;
    const cols = (hayArea?[{t:"Área"}]:[]).concat([{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},
      {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}]);
    const sinArea = hayArea ? gs.filter(x=>!areaIdGasto(x)).length : 0;
    const heredada = hayArea ? gs.filter(x=>!x.area_id && areaIdGasto(x)).length : 0;
    const t = resumenFiltros();
    return {cols:cols, filas:filas,
+     det: function(i){ const fi = filas[i]||[];
+       return Object.assign(detGastos(dets[i]), {titulo: (hayArea? fi[0]+" · " : "")+fi[hayArea?1:0]}); },
      nota: [ t ? "Filtrado por "+t+"." : "",
        heredada ? (heredada+" gasto(s) no tenían área cargada y tomaron la de la persona a la que están imputados.") : "",
        sinArea ? (sinArea+" gasto(s) siguen sin área: aparecen en «— sin área —». Se arreglan de dos formas: cargándole el área a la persona en Tablas básicas › Personal, o clasificando el gasto desde Finanzas › Gastos.") : ""
@@ -2717,12 +2770,16 @@ const REPORTES = [
  run: async function(f){
    if (!M.per) return {cols:[{t:"Persona"}], filas:[], nota:"falta correr la migración de personal en la base."};
    const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.persona_id && (!f.moneda||x.moneda===f.moneda)), f);
+   if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
    const g = agrupar(gs, x=>(nom(M.per,x.persona_id)||"?")+"§"+(M.agt?(nom(M.agt,areaIdGasto(x))||"—"):"—")+"|"+x.moneda);
-   const filas = [];
+   const pares = [];
    g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
-     filas.push([pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)]); });
-   filas.sort((a,b)=>b[5]-a[5]);
-   return {cols:[{t:"Persona"},{t:"Área"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
+     pares.push({fila:[pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)], arr:arr}); });
+   const or = ordenarConDetalle(pares, (a,b)=>b[5]-a[5]);
+   const filas = or.filas, dets = or.dets;
+   return {cols:[{t:"Persona"},{t:"Área"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas,
+     det: function(i){ return Object.assign(detGastos(dets[i]), {titulo:(filas[i]||[])[0]}); },
+     nota: resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : ""};
  }},
 
 {id:"gastos_vehiculo", t:"Gastos por vehículo", g:"Finanzas", perm:"finanzas-consultar", fx:FX_GASTO,
@@ -2730,12 +2787,16 @@ const REPORTES = [
  run: async function(f){
    if (!M.veh) return {cols:[{t:"Vehículo"}], filas:[], nota:"falta correr la migración de vehículos en la base."};
    const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.vehiculo_id && (!f.moneda||x.moneda===f.moneda)), f);
+   if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
    const g = agrupar(gs, x=>(nom(M.veh,x.vehiculo_id)||"?")+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
-   const filas = [];
+   const pares = [];
    g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
-     filas.push([pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)]); });
-   filas.sort(function(a,b){ const r = String(a[0]).localeCompare(String(b[0]),"es"); return r || (b[5]-a[5]); });
-   return {cols:[{t:"Vehículo"},{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas};
+     pares.push({fila:[pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)], arr:arr}); });
+   const or = ordenarConDetalle(pares, function(a,b){ const r = String(a[0]).localeCompare(String(b[0]),"es"); return r || (b[5]-a[5]); });
+   const filas = or.filas, dets = or.dets;
+   return {cols:[{t:"Vehículo"},{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"Total",tipo:"m"}], filas:filas,
+     det: function(i){ const fi = filas[i]||[]; return Object.assign(detGastos(dets[i]), {titulo: fi[0]+" · "+fi[1]}); },
+     nota: resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : ""};
  }},
 
 /* El resumen que pidió Gustavo: cuánto cuesta cada área, sin el detalle. */
@@ -2744,16 +2805,20 @@ const REPORTES = [
  run: async function(f){
    if (!M.agt) return {cols:[{t:"Área"}], filas:[], nota:"falta correr la migración de áreas de gasto en la base."};
    const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda)), f);
+   if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
    const g = agrupar(gs, x=>{ const a = areaIdGasto(x); return (a ? (nom(M.agt,a)||"Sin área") : "— sin área —")+"|"+x.moneda; });
-   const filas = [];
+   const pares = [];
    g.forEach(function(arr,k){ const p = k.split("|");
-     filas.push([p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]); });
-   filas.sort((a,b)=>b[5]-a[5]);
+     pares.push({fila:[p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)], arr:arr}); });
+   const or = ordenarConDetalle(pares, (a,b)=>b[5]-a[5]);
+   const filas = or.filas, dets = or.dets;
    const totales = {};
    filas.forEach(function(r){ totales[r[1]] = (totales[r[1]]||0) + Number(r[5]||0); });
    filas.forEach(function(r){ const t = totales[r[1]]||0; r.push(t? Math.round(Number(r[5])/t*1000)/10 : null); });
    return {cols:[{t:"Área"},{t:"Moneda"},{t:"Gastos",tipo:"n"},{t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},
-                 {t:"Total",tipo:"m"},{t:"% del total",tipo:"n"}], filas:filas};
+                 {t:"Total",tipo:"m"},{t:"% del total",tipo:"n"}], filas:filas,
+     det: function(i){ return Object.assign(detGastos(dets[i]), {titulo:(filas[i]||[])[0]}); },
+     nota: resumenFiltros() ? "Filtrado por "+resumenFiltros()+"." : ""};
  }},
 
 /* Pedido de Gustavo (8/8/2026). Es el reporte que cierra la doble fecha del
@@ -3025,15 +3090,88 @@ async function correrReporte(){
           totales.filter(t=>t.tipo==="m").map(t=>'<div class="kpi"><div class="t">'+esc(t.col)+(t.mon?' '+esc(t.mon):'')+'</div>'+
             '<div class="n">'+fmtM(t.v, t.mon||"ARS")+'</div></div>').join("")+'</div>' : '')+
         '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
-        d.cols.map(c=>'<th>'+esc(c.t)+'</th>').join("")+'</tr></thead><tbody>'+
-        d.filas.map(fila=>'<tr'+((d.anuladaEn!=null && fila[d.anuladaEn])?' style="opacity:.45;text-decoration:line-through"':'')+'>'+
+        d.cols.map(c=>'<th>'+esc(c.t)+'</th>').join("")+(d.det?'<th></th>':'')+'</tr></thead><tbody>'+
+        d.filas.map((fila,fi)=>'<tr'+((d.anuladaEn!=null && fila[d.anuladaEn])?' style="opacity:.45;text-decoration:line-through"':'')+'>'+
           d.cols.map((c,i)=>'<td'+((c.tipo==="n"||c.tipo==="m")?' style="text-align:right"':'')+'>'+fmtCel(fila[i],c,fila)+'</td>').join("")+
+          (d.det?'<td><button class="btn2 btn-sm" onclick="verDetalleReporte('+fi+')">Detalle</button></td>':'')+
           '</tr>').join("")+
         '</tbody></table></div>'+
         '<div class="muted" style="margin-top:8px">'+d.filas.length+' renglones</div>'+
         '<div style="margin-top:8px"><button class="btn2" onclick="bajarReporte()">Bajar a Excel</button> '+
         '<button class="btn2" onclick="imprimirReporte()">Imprimir o guardar PDF</button></div>'
       : '<div class="muted">No hay nada en ese período.</div>');
+}
+
+/* ── La ventana de detalle de un renglón agrupado ──
+   Abre los registros que armaron esa fila, con su propio total y su propio Excel.
+   Es la respuesta a «dice dos gastos por 27.273, pero necesito ver cuáles son». */
+let REP_DET = null;
+function tablaReporte(d){
+  const iMon = d.cols.findIndex(c=>c.t==="Moneda");
+  const cel = function(v, c, fila){
+    if (v==null || v==="") return "—";
+    if (c.tipo==="f") return fmtF(v);
+    if (c.tipo==="n") return fmtN(v);
+    if (c.tipo==="m") return fmtM(v, iMon>=0 ? fila[iMon] : "ARS");
+    return esc(String(v));
+  };
+  const tot = {};
+  const iTot = d.cols.map((c,i)=>({c:c,i:i})).filter(x=>x.c.tipo==="m").pop();
+  if (iTot) d.filas.forEach(function(fila){
+    const mo = iMon>=0 ? (fila[iMon]||"ARS") : "ARS";
+    tot[mo] = (tot[mo]||0) + Number(fila[iTot.i]||0);
+  });
+  return (Object.keys(tot).length? '<div class="kpis" style="margin-bottom:10px">'+
+      Object.keys(tot).map(mo=>'<div class="kpi"><div class="t">'+esc(iTot.c.t)+' '+esc(mo)+'</div>'+
+        '<div class="n">'+fmtM(tot[mo],mo)+'</div><div class="muted">'+d.filas.length+' registro'+(d.filas.length===1?"":"s")+'</div></div>').join("")+
+      '</div>' : '')+
+    '<div class="tablewrap" style="max-height:52dvh;overflow:auto"><table><thead><tr>'+
+    d.cols.map(c=>'<th>'+esc(c.t)+'</th>').join("")+'</tr></thead><tbody>'+
+    d.filas.map(fila=>'<tr>'+d.cols.map((c,i)=>'<td'+((c.tipo==="n"||c.tipo==="m")?' style="text-align:right"':'')+
+      ' style="white-space:normal">'+cel(fila[i],c,fila)+'</td>').join("")+'</tr>').join("")+
+    '</tbody></table></div>';
+}
+function verDetalleReporte(i){
+  if (!REP_DATOS || !REP_DATOS.d || !REP_DATOS.d.det) return;
+  let d;
+  try{ d = REP_DATOS.d.det(i); }catch(e){ return alert("No pude abrir el detalle: "+e.message); }
+  if (!d || !d.filas || !d.filas.length){
+    $("dtit").textContent = "Detalle";
+    $("dbody").innerHTML = '<div class="muted">Ese renglón no tiene registros para mostrar.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
+  REP_DET = d;
+  $("dtit").textContent = "Detalle · "+(d.titulo||"");
+  $("dbody").innerHTML =
+    '<div class="muted" style="margin-bottom:8px">Los '+d.filas.length+' registro'+(d.filas.length===1?"":"s")+
+      ' que arman ese renglón del reporte.</div>'+
+    tablaReporte(d)+
+    '<div class="acciones"><button class="btn2" onclick="bajarDetalle()">Bajar a Excel</button> '+
+    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+function bajarDetalle(){
+  if (!REP_DET) return;
+  bajarTabla(REP_DET, "yaten-detalle-"+(REP_DATOS?REP_DATOS.rep.id:"reporte"));
+}
+function bajarTabla(d, nombre){
+  const esc2 = v => '"' + String(v==null?"":v).replace(/"/g,'""') + '"';
+  const lineas = [d.cols.map(c=>esc2(c.t)).join(";")];
+  d.filas.forEach(function(fila){
+    lineas.push(d.cols.map(function(c,i){
+      const v = fila[i];
+      if (c.tipo==="n" || c.tipo==="m") return String(v==null?"":v).replace(".",",");
+      return esc2(v);
+    }).join(";"));
+  });
+  const blob = new Blob(["﻿"+lineas.join("\r\n")], {type:"text/csv;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nombre+"-"+hoy()+".csv";
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 3000);
 }
 
 function bajarReporte(){
