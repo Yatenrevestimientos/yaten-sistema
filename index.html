@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-74";
+const VERSION = "v2026.08.09-75";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1607,8 +1607,8 @@ const MAESTRAS = [
    ayuda:"El segundo eje de cada gasto. El CONCEPTO dice qué se gastó —combustible, patentes, sueldos— y el ÁREA dice para qué: instalaciones, comercial, depósito. Cruzados, el reporte de Egresos te dice cuánto te cuesta cada área. El sueldo del instalador va a Instalaciones, el del depósito a Depósito, la publicidad a Comercial. El «Orden» es el que se usa para listarlas.",
    cols:[{c:"orden", t:"Orden", num:true, ph:"1"}]},
   {k:"per", extra:true, tabla:"personal", titulo:"Personal",
-   ayuda:"Las personas a las que se les puede imputar un gasto: sueldos, cargas sociales, fondo de desempleo, combustible. NO es la lista de usuarios del sistema —acá van también los que no entran a la computadora—. Cargar la persona acá evita lo que pasó en Pirka, donde cada empleado nuevo agregaba dos conceptos y la lista llegó a 226. Cuando alguien se va, se pone en «Activo: No» y desaparece del desplegable sin borrarse del historial.",
-   cols:[]},
+   ayuda:"Las personas a las que se les puede imputar un gasto: sueldos, cargas sociales, fondo de desempleo, combustible. NO es la lista de usuarios del sistema —acá van también los que no entran a la computadora—. Cargar la persona acá evita lo que pasó en Pirka, donde cada empleado nuevo agregaba dos conceptos y la lista llegó a 226. Cuando alguien se va, se pone en «Activo: No» y desaparece del desplegable sin borrarse del historial.<br><b>Cargale el área a cada uno.</b> Es lo que hace que el gasto se clasifique solo cuando elegís la persona, y lo que permite que el reporte filtrado por «Instalaciones» te muestre a toda la gente de instalaciones sin depender de que alguien se haya acordado de poner el área a mano.",
+   cols:[{c:"area_id", t:"Área", sel:function(){ return M.agt||[]; }}]},
   {k:"veh", extra:true, tabla:"vehiculos", titulo:"Vehículos",
    ayuda:"Las camionetas y autos del negocio. Sirve para que combustible, patente, seguro y service se puedan imputar a cada uno y saber cuánto cuesta mantener cada vehículo por separado.",
    cols:[{c:"patente", t:"Patente", ph:"AB 123 CD"}]},
@@ -1658,20 +1658,42 @@ const MAESTRAS = [
    cols:[{c:"desde", t:"Desde", ph:"09:00"},{c:"hasta", t:"Hasta", ph:"13:00"}]}
 ];
 
+/* Una columna de tabla básica puede ser texto, número o —desde el 9/8/2026— un
+   desplegable que apunta a otra tabla básica. Hizo falta porque «personal» tenía
+   la columna area_id desde el principio y NO había forma de cargarla desde
+   ninguna pantalla: quedaban las ocho personas sin área y el gasto no se podía
+   clasificar solo. Misma clase de columna muerta que la ubicación del producto. */
+function celdaMaestra(idInput, c, valor){
+  if (c.sel){
+    let lista = []; try{ lista = c.sel() || []; }catch(e){ lista = []; }
+    return '<select id="'+idInput+'"><option value="">— ninguna —</option>'+
+      lista.filter(y=>y.activo!==false || String(y.id)===String(valor))
+        .map(y=>'<option value="'+y.id+'" '+(String(valor||"")===String(y.id)?"selected":"")+'>'+esc(y.nombre)+'</option>').join("")+
+      '</select>';
+  }
+  return '<input id="'+idInput+'" '+(c.num?'type="number" step="0.01"':'')+
+    (valor==null ? ' placeholder="'+esc(c.ph||"")+'"' : ' value="'+esc(valor)+'"')+'>';
+}
+function textoMaestra(c, valor){
+  if (!c.sel) return esc(valor);
+  let lista = []; try{ lista = c.sel() || []; }catch(e){ lista = []; }
+  return esc(nom(lista, valor) || "—");
+}
+
 /* Un bloque de tabla basica: se usa en Tablas básicas y también en Configuración > Horarios */
 function maestraBloque(m){
     const puede = P("maestra-modificar");
     const arr = M[m.k]||[];
     const filaNueva = puede ? '<tr style="background:#f6fbf7">'+
         '<td><input id="n_'+m.k+'_nombre" placeholder="Escribí el nombre nuevo"></td>'+
-        m.cols.map(c=>'<td><input id="n_'+m.k+'_'+c.c+'" '+(c.num?'type="number" step="0.01"':'')+' placeholder="'+esc(c.ph||"")+'"></td>').join("")+
+        m.cols.map(c=>'<td>'+celdaMaestra('n_'+m.k+'_'+c.c, c, null)+'</td>').join("")+
         '<td>—</td><td><button class="btn btn-sm" onclick="maestraAgregar(\''+m.k+'\')">Agregar</button></td></tr>' : '';
     const filas = arr.map(function(o){
       const id = m.k+'_'+o.id;
-      if (!puede) return '<tr><td>'+esc(o.nombre)+'</td>'+m.cols.map(c=>'<td>'+esc(o[c.c])+'</td>').join("")+'<td>'+(o.activo?"Sí":"No")+'</td></tr>';
+      if (!puede) return '<tr><td>'+esc(o.nombre)+'</td>'+m.cols.map(c=>'<td>'+textoMaestra(c,o[c.c])+'</td>').join("")+'<td>'+(o.activo?"Sí":"No")+'</td></tr>';
       return '<tr'+(o.activo?'':' style="opacity:.55"')+'>'+
         '<td><input id="e_'+id+'_nombre" value="'+esc(o.nombre)+'"></td>'+
-        m.cols.map(c=>'<td><input id="e_'+id+'_'+c.c+'" '+(c.num?'type="number" step="0.01"':'')+' value="'+esc(o[c.c])+'"></td>').join("")+
+        m.cols.map(c=>'<td>'+celdaMaestra('e_'+id+'_'+c.c, c, o[c.c]==null?"":o[c.c])+'</td>').join("")+
         '<td><select id="e_'+id+'_activo"><option value="1" '+(o.activo?"selected":"")+'>Sí</option><option value="0" '+(!o.activo?"selected":"")+'>No</option></select></td>'+
         '<td><button class="btn2 btn-sm" onclick="maestraGuardar(\''+m.k+'\','+o.id+')">Guardar</button></td></tr>';
     }).join("");
@@ -1705,7 +1727,7 @@ function maestraVal(prefijo, m, incluirActivo, id){
   o.nombre = (g("nombre")||"").trim();
   m.cols.forEach(function(c){
     let v = g(c.c);
-    if (v === "" || v == null) v = null; else if (c.num) v = Number(v);
+    if (v === "" || v == null) v = null; else if (c.num || c.sel) v = Number(v);
     o[c.c] = v;
   });
   if (incluirActivo) o.activo = g("activo") === "1";
@@ -2192,6 +2214,22 @@ const FX_GASTO = function(){
 };
 /* Lo mismo del lado de la plata que entra. */
 const FX_COBRO = function(){ return [{k:"cconc", t:"Concepto", lista:M.cco||[], sin:"Sin concepto"}]; };
+/* El área de un gasto: la que tiene cargada, y si no tiene, la del área de la
+   persona a la que se le imputó.
+   Pedido de Gustavo (9/8/2026): "si pongo área Instalaciones me sale cero. No me
+   tendría que salir todas las personas que están atadas a instalaciones ahí".
+   Tenía razón en el criterio. El sueldo de un instalador ES gasto de instalaciones
+   aunque quien cargó el gasto no haya puesto el área: el área ya está dicha por la
+   persona. Se hereda, no se inventa — si la persona tampoco tiene área, queda sin
+   área y el reporte lo dice. */
+function areaIdGasto(x){
+  if (x.area_id) return x.area_id;
+  if (x.persona_id && M.per){
+    const p = M.per.find(function(y){ return y.id === x.persona_id; });
+    if (p && p.area_id) return p.area_id;
+  }
+  return null;
+}
 /* Aplica los desplegables de arriba a una lista de gastos ya traída de la base. */
 function filtGasto(gs, f){
   const e = (f && f.ext) || {};
@@ -2201,7 +2239,7 @@ function filtGasto(gs, f){
     return String(v||"") === String(sel);
   };
   return gs.filter(function(x){
-    return ok(x.concepto_id, e.conc) && ok(x.area_id, e.area)
+    return ok(x.concepto_id, e.conc) && ok(areaIdGasto(x), e.area)
         && ok(x.persona_id, e.pers) && ok(x.vehiculo_id, e.veh);
   });
 }
@@ -2616,7 +2654,8 @@ const REPORTES = [
    /* por imputación: el gasto pertenece al mes que corresponde, no al día que se pagó */
    const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda)), f);
    const hayArea = !!M.agt;
-   const areaDe = x => hayArea ? (x.area_id ? (nom(M.agt,x.area_id)||"Sin área") : "— sin área —") : "";
+   const areaDe = function(x){ if (!hayArea) return "";
+     const a = areaIdGasto(x); return a ? (nom(M.agt,a)||"Sin área") : "— sin área —"; };
    const g = agrupar(gs, x=>areaDe(x)+"§"+(nom(M.cga,x.concepto_id)||"Sin concepto")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){
@@ -2633,9 +2672,14 @@ const REPORTES = [
    });
    const cols = (hayArea?[{t:"Área"}]:[]).concat([{t:"Concepto"},{t:"Moneda"},{t:"Gastos",tipo:"n"},
      {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}]);
-   const sinArea = hayArea ? gs.filter(x=>!x.area_id).length : 0;
+   const sinArea = hayArea ? gs.filter(x=>!areaIdGasto(x)).length : 0;
+   const heredada = hayArea ? gs.filter(x=>!x.area_id && areaIdGasto(x)).length : 0;
+   const t = resumenFiltros();
    return {cols:cols, filas:filas,
-     nota: sinArea ? (sinArea+" gasto(s) sin área cargada: aparecen agrupados en «— sin área —». Se corrigen abriendo el gasto, o cargándola de entrada en los nuevos.") : ""};
+     nota: [ t ? "Filtrado por "+t+"." : "",
+       heredada ? (heredada+" gasto(s) no tenían área cargada y tomaron la de la persona a la que están imputados.") : "",
+       sinArea ? (sinArea+" gasto(s) siguen sin área: aparecen en «— sin área —». Se arreglan de dos formas: cargándole el área a la persona en Tablas básicas › Personal, o clasificando el gasto desde Finanzas › Gastos.") : ""
+     ].filter(Boolean).join(" ")};
  }},
 
 /* Pedido de Gustavo (9/8/2026): el de arriba agrupa, y él necesita ver los gastos
@@ -2654,7 +2698,8 @@ const REPORTES = [
               {t:"Neto",tipo:"m"},{t:"IVA",tipo:"m"},{t:"Total",tipo:"m"}]);
    const filas = gs.map(function(x){
      return [x.fecha_imputacion||x.fecha, x.fecha, nom(M.cga,x.concepto_id)||"Sin concepto"]
-       .concat(M.agt?[x.area_id?(nom(M.agt,x.area_id)||"?"):"— sin área —"]:[])
+       .concat(M.agt?[(function(){ const a = areaIdGasto(x);
+          return a ? ((nom(M.agt,a)||"?") + (x.area_id ? "" : " (por la persona)")) : "— sin área —"; })()]:[])
        .concat(M.per?[x.persona_id?(nom(M.per,x.persona_id)||"?"):""]:[])
        .concat(M.veh?[x.vehiculo_id?(nom(M.veh,x.vehiculo_id)||"?"):""]:[])
        .concat([x.detalle_extra||"", x.proveedor||"", x.nro_comprobante||"",
@@ -2672,7 +2717,7 @@ const REPORTES = [
  run: async function(f){
    if (!M.per) return {cols:[{t:"Persona"}], filas:[], nota:"falta correr la migración de personal en la base."};
    const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && x.persona_id && (!f.moneda||x.moneda===f.moneda)), f);
-   const g = agrupar(gs, x=>(nom(M.per,x.persona_id)||"?")+"§"+(M.agt&&x.area_id?(nom(M.agt,x.area_id)||"—"):"—")+"|"+x.moneda);
+   const g = agrupar(gs, x=>(nom(M.per,x.persona_id)||"?")+"§"+(M.agt?(nom(M.agt,areaIdGasto(x))||"—"):"—")+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr,k){ const pp = k.split("|"), pa = pp[0].split("§");
      filas.push([pa[0], pa[1], pp[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.importe)]); });
@@ -2699,7 +2744,7 @@ const REPORTES = [
  run: async function(f){
    if (!M.agt) return {cols:[{t:"Área"}], filas:[], nota:"falta correr la migración de áreas de gasto en la base."};
    const gs = filtGasto((await traer("gastos","*",f,"fecha_imputacion")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda)), f);
-   const g = agrupar(gs, x=>(x.area_id ? (nom(M.agt,x.area_id)||"Sin área") : "— sin área —")+"|"+x.moneda);
+   const g = agrupar(gs, x=>{ const a = areaIdGasto(x); return (a ? (nom(M.agt,a)||"Sin área") : "— sin área —")+"|"+x.moneda; });
    const filas = [];
    g.forEach(function(arr,k){ const p = k.split("|");
      filas.push([p[0], p[1], arr.length, sum(arr,x=>x.neto), sum(arr,x=>x.iva), sum(arr,x=>x.importe)]); });
