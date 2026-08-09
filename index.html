@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-79";
+const VERSION = "v2026.08.09-80";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3128,6 +3128,45 @@ const REPORTES = [
          y.descripcion||nomProd(y.producto_id), y.cantidad, y.peso]; })};
  }},
 
+/* Pedido de Gustavo (9/8/2026), la última pieza del circuito de instalación:
+   "que tenga su reporte, para computar en gastos adicionales o sobrantes".
+   Sale de stock_movimientos con origen «Remito extra». NO mezcla las entregas
+   normales, que llevan origen «Remito»: si las mezclara, cada entrega contaría como
+   material gastado de más y el reporte diría cualquier cosa. */
+{id:"obra_extras", t:"Insumos y sobrantes de obra", g:"Depósito", perm:"stock-consultar",
+ ay:"Lo que las instalaciones consumieron por encima de lo cotizado y lo que volvió al depósito, con su motivo: insumos que no se cargaron en el remito, roturas, faltantes mal cotizados y sobrantes. Es el reporte que dice cuánto se comió la obra que el presupuesto no contemplaba. Las cantidades salen de los movimientos de stock, así que son las mismas que mueven el depósito: no hay una segunda cuenta.",
+ run: async function(f){
+   const r = await sb.from("stock_movimientos").select("*").eq("origen","Remito extra")
+               .gte("fecha", f.desde || "1900-01-01").lte("fecha", f.hasta || "2999-12-31")
+               .order("fecha").limit(3000);
+   if (r.error) throw new Error(r.error.message);
+   const movs = (r.data||[]).filter(x=>!x.anulado);
+   if (!movs.length) return {cols:[{t:"Motivo"}], filas:[],
+     nota:"Todavía no se cargó ningún insumo ni sobrante. Se cargan desde la venta con instalación → Remito de entrega → «Insumos y sobrantes»."};
+   if (!PRODS.length) await cargarCatalogo();
+   if (!M.mst){ try{ await cargarMaestrasExtra(); }catch(e){} }
+   const g = agrupar(movs, x=>((M.mst? (nom(M.mst,x.motivo_id)||"Sin motivo") : "Sin motivo")+"§"+nomProd(x.producto_id)));
+   const pares = [];
+   g.forEach(function(arr,k){
+     const pp = k.split("§");
+     const sal = sum(arr.filter(x=>Number(x.cantidad)<0), x=>-Number(x.cantidad));
+     const vol = sum(arr.filter(x=>Number(x.cantidad)>0), x=>Number(x.cantidad));
+     pares.push({fila:[pp[0], pp[1], arr.length, sal, vol, sal - vol], arr:arr});
+   });
+   const or = ordenarConDetalle(pares, function(a,b){
+     const c = String(a[0]).localeCompare(String(b[0]),"es"); return c || (b[5]-a[5]); });
+   const filas = or.filas, dets = or.dets;
+   return {cols:[{t:"Motivo"},{t:"Producto"},{t:"Renglones",tipo:"n"},{t:"Salió de más",tipo:"n"},
+                 {t:"Volvió",tipo:"n"},{t:"Neto consumido",tipo:"n"}], filas:filas,
+     det: function(i){
+       const arr = (dets[i]||[]).slice().sort((a,b)=> a.fecha<b.fecha?-1:1);
+       return {titulo:(filas[i]||[])[0]+" · "+(filas[i]||[])[1],
+         cols:[{t:"Fecha",tipo:"f"},{t:"Producto"},{t:"Cantidad",tipo:"n"},{t:"Stock antes",tipo:"n"},{t:"Stock después",tipo:"n"},{t:"Detalle"}],
+         filas: arr.map(x=>[x.fecha, nomProd(x.producto_id), x.cantidad, x.stock_anterior, x.stock_posterior, x.detalle||""])};
+     },
+     nota:"«Neto consumido» es lo que salió menos lo que volvió: es el material que la obra se llevó de verdad. Las entregas normales del remito NO están acá — este cuadro es solo lo que se agregó o devolvió por encima de lo vendido."};
+ }},
+
 {id:"planificadas", t:"Entregas e instalaciones Planificadas", g:"Depósito", perm:"stock-consultar",
  ay:"La semana del depósito y de la cuadrilla: qué hay que entregar e instalar, y en qué orden. Toma las fechas cargadas en cada venta. Si el rango de fechas queda vacío, muestra de hoy en adelante.",
  run: async function(f){
@@ -4245,15 +4284,23 @@ async function formRemito(ventaId){
   if (!CLIS.length) await cargarClientes();
   const cli = CLIS.find(x=>x.id===v.data.cliente_id);
   const pend = (i.data||[]).filter(x=>!x.es_adicional && (Number(x.cantidad||0) - Number(x.entregado||0)) > 0.0001);
-  REM = {venta:v.data, items:pend, remitos:r.data||[]};
+  REM = {venta:v.data, items:pend, remitos:r.data||[], todos:(i.data||[])};
+  /* Si algún renglón de la venta va instalado, esta venta lleva cuadrilla, y por
+     lo tanto puede tener insumos, roturas y sobrantes. */
+  const llevaInstal = (i.data||[]).some(function(x){ return x.con_instalacion; });
   $("dtit").textContent = "Remitos · " + v.data.codigo;
   $("dbody").innerHTML = '<div id="remmsg"></div>'+
    ((r.data||[]).length? '<div class="sec">Remitos ya hechos de esta venta</div>'+
      '<div class="tablewrap"><table><thead><tr><th>Número</th><th>Fecha</th><th>Dirección</th><th></th></tr></thead><tbody>'+
      r.data.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td>'+
        '<td style="white-space:normal">'+esc(x.direccion)+'</td>'+
-       '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="verRemito('+x.id+')">Ver e imprimir</button> <button class="btn2 btn-sm" onclick="anularRemito('+x.id+','+ventaId+')">Anular</button>')+'</td></tr>').join("")+
-     '</tbody></table></div>' : '')+
+       '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':'<button class="btn2 btn-sm" onclick="verRemito('+x.id+')">Ver e imprimir</button>'+
+          /* Solo en venta con instalación, como lo pidió Gustavo: en un producto
+             suelto no hay cuadrilla que gaste pegamento ni que devuelva sobrante. */
+          (llevaInstal? ' <button class="btn2 btn-sm" onclick="formExtraRemito('+x.id+','+ventaId+')">Insumos y sobrantes</button>' : '')+
+          ' <button class="btn2 btn-sm" onclick="anularRemito('+x.id+','+ventaId+')">Anular</button>')+'</td></tr>').join("")+
+     '</tbody></table></div>'+
+     (llevaInstal? '<div class="muted" style="margin-top:6px">Esta venta lleva instalación. Con <b>«Insumos y sobrantes»</b> cargás lo que la cuadrilla usó de más —pegamento, perfiles, una placa que se rompió— o lo que volvió al depósito. Sale o entra del stock en el acto y queda en el reporte de la obra.</div>' : '') : '')+
    '<div class="sec">Nuevo remito</div>'+
    (pend.length? '<div class="muted" style="margin-bottom:8px">Poné cuánto entregás de cada renglón. Podés hacer entregas parciales: el sistema lleva la cuenta de lo que falta. <b>Lo que entregás descuenta stock.</b></div>'+
      '<div class="grid">'+
@@ -4282,6 +4329,87 @@ async function guardarRemito(ventaId){
   if (error){ $("remmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   formRemito(ventaId);
 }
+/* ── Insumos, roturas y sobrantes de una instalación (v51, 9/8/2026) ──
+   No hay tabla nueva: cada renglón es un movimiento de stock con su motivo, colgado
+   del remito con origen «Remito extra». Así el stock se cuenta en un solo lugar.
+   Cantidad NEGATIVA = salió de más. POSITIVA = volvió al depósito. */
+let EXTRA = {remito:null, ventaId:null, movs:[]};
+async function formExtraRemito(remitoId, ventaId){
+  if (!PRODS.length) await cargarCatalogo();
+  if (!M.mst){ try{ await cargarMaestrasExtra(); }catch(e){} }
+  const [r, mv] = await Promise.all([
+    sb.from("remitos").select("*").eq("id",remitoId).single(),
+    sb.from("stock_movimientos").select("*").eq("origen","Remito extra").eq("ref_id",remitoId).order("id")
+  ]);
+  if (r.error) return alert(r.error.message);
+  EXTRA = {remito:r.data, ventaId:ventaId, movs:(mv.data||[])};
+  pintarExtraRemito();
+  try{ $("dlg").showModal(); }catch(e){}
+}
+function pintarExtraRemito(){
+  const r = EXTRA.remito, movs = EXTRA.movs.filter(function(x){ return !x.anulado; });
+  const puede = P("stock-modificar");
+  const salio = movs.filter(x=>Number(x.cantidad)<0), volvio = movs.filter(x=>Number(x.cantidad)>0);
+  $("dtit").textContent = "Insumos y sobrantes · " + (r.codigo||"");
+  $("dbody").innerHTML = '<div id="exmsg"></div>'+
+   '<div class="desc">Lo que la obra consumió por encima de lo cotizado y lo que volvió al depósito. '+
+   'Un panel vendido puede necesitar pegamento que no se cargó en el remito; una placa se puede romper; puede sobrar material y volver. '+
+   '<b>Cada renglón mueve el stock en el acto</b> y queda con su motivo, su fecha y quién lo cargó. Nada se borra: se anula desde Stock.</div>'+
+   (movs.length? '<div class="kpis" style="margin-bottom:10px">'+
+      '<div class="kpi" style="border-left-color:#7a2415"><div class="t">Salió de más</div><div class="n">'+fmtN(Math.abs(sum(salio,x=>x.cantidad)))+'</div><div class="muted">'+salio.length+' renglón(es)</div></div>'+
+      '<div class="kpi" style="border-left-color:#1d5b2c"><div class="t">Volvió al depósito</div><div class="n">'+fmtN(sum(volvio,x=>x.cantidad))+'</div><div class="muted">'+volvio.length+' renglón(es)</div></div>'+
+      '</div>'+
+     '<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Motivo</th><th>Cantidad</th><th>Detalle</th></tr></thead><tbody>'+
+     movs.map(function(x){ const neg = Number(x.cantidad)<0;
+       return '<tr><td>'+fmtF(x.fecha)+'</td><td><b>'+esc(nomProd(x.producto_id))+'</b></td>'+
+        '<td>'+esc(M.mst?(nom(M.mst,x.motivo_id)||"—"):"—")+'</td>'+
+        '<td style="color:'+(neg?'#7a2415':'#1d5b2c')+';font-weight:600">'+(neg?'':'+')+fmtN(x.cantidad)+'</td>'+
+        '<td style="white-space:normal">'+esc(x.detalle)+'</td></tr>';
+     }).join("")+'</tbody></table></div>'
+    : '<div class="muted">Todavía no se cargó nada en este remito.</div>')+
+   (puede? '<div class="sec">Agregar</div>'+
+     '<div class="grid">'+
+       '<div class="f"><label>Producto *</label><select id="ex_prod">'+
+         PRODS.filter(x=>x.activo!==false).map(x=>'<option value="'+x.id+'">'+esc(x.codigo?x.codigo+" · ":"")+esc(x.nombre)+'</option>').join("")+'</select></div>'+
+       '<div class="f"><label>¿Qué pasó? *</label><select id="ex_signo" onchange="extraSignoAyuda()">'+
+         '<option value="-1">Salió de más (insumo, rotura, faltante)</option>'+
+         '<option value="1">Volvió al depósito (sobrante)</option></select></div>'+
+       '<div class="f"><label>Cantidad *</label><input type="number" step="0.01" min="0" id="ex_cant" placeholder="siempre en positivo"></div>'+
+       (M.mst? '<div class="f"><label>Motivo *</label><select id="ex_motivo">'+
+         M.mst.filter(x=>x.activo).map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+'</option>').join("")+'</select>'+
+         '<div class="muted" style="font-size:.85em;margin-top:4px">Se amplía desde Tablas básicas › Motivos Modificación Stock.</div></div>' : '')+
+     '</div>'+
+     '<div class="f"><label>Detalle</label><input id="ex_detalle" placeholder="a qué corresponde: «pegamento que no estaba cotizado», «se rompió una placa al cortar»…"></div>'+
+     '<div class="muted" id="ex_ayuda" style="margin-bottom:8px"></div>'+
+     '<div class="acciones"><button class="btn" id="ex_guardar" onclick="guardarExtraRemito()">Agregar y mover el stock</button>'+
+     '<button class="btn2" onclick="formRemito('+EXTRA.ventaId+')">Volver a los remitos</button></div>'
+    : '<div class="muted">Tu rol puede ver esto pero no cargar movimientos de stock.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="formRemito('+EXTRA.ventaId+')">Volver</button></div>');
+  extraSignoAyuda();
+}
+function extraSignoAyuda(){
+  const el = $("ex_ayuda"), sg = $("ex_signo"); if (!el || !sg) return;
+  el.innerHTML = sg.value === "1"
+    ? 'Va a <b>sumar</b> al stock: el material vuelve al depósito y deja de ser costo de esta obra.'
+    : 'Va a <b>restar</b> del stock: es material que salió y no estaba en el remito. Es lo que la instalación costó de más.';
+}
+async function guardarExtraRemito(){
+  const err = t => { $("exmsg").innerHTML = '<div class="msg err">'+esc(t)+'</div>'; };
+  const prod = ($("ex_prod")||{}).value, cant = Number(($("ex_cant")||{}).value||0);
+  const signo = Number(($("ex_signo")||{}).value||-1);
+  const motivo = ($("ex_motivo")||{}).value;
+  if (!prod) return err("Elegí el producto.");
+  if (!(cant > 0)) return err("Poné la cantidad en positivo: el «salió» o «volvió» lo define el desplegable de al lado.");
+  if (!motivo) return err("Elegí el motivo. Sin motivo, dentro de un mes nadie sabe por qué se movió el stock.");
+  $("ex_guardar").disabled = true;
+  const r = await sb.rpc("extra_remito", {p_remito:Number(EXTRA.remito.id), p_producto:Number(prod),
+     p_cantidad: signo * cant, p_motivo: Number(motivo), p_detalle: ($("ex_detalle")||{}).value || null});
+  $("ex_guardar").disabled = false;
+  if (r.error) return err(r.error.message);
+  await formExtraRemito(EXTRA.remito.id, EXTRA.ventaId);
+  $("exmsg").innerHTML = '<div class="msg ok">Cargado. El stock ya quedó movido.</div>';
+}
+
 async function anularRemito(id, ventaId){
   const m = prompt("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado."); if (m===null) return;
   const {error} = await sb.rpc("anular_remito",{p_id:id, p_motivo:m||"Sin motivo"});
