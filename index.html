@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.10-81";
+const VERSION = "v2026.08.10-82";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -318,6 +318,11 @@ $("hsalir").onclick = async () => { await sb.auth.signOut(); location.reload(); 
 $("hmenu").onclick = () => document.body.classList.toggle("menu-abierto");
 $("tapa").onclick  = () => document.body.classList.remove("menu-abierto");
 $("dcerrar").onclick = () => $("dlg").close();
+/* 10/8: si se cierra el diálogo a mitad de un alta de cliente que venía de una
+   venta o de un prospecto, las banderas quedaban prendidas y el próximo alta
+   de cliente —de cualquier pantalla— saltaba a la venta vieja y enganchaba un
+   prospecto ajeno. Al cerrar, se apagan siempre. */
+$("dlg").addEventListener("close", function(){ _VOLVER_A_VENTA = false; _PROS_CLI = null; });
 
 sb.auth.onAuthStateChange((_e, session) => { if (session) arrancar(); });
 sb.auth.getSession().then(({data}) => { if (data.session) arrancar(); });
@@ -589,6 +594,8 @@ function ir(v, sub){
   VISTA = v; SUBVISTA = sub || "";
   // las opciones "Nuevo" abren la ficha y dejan el listado detrás
   if (SUBVISTA === "nuevo"){
+    /* 10/8: Importaciones→Nuevo y Gastos→Nuevo estaban en bloques de más abajo
+       que nunca corrían, porque este if atrapa a TODAS las vistas. Ahora viven acá. */
     SUBVISTA = "";
     pintarNav();
     (VISTAS[v]||VISTAS.tablero)();
@@ -597,22 +604,14 @@ function ir(v, sub){
       else if (v==="presup") abrirPresupuesto(null);
       else if (v==="provee") fichaProveedor(null);
       else if (v==="docs") formDocumento(null);
+      else if (v==="import") nuevoEmbarque();
+      else if (v==="gastos"){ formGasto(); try{ $("dlg").showModal(); }catch(e){} }
     }, 350);
     return;
   }
   if (SUBVISTA === "nueva"){
     SUBVISTA = ""; pintarNav(); (VISTAS[v]||VISTAS.tablero)();
     setTimeout(function(){ if (v==="ventas") formVentaNueva(null); }, 350);
-    return;
-  }
-  if (v === "import" && SUBVISTA === "nuevo"){
-    SUBVISTA = ""; pintarNav(); VISTAS.import();
-    setTimeout(function(){ nuevoEmbarque(); }, 400);
-    return;
-  }
-  if (v === "gastos" && SUBVISTA === "nuevo"){
-    SUBVISTA = ""; pintarNav(); VISTAS.gastos();
-    setTimeout(function(){ formGasto(); try{ $("dlg").showModal(); }catch(e){} }, 400);
     return;
   }
   pintarNav();
@@ -630,7 +629,10 @@ async function traerProspectos(f){
     if (f.estado) q = q.eq("estado", f.estado);
     if (f.ato) q = q.eq("ato_id", f.ato);
     if (f.vl)  q = q.eq("vl_id", f.vl);
-    if (f.texto) q = q.or("nombre.ilike.%"+f.texto+"%,codigo.ilike.%"+f.texto+"%,telefono.ilike.%"+f.texto+"%,celular.ilike.%"+f.texto+"%,email.ilike.%"+f.texto+"%,direccion.ilike.%"+f.texto+"%,motivo_consulta.ilike.%"+f.texto+"%,nro_presup_papel.ilike.%"+f.texto+"%");
+    /* 10/8: una coma o un paréntesis en la búsqueda rompía el filtro de
+       PostgREST («failed to parse logic tree»). Se limpian antes de armar. */
+    const ftxt = (f.texto||"").replace(/[(),]/g," ").trim();
+    if (ftxt) q = q.or("nombre.ilike.%"+ftxt+"%,codigo.ilike.%"+ftxt+"%,telefono.ilike.%"+ftxt+"%,celular.ilike.%"+ftxt+"%,email.ilike.%"+ftxt+"%,direccion.ilike.%"+ftxt+"%,motivo_consulta.ilike.%"+ftxt+"%,nro_presup_papel.ilike.%"+ftxt+"%");
   }
   const {data,error} = await q;
   if (error){ alert("Error leyendo prospectos: "+error.message); return []; }
@@ -1240,7 +1242,7 @@ async function abrir(id){
       /* Venta rápida (10/8/2026): para el que viene a comprar ya decidido, sin
          visita ni presupuesto previo. Se esconde si el prospecto ya tiene una
          venta detrás, para no venderle dos veces. */
-      (P("venta-agregar") && p.resultado!=="Vendido" && !presPros.some(x=>x.estado==="Vendido")
+      (P("venta-agregar") && P("presupuesto-consultar") && p.resultado!=="Vendido" && !presPros.some(x=>x.estado==="Vendido")
         ?'<button class="btn2" onclick="ventaDesdeProspecto('+id+')" title="Venta rápida: si el cliente no existe lo cargás ahí mismo, y el presupuesto cerrado queda solo detrás">Venta directa</button>':'')+
       (P("prospecto-eliminar")?'<button class="btn3" id="dborrar">Eliminar</button>':'')+
     '</div>'+
@@ -1281,6 +1283,11 @@ async function abrir(id){
     }
     p.resultado = o.resultado;
     let extra = "";
+    /* 10/8: si quien marca «Vendido» no puede registrar ventas, antes quedaba
+       el prospecto Vendido sin venta detrás y sin ningún aviso. */
+    if (pasaAVendido && !P("venta-agregar")){
+      extra = '<div class="msg err" style="margin-top:8px">El resultado quedó en «Vendido», pero tu rol no puede registrar ventas: <b>la venta NO se generó</b>. Avisale a alguien con permiso de ventas para que la registre desde el presupuesto.</div>';
+    }
     if (pasaAVendido && P("venta-agregar")){
       $("dmsg").innerHTML = '<div class="msg">Cambios guardados. Registrando la venta…</div>';
       const r = await cerrarVentaDesdeProspecto(id);
@@ -3530,7 +3537,8 @@ async function pintarPresupuestos(){
   }
   if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
   if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
-  if (FPRE.texto)  q = q.or("cliente_nombre.ilike.%"+FPRE.texto+"%,codigo.ilike.%"+FPRE.texto+"%,nro_papel.ilike.%"+FPRE.texto+"%,cliente_tel.ilike.%"+FPRE.texto+"%,cliente_email.ilike.%"+FPRE.texto+"%,direccion_obra.ilike.%"+FPRE.texto+"%");
+  const ptxt = (FPRE.texto||"").replace(/[(),]/g," ").trim();
+  if (ptxt)  q = q.or("cliente_nombre.ilike.%"+ptxt+"%,codigo.ilike.%"+ptxt+"%,nro_papel.ilike.%"+ptxt+"%,cliente_tel.ilike.%"+ptxt+"%,cliente_email.ilike.%"+ptxt+"%,direccion_obra.ilike.%"+ptxt+"%");
   const {data,error} = await q;
   if (error){ $("qlista").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
   if (!data.length){ $("qlista").innerHTML = '<div class="muted">Todavía no hay presupuestos con ese filtro.</div>'; return; }
@@ -3793,7 +3801,13 @@ function pintarFichaPre(){
     const t = calcTotales();
     if (!(t.total > 0)){ $("qmsg").innerHTML = '<div class="msg err">El presupuesto tiene total cero. Cargale los renglones antes de venderlo.</div>'; return; }
     if (!confirm("Vas a pasar este presupuesto a VENTA por "+fmtM(t.total, PRE.cab.moneda)+".\n\nEso genera la venta y le carga la deuda al cliente en su cuenta corriente. ¿Confirmás?")) return;
-    $("w_estado").value = "Vendido";
+    /* 10/8: el desplegable filtra «Vendido» a propósito, así que la opción no
+       existe y setear el value la dejaba VACÍA: el guardado no veía «Vendido» y
+       la venta nunca se generaba. Se agrega la opción justo antes de elegirla. */
+    const se = $("w_estado");
+    if (!Array.from(se.options).some(function(o){ return o.value === "Vendido" || o.text === "Vendido"; }))
+      se.add(new Option("Vendido","Vendido"));
+    se.value = "Vendido";
     guardarPresupuesto();
   };
   if (puede) $("w_guardar").onclick = guardarPresupuesto;
@@ -4930,10 +4944,14 @@ VISTAS.cheques = async function(){
   if (SUBVISTA === "chequeras") return pintarChequeras();
   const hoyS = hoy();
   let q = sb.from("cheques").select("*").order("vencimiento",{ascending:true}).limit(500);
-  if (SUBVISTA === "propios") q = q.eq("tipo","Propios"); else q = q.eq("tipo","Terceros");
+  /* 10/8: «A vencer» y «Vencidos» son la alarma de tesorería y valen para los
+     DOS tipos: un cheque propio entregado y sin fondos es justo lo que hay que
+     cubrir. Antes la alarma forzaba Terceros y los propios nunca aparecían. */
+  if (SUBVISTA === "propios") q = q.eq("tipo","Propios");
+  else if (SUBVISTA !== "avencer" && SUBVISTA !== "vencidos") q = q.eq("tipo","Terceros");
   if (SUBVISTA === "disponibles") q = q.eq("estado","Disponible");
-  if (SUBVISTA === "avencer")  q = q.gte("vencimiento", hoyS).eq("estado","Disponible");
-  if (SUBVISTA === "vencidos") q = q.lt("vencimiento", hoyS).eq("estado","Disponible");
+  if (SUBVISTA === "avencer")  q = q.gte("vencimiento", hoyS).in("estado",["Disponible","Entregado"]);
+  if (SUBVISTA === "vencidos") q = q.lt("vencimiento", hoyS).in("estado",["Disponible","Entregado"]);
   const {data,error} = await q;
   if (error){ $("main").innerHTML = '<div class="panel"><h2>Cheques</h2><div class="msg err">'+esc(error.message)+'</div></div>'; return; }
   const t = FCHQ.toLowerCase();
@@ -5055,7 +5073,12 @@ async function guardarCheque(){
 async function estadoCheque(id){
   const e = prompt("Nuevo estado del cheque: Disponible, Depositado, Entregado, Cobrado o Rechazado");
   if (e === null) return;
-  const {error} = await sb.rpc("cambiar_estado_cheque",{p_id:id, p_estado:e.trim(), p_motivo:null});
+  /* 10/8: el texto libre iba crudo a la base — un typo o una minúscula
+     grababa un estado inexistente. Se normaliza contra la lista. */
+  const validos = ["Disponible","Depositado","Entregado","Cobrado","Rechazado"];
+  const e2 = validos.find(function(v){ return v.toLowerCase() === e.trim().toLowerCase(); });
+  if (!e2) return alert("«"+e.trim()+"» no es un estado válido. Tiene que ser uno de: "+validos.join(", ")+".");
+  const {error} = await sb.rpc("cambiar_estado_cheque",{p_id:id, p_estado:e2, p_motivo:null});
   if (error) return alert(error.message);
   VISTAS.cheques();
 }
@@ -5814,6 +5837,14 @@ async function guardarPago(){
   const tc = Number(($("pa_tc")||{}).value||0);
   const imputaciones = [];
   PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0; if (v>0) imputaciones.push({factura_id:x.id, importe:v}); });
+  /* 10/8: mismo candado que en la cobranza — ni más que el saldo de cada
+     factura, ni más que el importe del pago. La base también lo frena (v52). */
+  let malImp = null;
+  PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0;
+    if (x.saldo!=null && v > Number(x.saldo)+0.009) malImp = 'A la factura '+esc(x.nro_comprobante||x.nro||('#'+x.id))+' no le podés imputar más que su saldo ('+fmtM(x.saldo,PAG.moneda)+').'; });
+  const sumaImp = imputaciones.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  if (!malImp && sumaImp > imp+0.009) malImp = 'Estás imputando '+fmtM(sumaImp,PAG.moneda)+' y el pago es de '+fmtM(imp,PAG.moneda)+': no se puede imputar más de lo que sale.';
+  if (malImp) return err(malImp);
   $("pa_guardar").disabled = true;
   const nroCh = ($("pa_ch_numero")||{}).value || "";
   let error;
@@ -5964,7 +5995,17 @@ async function guardarEntrega(id){
   if (VISTA==="ventas") VISTAS.ventas();
 }
 async function anularVenta(id){
-  const motivo = prompt("¿Por qué se anula esta venta? La deuda del cliente se revierte.");
+  /* Proceso clave (Gustavo, 10/8): si la venta tiene remitos vivos, primero se
+     anula el remito —eso devuelve la mercadería al stock— y recién después la
+     venta. La base también lo bloquea (v52); acá se explica antes de intentar. */
+  const rv = await sb.from("remitos").select("id,codigo").eq("venta_id",id).eq("anulado",false);
+  if ((rv.data||[]).length){
+    alert("Esta venta tiene "+rv.data.length+" remito(s) sin anular ("+rv.data.map(function(x){return x.codigo;}).join(", ")+").\n\n"+
+      "Primero anulá el remito desde el botón «Remito» de la venta: eso devuelve la mercadería al stock.\n"+
+      "Después sí, anulá la venta.");
+    return;
+  }
+  const motivo = prompt("¿Por qué se anula esta venta? La deuda del cliente se revierte.\n\nNo tiene remitos: no salió mercadería del depósito, y lo que estaba comprometido para esta venta queda libre solo.");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_venta", {p_id:id, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -6932,23 +6973,33 @@ async function presupuestoDesdeCliente(cliId){
   pintarFichaPre();
   sugerirDescuentoPorTipo(c);
 }
+let _CCANUL = {ARS:false, USD:false};   /* «ver anulados» de la cuenta corriente */
+function ccToggleAnul(m, cliId, chk){ _CCANUL[m] = !!chk.checked; fichaCliente(cliId); }
 function seccionCC(c, seg){
   const bloque = function(m){
-    const filas = seg.filter(x=>x.moneda===m);
-    const saldo = filas.filter(x=>!x.anulado).reduce((a,x)=>a+Number(x.debito||0)-Number(x.credito||0),0);
+    /* 10/8: el saldo del título sale de v_saldos_cliente (todo el historial),
+       no de la suma de los movimientos traídos: acá llegan los últimos 300 y
+       con más que eso la suma mentía. La tabla sí muestra solo los últimos. */
+    const saldo = Number((typeof saldoCli === "function" ? saldoCli(c.id, m) : 0) || 0);
+    const filas = seg.filter(x=>x.moneda===m && (_CCANUL[m] || !x.anulado));
     return '<div class="sec">Cuenta corriente '+m+'</div>'+
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><b style="font-size:18px;color:'+(saldo>0?'#7a2415':'#1d5b2c')+'">'+
       (saldo>0? 'Debe '+fmtM(saldo,m) : saldo<0? 'A favor '+fmtM(-saldo,m) : 'Sin saldo')+'</b>'+
-      '<label style="margin:0;text-transform:none"><input type="checkbox" id="cc_anul_'+m+'" onchange="fichaCliente('+c.id+')" style="width:auto"> ver anulados</label></div>'+
+      '<label style="margin:0;text-transform:none"><input type="checkbox" id="cc_anul_'+m+'" '+(_CCANUL[m]?'checked':'')+' onchange="ccToggleAnul(\''+m+'\','+c.id+',this)" style="width:auto"> ver anulados</label>'+
+      (seg.length>=300?'<span class="muted" style="font-size:.85em">(se muestran los últimos 300 movimientos)</span>':'')+'</div>'+
       (filas.length? '<div class="tablewrap" style="max-height:250px;overflow:auto"><table><thead><tr><th>Fecha</th><th>Detalle</th><th>Débito</th><th>Crédito</th>'+(P("finanzas-anular")?'<th></th>':'')+'</tr></thead><tbody>'+
         filas.map(function(x){
           return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
             '<td style="white-space:normal;min-width:240px">'+esc(x.detalle)+'</td>'+
             '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
-            /* Misma regla que en proveedores: lo que nació de una venta o de una
-               cobranza se anula desde el documento, no acá. */
+            /* Lo que nació de una venta se anula desde la venta. Lo que nació de
+               una cobranza, desde acá mismo (10/8): la función de la base existía
+               y ninguna pantalla la llamaba — un cobro mal cargado era
+               irreversible. Revierte plata, imputaciones y cheque, todo junto. */
             (P("finanzas-anular")? '<td>'+(x.anulado?'<span class="pill no">Anulado</span>'
-              : (x.ref_id ? '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">se anula desde '+esc((x.origen||"el documento").toLowerCase())+'</span>'
+              : (x.ref_id ? (String(x.origen||"").toLowerCase()==="cobranza"
+                  ? '<button class="btn2 btn-sm" onclick="anularCobranza('+x.ref_id+','+c.id+')">Anular cobranza</button>'
+                  : '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">se anula desde '+esc((x.origen||"el documento").toLowerCase())+'</span>')
                           : '<button class="btn2 btn-sm" onclick="anularCC('+x.id+','+c.id+')">Anular</button>'))+'</td>':'')+
           '</tr>';
         }).join("")+'</tbody></table></div>' : '<div class="muted">Sin movimientos.</div>');
@@ -7005,6 +7056,15 @@ async function guardarCliente(id){
   $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>';
   if (VISTA==="clientes") VISTAS.clientes();
   if (!id) $("dlg").close();
+}
+async function anularCobranza(cobId, cliId){
+  const m = prompt("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
+  if (m === null) return;
+  const {error} = await sb.rpc("anular_cobranza", {p_id:cobId, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarClientes();
+  try{ if (typeof cargarFin === "function") await cargarFin(); }catch(e){}
+  fichaCliente(cliId);
 }
 async function anularCC(movId, cliId){
   const motivo = prompt("¿Por qué anulás este movimiento? Queda registrado con tu nombre.");
@@ -7098,6 +7158,15 @@ async function formCobranza(cliId){
     $("k_guardar").disabled = true;
     const imputa = [];
     (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0; if (v>0) imputa.push({venta_id:x.venta_id, importe:v}); });
+    /* 10/8: la imputación no puede superar ni el saldo de cada venta ni lo
+       cobrado. Antes era solo un aviso que no frenaba nada; la base también
+       lo bloquea ahora (v52), pero acá se explica mejor y antes. */
+    let malImp = null;
+    (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0;
+      if (v > Number(x.saldo)+0.009) malImp = 'A la venta '+esc(x.codigo)+' no le podés imputar '+fmtM(v,x.moneda)+': su saldo es '+fmtM(x.saldo,x.moneda)+'.'; });
+    const sumaImp = imputa.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+    if (!malImp && sumaImp > imp+0.009) malImp = 'Estás imputando '+fmtM(sumaImp,$("k_moneda").value)+' y el cobro es de '+fmtM(imp,$("k_moneda").value)+': no se puede imputar más de lo que entra.';
+    if (malImp){ $("k_guardar").disabled = false; $("cbmsg").innerHTML='<div class="msg err">'+malImp+'</div>'; return; }
     const nroCh = ($("k_ch_numero")||{}).value || "";
     let error;
     if (nroCh.trim()){
@@ -7135,7 +7204,7 @@ async function pintarVentasCobranza(cliId){
    '<div class="tablewrap"><table><thead><tr><th># Venta</th><th>Fecha</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th></tr></thead><tbody>'+
    pend.map((x,k)=>'<tr><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+fmtM(x.total,x.moneda)+'</td>'+
      '<td><b>'+fmtM(x.saldo,x.moneda)+'</b></td>'+
-     '<td><input type="number" step="0.01" style="width:130px" id="kv_'+k+'" oninput="calcImputadoCob()"></td></tr>').join("")+
+     '<td><input type="number" step="0.01" min="0" max="'+Number(x.saldo)+'" style="width:130px" id="kv_'+k+'" oninput="calcImputadoCob()"></td></tr>').join("")+
    '</tbody></table></div><div class="muted" id="k_imputado" style="margin-top:6px"></div>';
 }
 function calcImputadoCob(){
@@ -7815,11 +7884,16 @@ function formTransf(){
   $("x_guardar").onclick = async function(){
     const io = Number($("x_io").value||0);
     if (!(io>0)){ $("ftmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    if ($("x_origen").value === $("x_destino").value){ $("ftmsg").innerHTML='<div class="msg err">La cuenta de origen y la de destino no pueden ser la misma.</div>'; return; }
     const distinta = monedaCta($("x_origen").value) !== monedaCta($("x_destino").value);
     const tc = Number($("x_tc").value||0);
     if (distinta && !(tc>0)){ $("ftmsg").innerHTML='<div class="msg err">Las cuentas son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
+    /* 10/8: entre cuentas de la misma moneda entra exactamente lo que sale —
+       el campo editable permitía que salgan 100 y entren 1000. La base también
+       lo bloquea ahora (v52). */
+    const idst = distinta ? Number($("x_id").value||0) : io;
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
-      p_imp_origen:io, p_imp_destino:Number($("x_id").value||0), p_obs:$("x_obs").value||null, p_cotizacion:tc||null});
+      p_imp_origen:io, p_imp_destino:idst, p_obs:$("x_obs").value||null, p_cotizacion:tc||null});
     if (error){ $("ftmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
   };
@@ -8045,6 +8119,30 @@ function calcTransf(){
   }
   $("x_nota").innerHTML = 'Cambio de moneda: salen <b>'+(fmtM(io,mo)||"—")+'</b> y entran <b>'+(fmtM(Number($("x_id").value||0),md)||"—")+'</b>. Los dos movimientos quedan cada uno en la moneda de su cuenta.';
 }
+
+/* ══════════════════════════════════════════════════════════════
+   ANTI DOBLE-CLICK GLOBAL (10/8/2026)
+   Muchos botones de acción no se deshabilitaban al guardar: dos clicks
+   rápidos registraban la operación dos veces (gasto, factura, remito,
+   ajuste de stock…). En vez de tocar cuarenta botones uno por uno, un
+   solo guardián: el segundo click sobre el mismo botón dentro de 1,5
+   segundos se ignora. Los botones que empiezan con «+» (agregar renglón)
+   quedan afuera: ahí el click repetido es a propósito.
+   ══════════════════════════════════════════════════════════════ */
+document.addEventListener("click", function(ev){
+  const b = ev.target.closest("button");
+  if (!b || b.disabled) return;
+  const txt = (b.textContent||"").trim();
+  if (txt.charAt(0) === "+") return;
+  if (!/registrar|guardar|crear|agregar|anular|pasar a venta|cerrar embarque|aplicar|recibir/i.test(txt)) return;
+  const t = Date.now();
+  if (b._ultimoClick && t - b._ultimoClick < 1500){
+    ev.stopImmediatePropagation();
+    ev.preventDefault();
+    return;
+  }
+  b._ultimoClick = t;
+}, true);
 
 </script>
 </body>
