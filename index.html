@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.09-80";
+const VERSION = "v2026.08.10-81";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1124,6 +1124,52 @@ async function nuevoPresupuestoDeProspecto(idPros){
   await abrirPresupuesto(null, {prospecto:p, cliente:res.cliente, clienteYaEstaba:!!res.cliente, faltaCrear:res.faltaCrear});
 }
 
+/* ── Venta directa desde el prospecto (pedido de Gustavo, 10/8/2026) ──
+   «Si necesito cargar una venta rápida y no está el prospecto cargado o el
+   cliente, que me deje cargarlo desde ahí; luego hago la venta y que
+   automáticamente aparezca el presupuesto cerrado para que no me modifique
+   los porcentajes de eficacia.»
+   Abre la venta directa con el cliente del prospecto ya elegido. Si el
+   cliente no existe todavía, abre su ficha PRECARGADA con los datos del
+   prospecto y al guardarla vuelve solo a la venta. Al registrar la venta,
+   la v50 le deja detrás el presupuesto cerrado marcado «auto» —fuera del
+   reporte de conversión— y acá además ese presupuesto queda enganchado al
+   prospecto y el prospecto pasa a «Vendido». */
+async function ventaDesdeProspecto(idPros){
+  const msg = t => { const e = $("dmsg"); if (e) e.innerHTML = t; };
+  msg('<div class="msg">Preparando la venta…</div>');
+  const q = await sb.from("prospectos").select(COLS).eq("id",idPros).single();
+  if (q.error) return msg('<div class="msg err">'+esc(q.error.message)+'</div>');
+  const p = q.data;
+  if (!p.nombre) return msg('<div class="msg err">El prospecto no tiene nombre cargado y la venta lo necesita.</div>');
+  /* solo busca: si el cliente no está, el alta se hace en su ficha, a la vista */
+  const res = await clienteDeProspecto(p, false);
+  if (res.error) return msg('<div class="msg err">No se pudo preparar el cliente: '+esc(res.error)+'</div>');
+  try{ $("dlg").close(); }catch(e){}
+  if (res.cliente){
+    await formVentaNueva(res.cliente.id, idPros);
+    if ($("vnmsg")) $("vnmsg").innerHTML = '<div class="msg ok">Cliente <b>'+esc(res.cliente.nombre)+'</b> del prospecto '+esc(p.codigo)+(res.yaEstaba?' (ya estaba cargado)':'')+', elegido. Cargá los renglones y registrá la venta.</div>';
+    return;
+  }
+  /* No existe el cliente: primero su ficha, precargada con lo del prospecto.
+     Guardar la ficha vuelve solo a la venta con el cliente elegido. */
+  if (!P("cliente-agregar")){
+    try{ $("dlg").showModal(); }catch(e){}
+    return msg('<div class="msg err">El cliente no está cargado y tu rol no puede darlo de alta.</div>');
+  }
+  if (!(await db12())){
+    try{ $("dlg").showModal(); }catch(e){}
+    return msg('<div class="msg err">Falta correr la migración de ventas en la base.</div>');
+  }
+  if (!PRODS.length) await cargarCatalogo();
+  VTA = {cliente_id:null, prospecto_id:idPros, fecha:hoy(), moneda:"ARS", obs:"", items:[], filtro:""};
+  _VOLVER_A_VENTA = true;
+  _PROS_CLI = idPros;
+  await fichaCliente(null, {nombre:p.nombre, telefono:p.telefono, celular:p.celular, email:p.email,
+    direccion:p.direccion, localidad_id:p.localidad_id, origen_id:p.origen_id});
+  if ($("clmsg")) $("clmsg").innerHTML = '<div class="msg">Ficha precargada con los datos del prospecto '+esc(p.codigo)+'. Revisala, guardala, y seguís directo con la venta.</div>';
+}
+
 /* Marcar «Vendido» en la ficha cierra el presupuesto ligado, y eso —no esto—
    es lo que genera la venta. Si hay más de uno abierto no elige por su cuenta. */
 async function cerrarVentaDesdeProspecto(idPros){
@@ -1191,6 +1237,11 @@ async function abrir(id){
   $("dbody").innerHTML = '<div id="dmsg"></div>'+formHTML(p, !puedeEditar, lig)+
     '<div class="acciones">'+
       (puedeEditar?'<button class="btn" id="dguardar">Guardar cambios</button>':'<span class="muted">Tu rol tiene acceso de consulta.</span>')+
+      /* Venta rápida (10/8/2026): para el que viene a comprar ya decidido, sin
+         visita ni presupuesto previo. Se esconde si el prospecto ya tiene una
+         venta detrás, para no venderle dos veces. */
+      (P("venta-agregar") && p.resultado!=="Vendido" && !presPros.some(x=>x.estado==="Vendido")
+        ?'<button class="btn2" onclick="ventaDesdeProspecto('+id+')" title="Venta rápida: si el cliente no existe lo cargás ahí mismo, y el presupuesto cerrado queda solo detrás">Venta directa</button>':'')+
       (P("prospecto-eliminar")?'<button class="btn3" id="dborrar">Eliminar</button>':'')+
     '</div>'+
     (P("presupuesto-consultar")
@@ -5924,7 +5975,7 @@ async function anularVenta(id){
 
 /* ─── Venta directa: se busca el cliente y se cargan los renglones a mano ─── */
 let VTA = null;
-async function formVentaNueva(cliId){
+async function formVentaNueva(cliId, prosId){
   $("dtit").textContent = "Venta nueva";
   if (!(await db12())){
     $("dbody").innerHTML = '<div class="msg err">Falta correr la migración de ventas en la base.</div>';
@@ -5936,11 +5987,13 @@ async function formVentaNueva(cliId){
   }
   if (!CLIS.length) await cargarClientes();
   if (!PRODS.length) await cargarCatalogo();
-  if (!CLIS.length){
+  /* Si no hay ningún cliente pero el rol puede crearlos, la venta se abre igual:
+     el botón «+ Cargar cliente nuevo» resuelve el alta sin salir de acá. */
+  if (!CLIS.length && !P("cliente-agregar")){
     $("dbody").innerHTML = '<div class="msg err"><b>Todavía no hay clientes cargados.</b><br>Una venta siempre es a un cliente, porque genera la deuda en su cuenta corriente. Creá el cliente primero en la pantalla Clientes.</div>';
     try{ $("dlg").showModal(); }catch(e){} return;
   }
-  VTA = {cliente_id: cliId||null, fecha:hoy(), moneda:"ARS", obs:"", items:[], filtro:""};
+  VTA = {cliente_id: cliId||null, prospecto_id: prosId||null, fecha:hoy(), moneda:"ARS", obs:"", items:[], filtro:""};
   pintarFormVenta();
   try{ $("dlg").showModal(); }catch(e){}
 }
@@ -6155,11 +6208,30 @@ async function guardarVentaDirecta(){
     const rp = await sb.rpc("presupuesto_desde_venta", {p_venta: Number(data)});
     if (rp.error) avisoPre = rp.error.message;
   }catch(e){ avisoPre = e.message; }
+  /* ── Si la venta vino de un prospecto (10/8/2026) ──
+     El presupuesto automático queda enganchado al prospecto —así su ficha lo
+     muestra y no se puede vender dos veces— y el prospecto pasa a «Vendido».
+     Todo en segundo paso: si algo falla acá, la venta y la plata ya están bien. */
+  let avisoPros = "";
+  if (VTA.prospecto_id && !avisoPre){
+    try{
+      const vq = await sb.from("ventas").select("presupuesto_id").eq("id",data).single();
+      if (vq.data && vq.data.presupuesto_id)
+        await sb.from("presupuestos").update({prospecto_id:VTA.prospecto_id}).eq("id",vq.data.presupuesto_id);
+      const pu = await sb.from("prospectos").update({resultado:"Vendido"}).eq("id",VTA.prospecto_id);
+      if (pu.error) avisoPros = pu.error.message;
+      else avisoPros = "ok";
+    }catch(e){ avisoPros = e.message; }
+  }
   await cargarClientes();
   await fichaVenta(data);
   if (avisoPre && $("vnmsg")) $("vnmsg").innerHTML =
     '<div class="msg err">La venta quedó registrada bien, pero no pude dejarle el presupuesto detrás: '+esc(avisoPre)+
     '. Avisá, porque esa venta va a quedar afuera de Efectividad.</div>';
+  else if (avisoPros === "ok" && $("vnmsg")) $("vnmsg").innerHTML =
+    '<div class="msg ok">Venta registrada. El presupuesto quedó detrás, cerrado y marcado «auto», y el prospecto pasó a <b>Vendido</b>.</div>';
+  else if (avisoPros && $("vnmsg")) $("vnmsg").innerHTML =
+    '<div class="msg err">La venta y el presupuesto quedaron bien, pero el prospecto no se pudo marcar «Vendido»: '+esc(avisoPros)+'. Marcalo a mano desde su ficha.</div>';
   if (VISTA==="ventas") VISTAS.ventas();
 }
 
@@ -6680,11 +6752,13 @@ const NUM_CLI = ["localidad_id","origen_id","lista_id","medio_pago_pref_id","tip
 const TIPOS_DOC = ["DNI","CUIT","CUIL","Pasaporte","Sin documento"];
 const CAT_IVA = ["Consumidor Final","Responsable Inscripto","Monotributista","Exento","No Responsable"];
 
-async function fichaCliente(id){
+async function fichaCliente(id, pre){
   const c = id ? CLIS.find(x=>x.id===id) : null;
   const puede = c ? P("cliente-modificar") : P("cliente-agregar");
   const d = puede ? "" : "disabled";
-  const v = k => c ? (c[k]==null?"":c[k]) : "";
+  /* «pre»: ficha nueva precargada (venta directa desde el prospecto). Solo
+     rellena el formulario; el alta sigue siendo la misma de siempre. */
+  const v = k => c ? (c[k]==null?"":c[k]) : (pre && pre[k]!=null ? pre[k] : "");
   let seg = [], notas = [], tnotas = [], pres = [];
   if (c){
     const r = await sb.from("cc_movimientos").select("*").eq("cliente_id",c.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300);
@@ -6891,9 +6965,12 @@ function armarAccionesCC(){}
    pantalla —renglones, fecha, moneda, observaciones— sigue en VTA, que es una
    variable aparte: no se pierde nada. */
 let _VOLVER_A_VENTA = false;
+let _PROS_CLI = null;   /* prospecto al que se engancha el cliente nuevo */
 function clienteNuevoDesdeVenta(){
   ventaSincro();
   _VOLVER_A_VENTA = true;
+  /* si la venta vino de un prospecto, el cliente nuevo queda enganchado a él */
+  _PROS_CLI = (VTA && VTA.prospecto_id) || null;
   fichaCliente(null);
 }
 async function volverAVenta(nuevoId){
@@ -6917,9 +6994,11 @@ async function guardarCliente(id){
     {ok:!!o.localidad_id,            q:"Localidad"}
   ]);
   if (f.length){ avisoFaltan("clmsg", f, "el cliente"); return; }
+  if (!id && _PROS_CLI) o.prospecto_id = _PROS_CLI;
   const r = id ? await sb.from("clientes").update(o).eq("id",id)
                : await sb.from("clientes").insert(o).select("id").single();
   if (r.error){ $("clmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  if (!id) _PROS_CLI = null;
   await cargarClientes();
   /* si vinimos desde el formulario de venta, volvemos ahí con el cliente elegido */
   if (!id && _VOLVER_A_VENTA){ await volverAVenta(r.data ? r.data.id : null); return; }
