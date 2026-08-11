@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-87";
+const VERSION = "v2026.08.11-88";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -569,17 +569,25 @@ const SUBMENU = {
   agenda: [
     {id:"", t:"Listado"}
   ],
+  /* 11/8: cada solapa lleva su propio permiso. Antes el menú las ofrecía a
+     cualquiera que tuviera «venta-consultar» y la pantalla te redirigía sola
+     a otra solapa, que confunde: parecía que el botón no andaba. */
   info: [
-    {id:"", t:"Finanzas"},
-    {id:"ventas", t:"Ventas"},
-    {id:"compras", t:"Compras"}
+    {id:"", t:"Finanzas", perm:"finanzas-consultar"},
+    {id:"ventas", t:"Ventas", perm:"venta-consultar"},
+    {id:"compras", t:"Compras", perm:"compra-consultar"}
   ],
   config: [
-    {id:"", t:"Roles"},
-    {id:"usuarios", t:"Usuarios"},
-    {id:"horarios", t:"Horarios"},
-    {id:"generales", t:"Configuraciones generales"},
-    {id:"impresion", t:"Datos de impresión"},
+    /* 11/8: cada entrada con su permiso propio. Configuración entra con
+       «maestra-consultar», pero adentro hay cosas que son de otro nivel: la
+       matriz de permisos es del dueño y el listado del equipo pide permiso de
+       usuarios. Sin esto, alguien que solo puede tocar Tablas básicas llegaba
+       a la lista del equipo por este camino. */
+    {id:"", t:"Roles", perm:"rol-modificar"},
+    {id:"usuarios", t:"Usuarios", perm:"usuario-consultar"},
+    {id:"horarios", t:"Horarios", perm:"maestra-modificar"},
+    {id:"generales", t:"Configuraciones generales", perm:"maestra-modificar"},
+    {id:"impresion", t:"Datos de impresión", perm:"maestra-modificar"},
     {id:"copia", t:"Copia de seguridad", perm:"rol-modificar"}
   ]
 };
