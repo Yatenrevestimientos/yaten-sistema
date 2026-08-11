@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-99";
+const VERSION = "v2026.08.11-100";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6644,8 +6644,28 @@ async function guardarEntrega(id){
              instalador_id:$("ve_instalador").value||null,
              notificado_colocador:$("ve_notificado").value==="1"};
   if (window._db56 && $("ve_nota_interna")) o.nota_interna = $("ve_nota_interna").value || null;
-  const r = await sb.from("ventas").update(o).eq("id",id);
-  if (r.error){ $("vnmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  /* ══ 11/8: acá había una mentira ══
+     La tabla «ventas» NO acepta UPDATE desde la aplicación —no tiene política
+     que lo permita—, así que la fecha de entrega, el horario, la instalación y
+     el instalador NUNCA se guardaban… y la pantalla decía «Guardado» igual,
+     porque Postgres no devuelve error: devuelve CERO FILAS. Encontrado probando
+     la nota interna contra la base, no contra el cartel de la pantalla.
+     Se resuelve con la función «guardar_entrega_venta» (migración v57), que
+     escribe solo estos campos y pide permiso. Mientras la migración no esté
+     corrida, se intenta el camino viejo Y SE VERIFICA que haya escrito. */
+  const rf = await sb.rpc("guardar_entrega_venta", {
+    p_id:id, p_fecha_entrega:o.fecha_entrega, p_horario:o.horario_entrega,
+    p_fecha_instalacion:o.fecha_instalacion, p_instalador:o.instalador_id,
+    p_notificado:o.notificado_colocador, p_nota_interna:(o.nota_interna===undefined?null:o.nota_interna)});
+  if (rf.error){
+    const r = await sb.from("ventas").update(o).eq("id",id).select("id");
+    if (r.error){ $("vnmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+    if (!r.data || !r.data.length){
+      $("vnmsg").innerHTML = '<div class="msg err">La entrega <b>no se guardó</b>: la base no acepta editar la venta por este camino. '+
+        'Falta correr la <b>migración v57</b> (la función «guardar_entrega_venta»). Avisá y se corre; el dato no se perdió, hay que volver a cargarlo.</div>';
+      return;
+    }
+  }
   const e = await sb.rpc("cambiar_estado_venta",{p_id:id, p_estado:est});
   if (e.error){ $("vnmsg").innerHTML='<div class="msg err">Se guardó la entrega, pero el estado no: '+esc(e.error.message)+'</div>'; return; }
   $("vnmsg").innerHTML='<div class="msg ok">Guardado.</div>';
