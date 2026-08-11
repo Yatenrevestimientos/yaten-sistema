@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-91";
+const VERSION = "v2026.08.11-92";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -480,7 +480,11 @@ const MENU = [
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
   {id:"cheques",  t:"Cheques",         perm:"finanzas-consultar"},
   {id:"reportes", t:"Reportes",        perm:"reporte-ventas"},
-  {id:"info",     t:"Información",     perm:"venta-consultar"},
+  /* 11/8, Gustavo: «no tiene que ver información». Información son los tableros
+     de resumen —plata, facturación, compras—, no una herramienta de trabajo:
+     entra quien tiene reportes o finanzas, no cualquiera que pueda consultar
+     una venta para sacarle el remito. */
+  {id:"info",     t:"Información",     perm:"finanzas-consultar|reporte-ventas|compra-consultar"},
   {id:"finanzas", t:"Finanzas",        perm:"finanzas-consultar"},
   {id:"efect",    t:"Efectividad",     perm:"planilla-efectividad"},
   {id:"productos",t:"Productos",       perm:"producto-consultar"},
@@ -581,7 +585,7 @@ const SUBMENU = {
      a otra solapa, que confunde: parecía que el botón no andaba. */
   info: [
     {id:"", t:"Finanzas", perm:"finanzas-consultar"},
-    {id:"ventas", t:"Ventas", perm:"venta-consultar"},
+    {id:"ventas", t:"Ventas", perm:"reporte-ventas"},
     {id:"compras", t:"Compras", perm:"compra-consultar"}
   ],
   config: [
@@ -2382,7 +2386,7 @@ async function bajarCopia(){
 let FINFO = "finanzas";
 
 VISTAS.info = async function(){
-  const puedeFin = P("finanzas-consultar"), puedeVen = P("venta-consultar"), puedeCom = P("compra-consultar");
+  const puedeFin = P("finanzas-consultar"), puedeVen = P("reporte-ventas"), puedeCom = P("compra-consultar");
   const solapas = [];
   if (puedeFin) solapas.push(["finanzas","Finanzas"]);
   if (puedeVen) solapas.push(["ventas","Ventas"]);
