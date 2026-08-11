@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-95";
+const VERSION = "v2026.08.11-96";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6342,7 +6342,7 @@ async function fichaVenta(id){
    }).join("")+
    (function(){
       const tv = medidasDe(items), te = medidasDe(items, "entregado");
-      if (!tv.un) return "";
+      if (!tv.un && !tv.m2 && !tv.ml) return "";
       return '<tr style="background:#f6f3ee"><td><b>Total de la venta</b></td><td colspan="3">'+textoMedidas(tv)+'</td>'+
              '<td colspan="2" class="muted">entregado</td><td>'+textoMedidas(te)+'</td></tr>';
    })()+
