@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-94";
+const VERSION = "v2026.08.11-95";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -4719,7 +4719,8 @@ function remCalc(){
   });
   const tAhora = medidasDe(ahora), tVenta = medidasDe(REM.todos), tYa = medidasDe(REM.todos, "entregado");
   const conEste = {m2:Math.round((tYa.m2+tAhora.m2)*100)/100, ml:Math.round((tYa.ml+tAhora.ml)*100)/100,
-                   un:Math.round((tYa.un+tAhora.un)*1000)/1000, porUnidad:{}, sinDato:[]};
+                   un:Math.round((tYa.un+tAhora.un)*1000)/1000,
+                   cajasEq:Math.round((tYa.cajasEq+tAhora.cajasEq)*100)/100, porUnidad:{}, sinDato:[]};
   Object.keys(tYa.porUnidad).forEach(function(u){ conEste.porUnidad[u] = tYa.porUnidad[u]; });
   Object.keys(tAhora.porUnidad).forEach(function(u){ conEste.porUnidad[u] = (conEste.porUnidad[u]||0) + tAhora.porUnidad[u]; });
   $("rm_tot").innerHTML =
@@ -4868,13 +4869,13 @@ async function verRemito(id){
        '<td class="r">'+(med? med+(tot? ' de '+tot : '') : '—')+'</td>'+
        '<td class="r">'+fmtN(y.peso)+'</td></tr>';
    }).join("")+
-   (tAhora.un? '<tr><td><b>Total de este remito</b></td><td class="r"><b>'+fmtN(tAhora.un)+'</b></td>'+
-      '<td class="r">'+fmtN(tAhora.un)+' de '+fmtN(tVenta.un)+'</td>'+
-      '<td class="r"><b>'+textoMedidasPlano({m2:tAhora.m2, ml:tAhora.ml, un:0, porUnidad:{}})+'</b></td>'+
-      '<td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>' :
-      '<tr><td><b>Peso total</b></td><td colspan="3"></td><td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>')+
+   '<tr><td><b>Total de este remito</b></td>'+
+     '<td class="r"><b>'+(tAhora.un? fmtN(tAhora.un) : '')+'</b></td>'+
+     '<td class="r">'+(tAhora.un? fmtN(tAhora.un)+' de '+fmtN(tVenta.un) : '')+'</td>'+
+     '<td class="r"><b>'+textoMedidasPlano({m2:tAhora.m2, ml:tAhora.ml, un:0, cajasEq:0, porUnidad:{}})+'</b></td>'+
+     '<td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>'+
    '</tbody></table>'+
-   (tVenta.un? '<div class="caja">Esta venta es de <b>'+textoMedidasPlano(tVenta)+'</b>. En este remito salen <b>'+
+   (textoMedidasPlano(tVenta)? '<div class="caja">Esta venta es de <b>'+textoMedidasPlano(tVenta)+'</b>. En este remito salen <b>'+
       textoMedidasPlano(tAhora)+'</b>.</div>' : '')+
    (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
    (cfg("pie_remito")?'<div style="margin-top:14px;font-size:11px;color:#6b7679">'+esc(cfg("pie_remito"))+'</div>':'')+
