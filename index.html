@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-100";
+const VERSION = "v2026.08.11-101";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -599,7 +599,10 @@ const SUBMENU = {
     {id:"horarios", t:"Horarios", perm:"maestra-modificar"},
     {id:"generales", t:"Configuraciones generales", perm:"maestra-modificar"},
     {id:"impresion", t:"Datos de impresión", perm:"maestra-modificar"},
-    {id:"copia", t:"Copia de seguridad", perm:"rol-modificar"}
+    {id:"copia", t:"Copia de seguridad", perm:"rol-modificar"},
+    /* 11/8, después del bug de la venta que decía «Guardado» sin guardar: una
+       pantalla que lo prueba sola, tabla por tabla, en un minuto. */
+    {id:"diag", t:"Autodiagnóstico", perm:"rol-modificar"}
   ]
 };
 let SUBVISTA = "";
@@ -2169,8 +2172,106 @@ VISTAS.config = async function(){
   if (SUBVISTA === "generales")  return configClaves("generales");
   if (SUBVISTA === "impresion")  return configClaves("impresion");
   if (SUBVISTA === "copia")      return VISTAS.copia();
+  if (SUBVISTA === "diag")       return VISTAS.diag();
   return configRoles();
 };
+
+/* ═══════════════════════════════════════════════════════════════════
+   AUTODIAGNÓSTICO — 11/8/2026
+   Nació de un error feo: la pantalla de entrega de la venta decía «Guardado» y
+   NO guardaba nada. La tabla no aceptaba escritura y Postgres, en ese caso, no
+   devuelve error: devuelve CERO FILAS. Leyendo el código eso no se ve.
+   Esta pantalla lo prueba sola: le pide a cada tabla que guarde el MISMO valor
+   que ya tiene y mira si la fila vuelve. Si no vuelve, esa pantalla está
+   mintiendo. Se corre después de cada publicación.
+   No cambia ningún dato: escribe lo mismo que había.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Las tablas que la aplicación graba DIRECTO (las demás pasan por funciones que
+   chequean permiso, y esas se prueban con el guion de homologación). */
+const DIAG_TABLAS = ["presupuestos","presupuesto_items","presupuesto_adicionales","prospectos","clientes",
+  "notas_cliente","seguimientos","ventas","productos","proveedores","documentos","tags","leads",
+  "listas_precios","tipos_producto","tipos_cuenta","cuentas","perfiles","embarque_items","embarque_costos"];
+/* Columna preferida para la prueba: se elige la más inofensiva que exista. */
+const DIAG_PREF = ["observaciones","descripcion","nombre","concepto","texto","titulo","codigo","estado"];
+/* Lo que la aplicación lee para llenar las pantallas. Si algo de acá no se lee,
+   hay una pantalla que va a aparecer vacía sin decir por qué. */
+const DIAG_VISTAS = ["v_stock","v_saldos_cliente","v_saldos_proveedor","v_saldos_cuenta","equipo_visible"];
+
+VISTAS.diag = function(){
+  $("main").innerHTML = '<div class="panel"><h2>Autodiagnóstico del sistema</h2>'+
+   '<div class="desc">Prueba que <b>lo que la aplicación dice que guarda, se guarde de verdad</b>. '+
+   'A cada tabla le pide grabar el mismo valor que ya tiene y mira si la base la devuelve: '+
+   'si no vuelve, esa pantalla está diciendo «Guardado» sin guardar. <b>No cambia ningún dato.</b><br>'+
+   'Conviene correrlo <b>después de cada publicación</b> y antes de dar un área por aprobada.</div>'+
+   '<div class="acciones"><button class="btn" id="dg_run">Correr el diagnóstico</button></div>'+
+   '<div id="dg_out"><div class="muted">Todavía no se corrió.</div></div></div>';
+  $("dg_run").onclick = correrDiagnostico;
+};
+
+async function correrDiagnostico(){
+  const out = $("dg_out"), btn = $("dg_run");
+  btn.disabled = true;
+  out.innerHTML = '<div class="muted">Probando… puede tardar un minuto.</div>';
+  const filas = [], avisos = [];
+
+  /* ── 1. ¿Cada tabla acepta guardar? ── */
+  for (const t of DIAG_TABLAS){
+    const s = await sb.from(t).select("*").limit(1);
+    if (s.error){ filas.push({t:t, q:"escribir", r:"nose", d:"no se puede leer: "+s.error.message}); continue; }
+    if (!s.data.length){ filas.push({t:t, q:"escribir", r:"nose", d:"sin registros para probar"}); continue; }
+    const fila = s.data[0];
+    const col = DIAG_PREF.find(c=>Object.prototype.hasOwnProperty.call(fila,c)) ||
+                Object.keys(fila).find(c=>c!=="id");
+    if (!col){ filas.push({t:t, q:"escribir", r:"nose", d:"no encontré una columna para probar"}); continue; }
+    const o = {}; o[col] = fila[col];
+    const u = await sb.from(t).update(o).eq("id", fila.id).select("id");
+    if (u.error)               filas.push({t:t, q:"escribir", r:"mal", d:"error: "+u.error.message});
+    else if (!u.data.length)   filas.push({t:t, q:"escribir", r:"mal", d:"NO ESCRIBE: devuelve cero filas y ningún error. La pantalla que grabe acá va a decir «Guardado» sin guardar."});
+    else                       filas.push({t:t, q:"escribir", r:"bien", d:"probado con la columna «"+col+"»"});
+  }
+
+  /* ── 2. ¿Se leen las vistas que alimentan las pantallas? ── */
+  for (const v of DIAG_VISTAS){
+    const s = await sb.from(v).select("*").limit(1);
+    filas.push({t:v, q:"leer", r: s.error ? "mal" : "bien",
+                d: s.error ? "error: "+s.error.message : (s.data.length ? "se lee" : "se lee, sin registros")});
+  }
+
+  /* ── 3. ¿Cuánto volumen hay, y dónde puede cortar en silencio? ──
+     El programa pide como mucho 300/400/500 filas en varias pantallas. Cuando una
+     tabla se acerca a ese número, la pantalla empieza a mostrar de menos SIN AVISAR. */
+  const LIMITES = {prospectos:500, presupuestos:400, ventas:400, clientes:1000, productos:1000,
+                   seguimientos:1000, stock_movimientos:1000, cc_movimientos:1000};
+  for (const t of Object.keys(LIMITES)){
+    const c = await sb.from(t).select("id", {count:"exact", head:true});
+    if (c.error){ continue; }
+    const n = c.count||0, lim = LIMITES[t];
+    filas.push({t:t, q:"volumen", r: n >= lim*0.8 ? "ojo" : "bien",
+                d: n+" registros (la pantalla trae hasta "+lim+")"+(n>=lim*0.8?" — se está acercando al tope: hay que subirlo antes de que corte sin avisar":"")});
+  }
+
+  const icono = {bien:"✔", mal:"✘", ojo:"!", nose:"?"};
+  const color = {bien:"#1f6b3a", mal:"#7a2415", ojo:"#8a6d1f", nose:"#6b7679"};
+  const mal = filas.filter(f=>f.r==="mal"), ojo = filas.filter(f=>f.r==="ojo"), nose = filas.filter(f=>f.r==="nose");
+  out.innerHTML =
+   '<div class="msg '+(mal.length?"err":"ok")+'" style="line-height:1.5;font-size:15px"><b>'+
+     (mal.length ? mal.length+" problema"+(mal.length===1?"":"s")+" que hay que resolver antes de habilitar"
+                 : "Ninguna tabla miente: todo lo que la aplicación graba, se graba.")+'</b>'+
+     (ojo.length? '<br>'+ojo.length+' aviso(s) de volumen.' : '')+
+     (nose.length? '<br>'+nose.length+' no se pudieron probar (sin datos o sin lectura).' : '')+
+   '</div>'+
+   '<div class="tablewrap"><table><thead><tr><th></th><th>Tabla o vista</th><th>Qué se probó</th><th>Resultado</th></tr></thead><tbody>'+
+   filas.map(f=>'<tr><td style="color:'+color[f.r]+';font-weight:700;font-size:16px">'+icono[f.r]+'</td>'+
+     '<td><b>'+esc(f.t)+'</b></td><td>'+esc(f.q)+'</td>'+
+     '<td style="white-space:normal;color:'+(f.r==="mal"?"#7a2415":"inherit")+'">'+esc(f.d)+'</td></tr>').join("")+
+   '</tbody></table></div>'+
+   '<div class="muted" style="margin-top:10px;line-height:1.5"><b>Lo que esta pantalla NO prueba</b>, y hay que probar a mano con el guion de homologación: '+
+   'que cada rol entre solo a lo suyo · que los números de los reportes den bien · que los circuitos completos '+
+   '—prospecto, venta, remito, cobranza— terminen donde tienen que terminar · que las impresiones salgan como corresponde. '+
+   'Un ✔ acá quiere decir «la base acepta el dato», no «el proceso está bien».</div>';
+  btn.disabled = false;
+}
 
 function configHorarios(){
   const m = MAESTRAS.find(x=>x.k==="fho");
