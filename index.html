@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-93";
+const VERSION = "v2026.08.11-94";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -8367,24 +8367,46 @@ function convDe(prod){
    que trae cada caja, de la ficha del producto. Un dato en un solo lugar — así el
    presupuesto, la venta y el remito dicen siempre lo mismo, y si mañana se corrige
    el m² por caja de un producto, se corrige en todos lados.
-   El adicional (flete, colocación) no se mide: no es mercadería. */
+   El adicional (flete, colocación) no se mide: no es mercadería.
+
+   OJO con el renglón que YA se vende por metro (unidad «m2» o «ml»): ahí la
+   cantidad ES la medida y el m² por caja de la ficha es solo el packing. Si se
+   multiplicaran, el documento contaría el doble — apareció el 11/8 probando
+   contra ventas reales: 100 m2 vendidos figuraban como 200 m². En ese caso la
+   caja se informa aparte, como equivalencia, que es lo que necesita el depósito
+   para cargar el camión. */
+function unidadMedida(u){
+  const s = String(u||"").toLowerCase().trim()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  if (s === "m2" || s === "mt2" || s === "metro2" || s === "metros2") return "m²";
+  if (s === "ml" || s === "mtl" || s === "metro lineal" || s === "metros lineales") return "ml";
+  return null;
+}
 function medidasDe(items, campo){
   const cc = campo || "cantidad";
-  const r = {m2:0, ml:0, un:0, porUnidad:{}, sinDato:[]};
+  const r = {m2:0, ml:0, un:0, cajasEq:0, porUnidad:{}, sinDato:[]};
   (items||[]).forEach(function(x){
     if (x.es_adicional) return;
     const cant = Number(x[cc]||0);
     if (!cant) return;
-    r.un += cant;
     const u = (x.unidad||"un").trim() || "un";
-    r.porUnidad[u] = (r.porUnidad[u]||0) + cant;
     const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+    const propia = unidadMedida(u);
+    if (propia){
+      /* se vende por metro: la cantidad ya es la medida */
+      if (propia === "m²") r.m2 += cant; else r.ml += cant;
+      if (c && c.factor > 0) r.cajasEq += cant / c.factor;
+      return;
+    }
+    r.un += cant;
+    r.porUnidad[u] = (r.porUnidad[u]||0) + cant;
     if (!c){ r.sinDato.push(x.descripcion || "un renglón"); return; }
     if (c.um === "m²") r.m2 += cant*c.factor; else r.ml += cant*c.factor;
   });
   r.m2 = Math.round(r.m2*100)/100;
   r.ml = Math.round(r.ml*100)/100;
   r.un = Math.round(r.un*1000)/1000;
+  r.cajasEq = Math.round(r.cajasEq*100)/100;
   return r;
 }
 /* «21,6 m² · 12 ml · 14 unidades (12 caja · 2 unidad)» */
@@ -8396,6 +8418,7 @@ function textoMedidas(t){
     const det = Object.keys(t.porUnidad).map(function(u){ return fmtN(t.porUnidad[u])+' '+esc(u); });
     p.push('<b>'+fmtN(t.un)+'</b> '+(det.length>1 ? '<span class="muted">('+det.join(' · ')+')</span>' : esc(Object.keys(t.porUnidad)[0]||"un")));
   }
+  if (t.cajasEq > 0) p.push('<span class="muted">≈ '+fmtN(t.cajasEq)+' cajas</span>');
   return p.length ? p.join(' · ') : '<span class="muted">—</span>';
 }
 /* La misma línea, sin etiquetas HTML, para las impresiones */
@@ -8408,11 +8431,16 @@ function textoMedidasPlano(t){
     p.push(u.length === 1 ? fmtN(t.un)+' '+u[0]
                           : fmtN(t.un)+' unidades ('+u.map(function(x){ return fmtN(t.porUnidad[x])+' '+x; }).join(' · ')+')');
   }
+  if (t.cajasEq > 0) p.push('≈ '+fmtN(t.cajasEq)+' cajas');
   return p.join(' · ');
 }
 /* «10 de 50 caja · 18 de 90 m²» — lo entregado contra lo vendido, de un renglón */
 function medidaRenglon(x, cant){
+  const propia = unidadMedida(x.unidad);
   const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+  /* si ya se vende por metro, la medida es la cantidad: se informa la caja
+     equivalente, que es lo que se carga en el camión */
+  if (propia) return c && c.factor>0 ? '≈ '+fmtN(Math.round(Number(cant||0)/c.factor*100)/100)+' cajas' : "";
   if (!c) return "";
   return fmtN(Math.round(Number(cant||0)*c.factor*100)/100)+' '+c.um;
 }
