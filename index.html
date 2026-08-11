@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-89";
+const VERSION = "v2026.08.11-90";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -494,8 +494,11 @@ const VISTAS = {};
 const SUBMENU = {
   clientes: [
     {id:"", t:"Listado"},
-    {id:"morosos", t:"Clientes morosos"},
-    {id:"afavor", t:"Clientes con saldo a favor"},
+    /* 11/8, Gustavo: Depósito busca un cliente para sacarle el remito y nada
+       más. Lo financiero —cuánto debe, quién está moroso— pide su propia llave.
+       «cliente-historial» ya existía en la base y ninguna pantalla la usaba. */
+    {id:"morosos", t:"Clientes morosos", perm:"cliente-historial"},
+    {id:"afavor", t:"Clientes con saldo a favor", perm:"cliente-historial"},
     {id:"nuevo", t:"Nuevo", perm:"cliente-agregar"},
     {id:"listas", t:"Listas de precios", perm:"producto-precio"}
   ],
@@ -595,8 +598,8 @@ let SUBVISTA = "";
 /* El menú lateral: cada sección con opciones internas se despliega al tocarla,
    como en Pirka. Solo queda abierta la sección donde estás parado. */
 function pintarNav(){
-  const html = MENU.filter(m=>!m.perm||P(m.perm)).map(function(m){
-    const subs = (SUBMENU[m.id]||[]).filter(x=>!x.perm||P(x.perm));
+  const html = MENU.filter(m=>!m.perm||tieneAlguno(m.perm)).map(function(m){
+    const subs = (SUBMENU[m.id]||[]).filter(x=>!x.perm||tieneAlguno(x.perm));
     const acaEstoy = m.id===VISTA;
     if (!subs.length){
       return '<button class="sec-btn '+(acaEstoy?"on":"")+'" data-v="'+m.id+'">'+esc(m.t)+'</button>';
@@ -640,11 +643,17 @@ function pintarNav(){
    Esto es la cortina, no la cerradura: la cerradura son los permisos de la
    base, que siguen siendo los que deciden. Las dos tienen que estar.
    ══════════════════════════════════════════════════════════════ */
+/* Un permiso puede escribirse «a|b»: alcanza con tener cualquiera de los dos.
+   Sirve para pantallas que le corresponden a más de un rol por motivos
+   distintos —Información la mira quien ve reportes y quien ve finanzas—. */
+function tieneAlguno(perm){
+  return String(perm||"").split("|").some(function(p){ return P(p.trim()); });
+}
 function permisoQueFalta(v, sub){
   const s = (SUBMENU[v]||[]).find(function(x){ return x.id === (sub||""); });
-  if (s && s.perm && !P(s.perm)) return s.perm;
+  if (s && s.perm && !tieneAlguno(s.perm)) return s.perm;
   const m = MENU.find(function(x){ return x.id === v; });
-  if (m && m.perm && !P(m.perm)) return m.perm;
+  if (m && m.perm && !tieneAlguno(m.perm)) return m.perm;
   return null;
 }
 function pantallaSinPermiso(v, sub, permiso){
@@ -662,7 +671,7 @@ function pantallaSinPermiso(v, sub, permiso){
     '</div>';
 }
 function irAPrimeraVista(){
-  const primera = MENU.find(function(m){ return !m.perm || P(m.perm); });
+  const primera = MENU.find(function(m){ return !m.perm || tieneAlguno(m.perm); });
   ir(primera ? primera.id : "tablero");
 }
 function ir(v, sub){
@@ -675,11 +684,11 @@ function ir(v, sub){
      3) Si alguien pide una solapa puntual que no le corresponde, cartel: ahí
         no hay que adivinar, hay que decirlo. */
   const secc = MENU.find(function(x){ return x.id === v; });
-  if (secc && secc.perm && !P(secc.perm)){ pintarNav(); pantallaSinPermiso(v, "", secc.perm); return; }
+  if (secc && secc.perm && !tieneAlguno(secc.perm)){ pintarNav(); pantallaSinPermiso(v, "", secc.perm); return; }
   const subs = SUBMENU[v] || [];
   const pedida = subs.find(function(x){ return x.id === SUBVISTA; });
-  if (pedida && pedida.perm && !P(pedida.perm)){
-    const alt = (SUBVISTA === "") ? subs.find(function(x){ return !x.perm || P(x.perm); }) : null;
+  if (pedida && pedida.perm && !tieneAlguno(pedida.perm)){
+    const alt = (SUBVISTA === "") ? subs.find(function(x){ return !x.perm || tieneAlguno(x.perm); }) : null;
     if (alt) SUBVISTA = alt.id;
     else { pintarNav(); pantallaSinPermiso(v, SUBVISTA, pedida.perm); return; }
   }
@@ -6987,6 +6996,10 @@ VISTAS.clientes = async function(){
   }
   await cargarClientes();
   const puede = P("cliente-agregar");
+  /* 11/8: lo financiero del cliente —saldos, deuda, morosos— pide su propia
+     llave. Sin ella se ve el listado para buscar y entrar, que es lo que
+     necesita Depósito para sacar un remito, y nada más. */
+  const verPlata = P("cliente-historial");
   if (SUBVISTA === "morosos") FDEUDA = true;
   else if (SUBVISTA === "afavor") FDEUDA = false;
   const t = FCLI.toLowerCase();
@@ -7038,7 +7051,7 @@ VISTAS.clientes = async function(){
   $("main").innerHTML = '<div class="panel"><h2>'+(SUBVISTA==="morosos"?"Clientes morosos":(favor?"Clientes con saldo a favor":"Clientes"))+'</h2>'+
    '<div class="desc">'+(SUBVISTA==="morosos"?'Todos los que te deben plata, del más atrasado al más nuevo. Si tiene saldo, está acá: no hace falta que la deuda tenga una antigüedad mínima. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
-   (SUBVISTA?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
+   (SUBVISTA||!verPlata?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
    (M.mpg? '<div><label>Forma de pago</label><select id="cf_mpg"><option value="">Todas</option>'+
       Array.from(new Set(M.mpg.map(x=>x.tipo).filter(Boolean))).sort()
         .map(f=>'<option value="t:'+esc(f)+'" '+(FMPG==="t:"+f?"selected":"")+'>Todas las de '+esc(f)+'</option>').join("")+
@@ -7047,21 +7060,21 @@ VISTAS.clientes = async function(){
       '</select></div>' : '')+
    '<div style="min-width:auto"><button class="btn" id="cf_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" id="cf_nuevo">+ Cliente nuevo</button></div>':'')+'</div>'+
-   ((FDEUDA||favor||totDeuda.ARS>0||totDeuda.USD>0)? '<div class="kpis" style="margin-bottom:10px">'+
+   (verPlata && (FDEUDA||favor||totDeuda.ARS>0||totDeuda.USD>0)? '<div class="kpis" style="margin-bottom:10px">'+
       '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en pesos</div><div class="n">'+(fmtM(totDeuda.ARS,"ARS")||"$ 0")+'</div><div class="muted">'+cuenta("ARS")+' cliente'+(cuenta("ARS")===1?"":"s")+'</div></div>'+
       '<div class="kpi" style="border-left-color:'+(favor?'#1d5b2c':'#7a2415')+'"><div class="t">'+rot+' en dólares</div><div class="n">'+(fmtM(totDeuda.USD,"USD")||"US$ 0")+'</div><div class="muted">'+cuenta("USD")+' cliente'+(cuenta("USD")===1?"":"s")+'</div></div>'+
     '</div>':'')+
    (SUBVISTA==="morosos" && sinFecha ? '<div class="muted" style="margin-bottom:8px">'+sinFecha+' de estos deben plata que no viene de una venta con fecha (un ajuste de cuenta corriente, por ejemplo). Se muestran igual, con el atraso en blanco.</div>' : '')+
    (rows.length? '<div class="tablewrap" style="max-height:65dvh;overflow:auto"><table><thead><tr>'+
-     ['Código','Nombre / Razón social','Localidad','Teléfono','Email'].concat(M.mpg?['Forma de pago']:[]).concat(['Saldo ARS','Saldo USD']).concat(SUBVISTA==="morosos"?['Atraso','Comprobante más viejo']:[]).map(h=>'<th>'+h+'</th>').join("")+
+     ['Código','Nombre / Razón social','Localidad','Teléfono','Email'].concat(M.mpg?['Forma de pago']:[]).concat(verPlata?['Saldo ARS','Saldo USD']:[]).concat(SUBVISTA==="morosos"?['Atraso','Comprobante más viejo']:[]).map(h=>'<th>'+h+'</th>').join("")+
      '</tr></thead><tbody>'+rows.map(function(c){
        const a = saldoCli(c.id,'ARS'), u = saldoCli(c.id,'USD'), at = ATRASO[c.id];
        return '<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCliente('+c.id+')">'+
         '<td><b>'+esc(c.codigo)+'</b></td><td>'+esc(c.nombre)+'</td><td>'+esc(nom(M.loc,c.localidad_id))+'</td>'+
         '<td>'+esc(c.celular||c.telefono||"")+'</td><td>'+esc(c.email)+'</td>'+
         (M.mpg?'<td>'+esc(nom(M.mpg,c.medio_pago_pref_id))+'</td>':'')+
-        '<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
-        '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td>'+
+        (verPlata?'<td style="'+(a>0?'color:#7a2415;font-weight:600':'')+'">'+(a?fmtM(a,'ARS'):'—')+'</td>'+
+        '<td style="'+(u>0?'color:#7a2415;font-weight:600':'')+'">'+(u?fmtM(u,'USD'):'—')+'</td>':'')+
         (SUBVISTA==="morosos"
           ? '<td style="'+(at&&at.dias>=60?'color:#7a2415;font-weight:600':'')+'">'+(at?at.dias+' días':'—')+'</td>'+
             '<td>'+(at?esc(at.codigo)+' · '+fmtF(at.fecha):'ajuste de cuenta')+'</td>'
@@ -7147,7 +7160,7 @@ async function fichaCliente(id, pre){
    (c? seccionPresCli(c, pres) : '') +
    (c? seccionVentasCli(c, ventasCli, saldoVenta) : '') +
    (c? seccionRemitosCli(c, remitosCli) : '') +
-   (c? seccionCC(c, seg) : '') +
+   (c && P("cliente-historial") ? seccionCC(c, seg) : '') +
    (c? seccionNotas(c, notas, tnotas) : '')+
    (c? seccionDocsCli(c, docsCli) : '');
   if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
