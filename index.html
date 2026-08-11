@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-92";
+const VERSION = "v2026.08.11-93";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -4181,7 +4181,10 @@ function pintarTotales(){
     const el = $("sub_"+k); if (!el) return;
     el.textContent = fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100), m) || "—";
   });
+  const med = medidasDe(PRE.items);
   $("w_tot").innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr style="background:#f6f3ee"><td>Medida total</td><td style="text-align:right;white-space:normal">'+textoMedidas(med)+'</td></tr>'+
+    (med.sinDato.length? '<tr><td colspan="2" class="muted" style="white-space:normal;font-size:11px">'+med.sinDato.length+' renglón(es) sin m² por caja ni ml por unidad cargados en la ficha del producto: suman a las unidades pero no a los metros.</td></tr>':'')+
     '<tr><td>Productos</td><td style="text-align:right">'+(fmtM(t.brutoItems,m)||"—")+'</td></tr>'+
     (t.descItems>0?'<tr><td>Descuento general'+
       (PRE.cab.descuento_modo==="monto" ? ' <span class="muted">('+t.pctEquiv+' % de los productos)</span>'
@@ -4618,7 +4621,9 @@ function imprimirPresupuesto(){
      ((c.direccion_obra||c.localidad_id)?'<br>Obra: '+esc(c.direccion_obra)+' '+esc(nom(M.loc,c.localidad_id)):'')+
      (c.tipo?'<br>Modalidad: '+esc(c.tipo):'')+'</div>'+
    '<table><thead><tr><th>Detalle</th><th class="r">Cant.</th><th>Un.</th><th class="r">Precio</th><th class="r">Desc.</th><th class="r">Subtotal</th></tr></thead><tbody>'+
-   PRE.items.map(fila).join("")+'</tbody></table>'+
+   PRE.items.map(fila).join("")+
+   (textoMedidasPlano(medidasDe(PRE.items))? '<tr><td><b>Medida total</b></td><td class="r" colspan="5"><b>'+textoMedidasPlano(medidasDe(PRE.items))+'</b></td></tr>':'')+
+   '</tbody></table>'+
    (PRE.adic.length? '<table><thead><tr><th>Adicionales</th><th class="r">Importe</th></tr></thead><tbody>'+
       PRE.adic.map(x=>'<tr><td>'+esc(x.concepto)+'</td><td class="r">'+fmtM(x.importe,m)+'</td></tr>').join("")+'</tbody></table>' : '')+
    '<table class="tot"><tbody>'+
@@ -4650,6 +4655,7 @@ async function formRemito(ventaId){
   ]);
   if (v.error) return alert(v.error.message);
   if (!CLIS.length) await cargarClientes();
+  if (!PRODS.length) await cargarCatalogo();
   const cli = CLIS.find(x=>x.id===v.data.cliente_id);
   const pend = (i.data||[]).filter(x=>!x.es_adicional && (Number(x.cantidad||0) - Number(x.entregado||0)) > 0.0001);
   REM = {venta:v.data, items:pend, remitos:r.data||[], todos:(i.data||[])};
@@ -4677,16 +4683,50 @@ async function formRemito(ventaId){
      '</div>'+
      '<div class="tablewrap"><table><thead><tr><th>Producto</th><th>Vendido</th><th>Entregado</th><th>Falta</th><th>Entregar ahora</th></tr></thead><tbody>'+
      pend.map(function(x,k){ const falta = Number(x.cantidad||0)-Number(x.entregado||0);
+       const mv = medidaRenglon(x, x.cantidad), me = medidaRenglon(x, x.entregado), mf = medidaRenglon(x, falta);
+       const chico = t => t ? '<div class="muted" style="font-size:11px">'+t+'</div>' : '';
        return '<tr><td><b>'+esc(x.descripcion)+'</b>'+(x.con_instalacion?' <span class="pill ok">Instalado</span>':'')+'</td>'+
-        '<td>'+fmtN(x.cantidad)+' '+esc(x.unidad)+'</td><td>'+fmtN(x.entregado)+'</td><td><b>'+fmtN(falta)+'</b></td>'+
-        '<td><input type="number" step="0.01" style="width:120px" id="rm_'+k+'" value="'+falta+'"></td></tr>';
+        '<td>'+fmtN(x.cantidad)+' '+esc(x.unidad)+chico(mv)+'</td>'+
+        '<td>'+fmtN(x.entregado)+chico(me)+'</td>'+
+        '<td><b>'+fmtN(falta)+'</b>'+chico(mf)+'</td>'+
+        '<td><input type="number" step="0.01" style="width:120px" id="rm_'+k+'" value="'+falta+'" oninput="remCalc()">'+
+          '<div class="muted" id="rmq_'+k+'" style="font-size:11px"></div></td></tr>';
      }).join("")+'</tbody></table></div>'+
+     /* 11/8, Gustavo: «que en el remito diga cuánto saqué del total: saqué 10 de
+        un total de la venta de 50». Se ve mientras se carga, no después. */
+     '<div id="rm_tot" style="margin-top:8px;border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;background:#faf8f4"></div>'+
      '<div class="f" style="margin-top:8px"><label>Observaciones</label><input id="rm_obs"></div>'+
      '<div class="acciones"><button class="btn" onclick="guardarRemito('+ventaId+')">Registrar remito</button>'+
      '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>'
     : '<div class="muted">Está todo entregado. No queda nada pendiente de esta venta.</div>'+
       '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>');
   try{ $("dlg").showModal(); }catch(e){}
+  remCalc();
+}
+/* Lo que estoy por sacar, contra el total de la venta. Se recalcula en cada tecla:
+   el que carga el remito tiene que ver «10 de 50» antes de registrar, no después. */
+function remCalc(){
+  if (!REM || !$("rm_tot")) return;
+  const ahora = [];
+  REM.items.forEach(function(x,k){
+    const el = $("rm_"+k); const v = el ? Number(el.value||0) : 0;
+    ahora.push(Object.assign({}, x, {cantidad:v}));
+    const q = $("rmq_"+k);
+    if (q){
+      const m = medidaRenglon(x, v);
+      q.innerHTML = v>0 ? (fmtN(v)+' de '+fmtN(x.cantidad)+' '+esc(x.unidad)+(m? ' · '+m : '')) : '';
+    }
+  });
+  const tAhora = medidasDe(ahora), tVenta = medidasDe(REM.todos), tYa = medidasDe(REM.todos, "entregado");
+  const conEste = {m2:Math.round((tYa.m2+tAhora.m2)*100)/100, ml:Math.round((tYa.ml+tAhora.ml)*100)/100,
+                   un:Math.round((tYa.un+tAhora.un)*1000)/1000, porUnidad:{}, sinDato:[]};
+  Object.keys(tYa.porUnidad).forEach(function(u){ conEste.porUnidad[u] = tYa.porUnidad[u]; });
+  Object.keys(tAhora.porUnidad).forEach(function(u){ conEste.porUnidad[u] = (conEste.porUnidad[u]||0) + tAhora.porUnidad[u]; });
+  $("rm_tot").innerHTML =
+    '<div>Este remito saca: '+textoMedidas(tAhora)+'</div>'+
+    '<div style="margin-top:4px">Total de la venta: '+textoMedidas(tVenta)+'</div>'+
+    '<div style="margin-top:4px" class="muted">Con este remito quedan entregados '+textoMedidasPlano(conEste)+
+      ' de '+textoMedidasPlano(tVenta)+'.</div>';
 }
 async function guardarRemito(ventaId){
   const items = [];
@@ -4793,7 +4833,18 @@ async function verRemito(id){
   const x = r.data, items = i.data||[];
   const peso = items.reduce((a,y)=>a+Number(y.peso||0),0);
   if (!CLIS.length) await cargarClientes();
+  if (!PRODS.length) await cargarCatalogo();
   const cli = CLIS.find(c=>c.id===x.cliente_id);
+  /* 11/8, Gustavo: el remito tiene que decir cuánto se sacó del total de la venta
+     —«saqué 10 de un total de 50»—. El total sale de la venta, no del remito. */
+  const vi = await sb.from("venta_items").select("*").eq("venta_id", x.venta_id);
+  const vitems = vi.data || [];
+  const delItem = y => vitems.find(z => String(z.id) === String(y.venta_item_id)) || {};
+  const conVenta = items.map(function(y){
+    const v = delItem(y);
+    return {producto_id:v.producto_id, unidad:v.unidad, cantidad:Number(y.cantidad||0), es_adicional:false, descripcion:y.descripcion};
+  });
+  const tAhora = medidasDe(conVenta), tVenta = medidasDe(vitems);
   const html = '<html><head><meta charset="utf-8"><title>'+esc(x.codigo)+'</title><style>'+
    'body{font-family:Helvetica,Arial,sans-serif;padding:26px;color:#232b2d;font-size:13px}'+
    'h1{font-family:Georgia,serif;font-size:22px;letter-spacing:.5px}'+
@@ -4807,10 +4858,24 @@ async function verRemito(id){
    membrete('Remito de entrega '+esc(x.codigo)+' · '+fmtF(x.fecha))+
    '<div class="caja"><b>'+esc(cli?cli.nombre:"")+'</b>'+(cli&&cli.celular?' · '+esc(cli.celular):'')+
    '<br>Entrega en: '+esc(x.direccion||"")+'</div>'+
-   '<table><thead><tr><th>Producto</th><th class="r">Cantidad</th><th class="r">Peso kg</th></tr></thead><tbody>'+
-   items.map(y=>'<tr><td>'+esc(y.descripcion)+'</td><td class="r">'+fmtN(y.cantidad)+'</td><td class="r">'+fmtN(y.peso)+'</td></tr>').join("")+
-   '<tr><td><b>Peso total</b></td><td></td><td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>'+
+   '<table><thead><tr><th>Producto</th><th class="r">Se entrega</th><th class="r">Del total de la venta</th><th class="r">Medida</th><th class="r">Peso kg</th></tr></thead><tbody>'+
+   items.map(function(y){
+     const v = delItem(y), un = v.unidad ? " "+esc(v.unidad) : "";
+     const med = medidaRenglon(v, y.cantidad), tot = medidaRenglon(v, v.cantidad);
+     return '<tr><td>'+esc(y.descripcion)+'</td>'+
+       '<td class="r"><b>'+fmtN(y.cantidad)+'</b>'+un+'</td>'+
+       '<td class="r">'+(v.cantidad!=null? fmtN(y.cantidad)+' de '+fmtN(v.cantidad)+un : '—')+'</td>'+
+       '<td class="r">'+(med? med+(tot? ' de '+tot : '') : '—')+'</td>'+
+       '<td class="r">'+fmtN(y.peso)+'</td></tr>';
+   }).join("")+
+   (tAhora.un? '<tr><td><b>Total de este remito</b></td><td class="r"><b>'+fmtN(tAhora.un)+'</b></td>'+
+      '<td class="r">'+fmtN(tAhora.un)+' de '+fmtN(tVenta.un)+'</td>'+
+      '<td class="r"><b>'+textoMedidasPlano({m2:tAhora.m2, ml:tAhora.ml, un:0, porUnidad:{}})+'</b></td>'+
+      '<td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>' :
+      '<tr><td><b>Peso total</b></td><td colspan="3"></td><td class="r"><b>'+fmtN(peso)+' kg</b></td></tr>')+
    '</tbody></table>'+
+   (tVenta.un? '<div class="caja">Esta venta es de <b>'+textoMedidasPlano(tVenta)+'</b>. En este remito salen <b>'+
+      textoMedidasPlano(tAhora)+'</b>.</div>' : '')+
    (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
    (cfg("pie_remito")?'<div style="margin-top:14px;font-size:11px;color:#6b7679">'+esc(cfg("pie_remito"))+'</div>':'')+
    '<div class="firma"><div>Firma del transportista</div><div>Firma y aclaración de quien recibe</div></div>'+
@@ -6249,6 +6314,9 @@ async function fichaVenta(id){
   if (v.error) return alert(v.error.message);
   const ve = v.data, items = i.data||[];
   if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
+  /* Las medidas salen de la ficha del producto: si el catálogo no está cargado,
+     la venta mostraría unidades sin metros. */
+  if (!PRODS.length) await cargarCatalogo();
   const cli = CLIS.find(x=>x.id===ve.cliente_id);
   $("dtit").textContent = ve.codigo + " · " + (cli?cli.nombre:"");
   $("dbody").innerHTML = '<div id="vnmsg"></div>'+
@@ -6260,11 +6328,25 @@ async function fichaVenta(id){
      '<div class="f"><label>Total</label><div><b>'+fmtM(ve.total,ve.moneda)+'</b> (neto '+fmtM(ve.neto,ve.moneda)+' + IVA '+fmtM(ve.iva,ve.moneda)+')</div></div>'+
    '</div>'+
    '<div class="sec">Renglones</div>'+
-   '<div class="tablewrap"><table><thead><tr><th>Descripción</th><th>Cant.</th><th>Un.</th><th>Precio</th><th>IVA %</th><th>Entregado</th></tr></thead><tbody>'+
-   items.map(x=>'<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'><td style="white-space:normal;min-width:220px">'+esc(x.descripcion)+(x.es_adicional?' <span class="muted">(adicional)</span>':'')+(x.con_instalacion?' <span class="pill ok">Instalado</span>':'')+'</td>'+
-     '<td>'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td><td>'+fmtM(x.precio_unit,ve.moneda)+'</td><td>'+fmtN(x.iva_pct)+'</td><td>'+fmtN(x.entregado)+' de '+fmtN(x.cantidad)+'</td></tr>').join("")+
+   '<div class="tablewrap"><table><thead><tr><th>Descripción</th><th>Cant.</th><th>Un.</th><th>Medida</th><th>Precio</th><th>IVA %</th><th>Entregado</th></tr></thead><tbody>'+
+   items.map(function(x){
+     const mr = medidaRenglon(x, x.cantidad), me = medidaRenglon(x, x.entregado);
+     return '<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'><td style="white-space:normal;min-width:220px">'+esc(x.descripcion)+(x.es_adicional?' <span class="muted">(adicional)</span>':'')+(x.con_instalacion?' <span class="pill ok">Instalado</span>':'')+'</td>'+
+     '<td>'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
+     '<td>'+(mr?'<b>'+mr+'</b>':'<span class="muted">—</span>')+'</td>'+
+     '<td>'+fmtM(x.precio_unit,ve.moneda)+'</td><td>'+fmtN(x.iva_pct)+'</td>'+
+     '<td>'+(x.es_adicional?'<span class="muted">—</span>':
+        '<b>'+fmtN(x.entregado)+'</b> de '+fmtN(x.cantidad)+' '+esc(x.unidad)+
+        (mr? '<div class="muted" style="font-size:11px">'+me+' de '+mr+'</div>':''))+'</td></tr>';
+   }).join("")+
+   (function(){
+      const tv = medidasDe(items), te = medidasDe(items, "entregado");
+      if (!tv.un) return "";
+      return '<tr style="background:#f6f3ee"><td><b>Total de la venta</b></td><td colspan="3">'+textoMedidas(tv)+'</td>'+
+             '<td colspan="2" class="muted">entregado</td><td>'+textoMedidas(te)+'</td></tr>';
+   })()+
    '</tbody></table></div>'+
-   '<div class="muted" style="margin-top:6px">«Entregado» se va a completar solo con los remitos cuando exista el módulo de stock.</div>'+
+   '<div class="muted" style="margin-top:6px">«Entregado» lo llevan los remitos: cada remito parcial suma acá, y anular un remito lo resta.</div>'+
    '<div class="sec">Entrega e instalación</div>'+
    '<div class="muted" style="margin-bottom:8px">De acá sale el reporte de entregas e instalaciones planificadas que usa el depósito y la cuadrilla.</div>'+
    '<div class="grid">'+
@@ -6503,7 +6585,10 @@ function pintarVentaTotales(){
     el.textContent = fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100), m) || "—";
   });
   const tt = $("v_tot"); if (!tt) return;
+  const med = medidasDe(VTA.items);
   tt.innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr style="background:#f6f3ee"><td>Medida total</td><td style="text-align:right;white-space:normal">'+textoMedidas(med)+'</td></tr>'+
+    (med.sinDato.length? '<tr><td colspan="2" class="muted" style="white-space:normal;font-size:11px">'+med.sinDato.length+' renglón(es) sin m² por caja ni ml por unidad en la ficha del producto: suman a las unidades pero no a los metros.</td></tr>':'')+
     '<tr><td>Neto</td><td style="text-align:right">'+(fmtM(t.neto,m)||"—")+'</td></tr>'+
     '<tr><td>IVA</td><td style="text-align:right">'+(fmtM(t.iva,m)||"—")+'</td></tr>'+
     '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(t.total,m)||"—")+'</b></td></tr>'+
@@ -8274,6 +8359,62 @@ function convDe(prod){
   if (m2 > 0) return {factor:m2, um:"m²"};
   if (ml > 0) return {factor:ml, um:"ml"};
   return null;
+}
+/* ── Medidas totales de un documento (11/8, Gustavo) ──
+   «Que indique m², ml y unidades totales, y que en el remito diga cuánto saqué
+   del total: saqué 10 de un total de 50.»
+   La medida de un renglón NO se guarda aparte: se calcula con la cantidad por lo
+   que trae cada caja, de la ficha del producto. Un dato en un solo lugar — así el
+   presupuesto, la venta y el remito dicen siempre lo mismo, y si mañana se corrige
+   el m² por caja de un producto, se corrige en todos lados.
+   El adicional (flete, colocación) no se mide: no es mercadería. */
+function medidasDe(items, campo){
+  const cc = campo || "cantidad";
+  const r = {m2:0, ml:0, un:0, porUnidad:{}, sinDato:[]};
+  (items||[]).forEach(function(x){
+    if (x.es_adicional) return;
+    const cant = Number(x[cc]||0);
+    if (!cant) return;
+    r.un += cant;
+    const u = (x.unidad||"un").trim() || "un";
+    r.porUnidad[u] = (r.porUnidad[u]||0) + cant;
+    const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+    if (!c){ r.sinDato.push(x.descripcion || "un renglón"); return; }
+    if (c.um === "m²") r.m2 += cant*c.factor; else r.ml += cant*c.factor;
+  });
+  r.m2 = Math.round(r.m2*100)/100;
+  r.ml = Math.round(r.ml*100)/100;
+  r.un = Math.round(r.un*1000)/1000;
+  return r;
+}
+/* «21,6 m² · 12 ml · 14 unidades (12 caja · 2 unidad)» */
+function textoMedidas(t){
+  const p = [];
+  if (t.m2 > 0) p.push('<b>'+fmtN(t.m2)+' m²</b>');
+  if (t.ml > 0) p.push('<b>'+fmtN(t.ml)+' ml</b>');
+  if (t.un > 0){
+    const det = Object.keys(t.porUnidad).map(function(u){ return fmtN(t.porUnidad[u])+' '+esc(u); });
+    p.push('<b>'+fmtN(t.un)+'</b> '+(det.length>1 ? '<span class="muted">('+det.join(' · ')+')</span>' : esc(Object.keys(t.porUnidad)[0]||"un")));
+  }
+  return p.length ? p.join(' · ') : '<span class="muted">—</span>';
+}
+/* La misma línea, sin etiquetas HTML, para las impresiones */
+function textoMedidasPlano(t){
+  const p = [];
+  if (t.m2 > 0) p.push(fmtN(t.m2)+' m²');
+  if (t.ml > 0) p.push(fmtN(t.ml)+' ml');
+  if (t.un > 0){
+    const u = Object.keys(t.porUnidad);
+    p.push(u.length === 1 ? fmtN(t.un)+' '+u[0]
+                          : fmtN(t.un)+' unidades ('+u.map(function(x){ return fmtN(t.porUnidad[x])+' '+x; }).join(' · ')+')');
+  }
+  return p.join(' · ');
+}
+/* «10 de 50 caja · 18 de 90 m²» — lo entregado contra lo vendido, de un renglón */
+function medidaRenglon(x, cant){
+  const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+  if (!c) return "";
+  return fmtN(Math.round(Number(cant||0)*c.factor*100)/100)+' '+c.um;
 }
 function celdaMedida(x, k, d){
   const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
