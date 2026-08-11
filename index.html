@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-86";
+const VERSION = "v2026.08.11-87";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -618,8 +618,50 @@ function pintarNav(){
   });
   $("subnav") && ($("subnav").innerHTML = "");
 }
+/* ══════════════════════════════════════════════════════════════
+   PUERTA ÚNICA DE PERMISOS — pedido de Gustavo, 11/8/2026
+   «Que todo lo que el usuario no tenga acceso no le permita realizar
+   ninguna acción, que le muestre página en blanco con leyenda no tiene
+   permiso.»
+   El menú ya escondía lo que no corresponde, pero **esconder no es cerrar**:
+   si a una sección se llegaba por otro camino —un botón de otra pantalla, un
+   atajo del Estado financiero— la pantalla se dibujaba igual, y como la base
+   no devuelve nada sin permiso, quedaba vacía y parecía un error del sistema.
+   Ahora la puerta está en un solo lugar y vale para las 26 pantallas, sus
+   submenús, y las que se agreguen mañana.
+   Esto es la cortina, no la cerradura: la cerradura son los permisos de la
+   base, que siguen siendo los que deciden. Las dos tienen que estar.
+   ══════════════════════════════════════════════════════════════ */
+function permisoQueFalta(v, sub){
+  const s = (SUBMENU[v]||[]).find(function(x){ return x.id === (sub||""); });
+  if (s && s.perm && !P(s.perm)) return s.perm;
+  const m = MENU.find(function(x){ return x.id === v; });
+  if (m && m.perm && !P(m.perm)) return m.perm;
+  return null;
+}
+function pantallaSinPermiso(v, sub, permiso){
+  const m = MENU.find(function(x){ return x.id === v; });
+  const s = (SUBMENU[v]||[]).find(function(x){ return x.id === (sub||""); });
+  const donde = (m ? m.t : v) + (s && s.t && s.id ? " › " + s.t : "");
+  $("main").innerHTML = '<div class="panel">'+
+    '<h2>No tenés permiso</h2>'+
+    '<div class="msg err">Tu rol <b>'+esc((PERFIL&&PERFIL.rol)||"")+'</b> no tiene acceso a <b>'+esc(donde)+'</b>. '+
+      'Esta pantalla no se abre y desde acá no se puede hacer ninguna acción.</div>'+
+    '<div class="desc">No es un error del sistema. Falta el permiso <code>'+esc(permiso)+'</code> para tu rol. '+
+      'Si lo necesitás para trabajar, pedíselo al dueño: se habilita en <b>Configuración → Roles</b> y te toma efecto '+
+      'cuando salís y volvés a entrar.</div>'+
+    '<div class="acciones"><button class="btn2" onclick="irAPrimeraVista()">Volver a lo que sí puedo ver</button></div>'+
+    '</div>';
+}
+function irAPrimeraVista(){
+  const primera = MENU.find(function(m){ return !m.perm || P(m.perm); });
+  ir(primera ? primera.id : "tablero");
+}
 function ir(v, sub){
   VISTA = v; SUBVISTA = sub || "";
+  /* La puerta, antes de dibujar nada. */
+  const falta = permisoQueFalta(v, SUBVISTA);
+  if (falta){ pintarNav(); pantallaSinPermiso(v, SUBVISTA, falta); return; }
   // las opciones "Nuevo" abren la ficha y dejan el listado detrás
   if (SUBVISTA === "nuevo"){
     /* 10/8: Importaciones→Nuevo y Gastos→Nuevo estaban en bloques de más abajo
@@ -7584,8 +7626,10 @@ async function finResumen(){
     html += '<div class="panel"><h2>Estado financiero</h2>'+
       '<div class="desc">Lo que hay que cobrar y lo que hay que pagar, aparte de la plata que ya está en las cuentas.</div>'+
       tabla(
-        linea("Cuentas a cobrar (deuda de clientes)", ef.cobrar, "ir('clientes','morosos')")+
-        linea("A favor de clientes (señas o pagos de más)", ef.favor, "ir('clientes','afavor')")+
+        /* 11/8: estos dos atajos eran los únicos sin control de permiso — los
+           otros tres sí lo tenían. Ahora los cinco se comportan igual. */
+        linea("Cuentas a cobrar (deuda de clientes)", ef.cobrar, P("cliente-consultar")?"ir('clientes','morosos')":null)+
+        linea("A favor de clientes (señas o pagos de más)", ef.favor, P("cliente-consultar")?"ir('clientes','afavor')":null)+
         linea("Cuentas a pagar (deuda con proveedores)", ef.pagar||{}, P("compra-consultar")?"ir('provee','deuda')":null)+
         linea("A favor sobre proveedores", ef.favorProv||{}, P("compra-consultar")?"ir('provee')":null)+
         linea("Cheques por cubrir (propios emitidos sin debitar)", ef.porCubrir||{}, P("finanzas-consultar")?"ir('cheques','propios')":null)+
