@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-97";
+const VERSION = "v2026.08.11-98";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1047,6 +1047,29 @@ function faltan(reglas){
   reglas.forEach(function(r){ if (!r.ok) f.push(r.q); });
   return f;
 }
+/* 11/8, Gustavo: «campos obligatorios indicar con asterisco». Uno solo acá, así
+   el día que se decida cambiarlo de color o de forma se cambia en un lugar. */
+const AST = '<span style="color:#7a2415;font-weight:700" title="Obligatorio">*</span>';
+/* Las reglas de qué es obligatorio, escritas UNA vez y usadas por las dos
+   pantallas del prospecto —el alta y la ficha—, para que no se separen. */
+function reglasProspecto(o){
+  const visita = o.derivacion === "Visita a domicilio";
+  return [
+    {ok:!!o.nombre,                          q:"Cliente"},
+    {ok:!!(o.celular || o.telefono),         q:"Celular o teléfono (con uno alcanza)"},
+    {ok:!!o.canal_id,                        q:"Canal de contacto"},
+    {ok:!!o.origen_id,                       q:"Origen"},
+    {ok:!!o.vl_id,                           q:"VL responsable"},
+    {ok:!!o.localidad_id,                    q:"Localidad"},
+    {ok:!!o.motivo_consulta,                 q:"Motivo de consulta"},
+    {ok:!!o.derivacion,                      q:"Derivación (a visita o a presupuesto directo)"},
+    {ok:!visita || !!o.direccion,            q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
+    {ok:!visita || !!o.ato_id,               q:"ATO asignado (la visita necesita saber quién va)"},
+    {ok:!visita || !!o.fecha_visita,         q:"Fecha de visita"},
+    {ok:!visita || !!o.hora_visita,          q:"Hora de la visita"},
+    {ok:o.resultado !== "No Vendido" || !!o.motivo_descarte_id, q:"Motivo de descarte (el resultado es «No Vendido»: hay que decir por qué no se cerró)"}
+  ];
+}
 function avisoFaltan(idMsg, lista, queEs){
   const el = $(idMsg); if (!el) return;
   el.innerHTML = '<div class="msg err" style="line-height:1.5"><b>Falta cargar '+
@@ -1078,31 +1101,33 @@ function formHTML(p, ro, lig){
   '<div class="sec">Entrada del prospecto · carga la VL</div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="c_fecha" value="'+(p.fecha||hoy())+'" '+d+'></div>'+
     '<div class="f"><label>Estado</label><select id="c_estado" '+d+'>'+selTxt(ESTADOS,p.estado)+'</select></div>'+
-    '<div class="f"><label>Canal de contacto</label><select id="c_canal_id" '+d+'>'+selOpts(M.can,p.canal_id)+'</select></div>'+
-    '<div class="f"><label>Origen</label><select id="c_origen_id" '+d+'>'+selOpts(M.ori,p.origen_id)+'</select></div>'+
-    '<div class="f"><label>VL responsable</label><select id="c_vl_id" '+d+'>'+selPer(VLS(),p.vl_id)+'</select></div>'+
+    '<div class="f"><label>Canal de contacto '+AST+'</label><select id="c_canal_id" '+d+'>'+selOpts(M.can,p.canal_id)+'</select></div>'+
+    '<div class="f"><label>Origen '+AST+'</label><select id="c_origen_id" '+d+'>'+selOpts(M.ori,p.origen_id)+'</select></div>'+
+    '<div class="f"><label>VL responsable '+AST+'</label><select id="c_vl_id" '+d+'>'+selPer(VLS(),p.vl_id)+'</select></div>'+
   '</div><div class="grid">'+
-    '<div class="f"><label>Cliente *</label><input id="c_nombre" value="'+esc(p.nombre)+'" '+d+'></div>'+
-    '<div class="f"><label>Celular</label><input id="c_celular" value="'+esc(p.celular)+'" '+d+'></div>'+
+    '<div class="f"><label>Cliente '+AST+'</label><input id="c_nombre" value="'+esc(p.nombre)+'" '+d+'></div>'+
+    '<div class="f"><label>Celular '+AST+'</label><input id="c_celular" value="'+esc(p.celular)+'" '+d+'></div>'+
     '<div class="f"><label>Teléfono</label><input id="c_telefono" value="'+esc(p.telefono)+'" '+d+'></div>'+
     '<div class="f"><label>Email</label><input id="c_email" value="'+esc(p.email)+'" '+d+'></div>'+
-    '<div class="f"><label>Localidad</label><select id="c_localidad_id" '+d+'>'+selOpts(M.loc,p.localidad_id)+'</select></div>'+
-    '<div class="f"><label>Dirección de obra</label><input id="c_direccion" value="'+esc(p.direccion)+'" '+d+'></div>'+
+    '<div class="f"><label>Localidad '+AST+'</label><select id="c_localidad_id" '+d+'>'+selOpts(M.loc,p.localidad_id)+'</select></div>'+
+    '<div class="f"><label>Dirección de obra <span class="muted" style="font-size:.85em">(obligatoria si va a visita)</span></label><input id="c_direccion" value="'+esc(p.direccion)+'" '+d+'></div>'+
   '</div><div class="grid">'+
-    '<div class="f"><label>Motivo de consulta</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
+    '<div class="f"><label>Motivo de consulta '+AST+'</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
     '<div class="f"><label>Decide con</label><input id="c_decide_con" value="'+esc(p.decide_con)+'" '+d+'></div>'+
     '<div class="f"><label>Objeción de entrada</label><select id="c_objecion_entrada_id" '+d+'>'+selOpts(M.obj,p.objecion_entrada_id)+'</select></div>'+
   '</div><div class="grid">'+
-    '<div class="f"><label>Derivación</label><select id="c_derivacion" '+d+' onchange="togglePorDerivacion()">'+selTxt(DERIVA,p.derivacion)+'</select>'+
+    '<div class="f"><label>Derivación '+AST+'</label><select id="c_derivacion" '+d+' onchange="togglePorDerivacion()">'+selTxt(DERIVA,p.derivacion)+'</select>'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">Se decide acá, cuando entra el cliente. Con «Presupuesto directo» el sistema saltea la visita.</div></div>'+
   '</div>'+
   '<div id="avisoDeriva" class="msg" style="display:none">Elegí la <b>derivación</b> para seguir cargando.</div>'+
 
   '<div id="bloqueVisita" data-hay="'+(hayVisita?1:0)+'">'+
-  '<div class="sec">Visita · la programa la VL</div><div class="grid">'+
-    '<div class="f"><label>ATO asignado</label><select id="c_ato_id" '+d+'>'+selPer(ATOS(),p.ato_id)+'</select></div>'+
-    '<div class="f"><label>Fecha de visita</label><input type="date" id="c_fecha_visita" value="'+(p.fecha_visita||"")+'" '+d+'></div>'+
-    '<div class="f"><label>Hora</label><input id="c_hora_visita" value="'+esc(p.hora_visita)+'" placeholder="10:30" '+d+'></div>'+
+  '<div class="sec">Visita · la programa la VL</div>'+
+  '<div class="muted" style="margin-bottom:8px">Con la derivación en <b>«Visita a domicilio»</b> los tres datos son obligatorios: sin ATO, día y hora la visita no existe. <b>Al guardar, el prospecto pasa a ser cliente.</b></div>'+
+  '<div class="grid">'+
+    '<div class="f"><label>ATO asignado '+AST+'</label><select id="c_ato_id" '+d+'>'+selPer(ATOS(),p.ato_id)+'</select></div>'+
+    '<div class="f"><label>Fecha de visita '+AST+'</label><input type="date" id="c_fecha_visita" value="'+(p.fecha_visita||"")+'" '+d+'></div>'+
+    '<div class="f"><label>Hora '+AST+'</label><input id="c_hora_visita" value="'+esc(p.hora_visita)+'" placeholder="10:30" '+d+'></div>'+
   '</div>'+
   '<div class="f"><label>Observaciones previas</label><textarea id="c_observaciones_previas" rows="2" placeholder="Lo que hay que saber antes de ir: cómo llegar, con quién, qué mirar." '+d+'>'+esc(p.observaciones_previas)+'</textarea></div>'+
   '</div>'+
@@ -1325,6 +1350,24 @@ async function clienteDeProspecto(p, crear){
   return {cliente:r.data, creado:true};
 }
 
+/* ── La visita convierte el prospecto en cliente (11/8, Gustavo) ──
+   «Cuando a un prospecto se le crea una visita, ya pasa el prospecto a cliente,
+   al igual que al hacerle un presupuesto directo.» Tiene sentido: si mandamos
+   a alguien a la casa, esa persona ya es cliente de la empresa. Va en un
+   SEGUNDO PASO, después de guardar el prospecto: si el alta del cliente
+   fallara, el prospecto ya quedó guardado igual. */
+async function clienteSiHayVisita(o){
+  if (o.derivacion !== "Visita a domicilio") return "";
+  if (!P("cliente-agregar")) return "";
+  try{
+    const r = await clienteDeProspecto(o, true);
+    if (r.error) return ' <span style="color:#7a2415">No se pudo dar de alta el cliente: '+esc(r.error)+'</span>';
+    if (!r.cliente) return "";
+    return r.creado ? ' Se dio de alta el <b>cliente '+esc(r.cliente.nombre)+'</b>: tiene visita programada.'
+                    : ' Ya figuraba como cliente: <b>'+esc(r.cliente.nombre)+'</b>.';
+  }catch(e){ return ""; }
+}
+
 async function presupuestosDeProspecto(id){
   const r = await sb.from("presupuestos").select("id,codigo,fecha,estado,total,moneda,cliente_id,nro_papel")
     .eq("prospecto_id", id).order("id",{ascending:false});
@@ -1423,7 +1466,12 @@ async function cerrarVentaDesdeProspecto(idPros){
     await sb.from("presupuestos").update({estado:pre.estado}).eq("id",pre.id);
     return {aviso:'El presupuesto '+esc(pre.codigo)+' no se pudo pasar a venta: '+esc(rv.error.message)+'. Quedó como estaba.'};
   }
-  return {ok:'<b>Venta registrada</b> desde el presupuesto '+esc(pre.codigo)+'. Ya aparece en Ventas y le generó la deuda en la cuenta corriente al cliente.'};
+  let vid = rv.data || null;
+  if (!vid){
+    const bv = await sb.from("ventas").select("id").eq("presupuesto_id", pre.id).order("id",{ascending:false}).limit(1);
+    vid = (bv.data && bv.data[0]) ? bv.data[0].id : null;
+  }
+  return {ok:'<b>Venta registrada</b> desde el presupuesto '+esc(pre.codigo)+'. Ya aparece en Ventas y le generó la deuda en la cuenta corriente al cliente.', ventaId:vid};
 }
 
 /* ─────────── NUEVO ─────────── */
@@ -1436,19 +1484,14 @@ VISTAS.nuevo = function(){
   $("ncancel").onclick = VISTAS.nuevo;
   $("nguardar").onclick = async function(){
     const o = leerForm();
-    const f = faltan([
-      {ok:!!o.nombre,                          q:"Cliente"},
-      {ok:!!(o.celular || o.telefono),         q:"Celular o teléfono (con uno alcanza)"},
-      {ok:!!o.localidad_id,                    q:"Localidad"},
-      {ok:o.derivacion !== "Visita a domicilio" || !!o.direccion, q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
-      {ok:o.resultado !== "No Vendido" || !!o.motivo_descarte_id, q:"Motivo de descarte (el resultado es «No Vendido»: hay que decir por qué no se cerró)"}
-    ]);
+    const f = faltan(reglasProspecto(o));
     if (f.length){ avisoFaltan("nmsg", f, "el prospecto"); return; }
     $("nguardar").disabled = true;
     const {data,error} = await sb.from("prospectos").insert(o).select("id,codigo").single();
     $("nguardar").disabled = false;
     if (error){ $("nmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
-    $("nmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(data.codigo)+'</b>.</div>';
+    const avCli = await clienteSiHayVisita(Object.assign({}, o, {id:data.id}));
+    $("nmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(data.codigo)+'</b>.'+avCli+'</div>';
     CAMPOS.forEach(function(c){ const el=$("c_"+c); if(el && ["fecha","estado","resultado","moneda","vl_id"].indexOf(c)<0) el.value=""; });
     window.scrollTo({top:0,behavior:"smooth"});
   };
@@ -1496,13 +1539,7 @@ async function abrir(id){
 
   if (puedeEditar) $("dguardar").onclick = async function(){
     const o = leerForm();
-    const fv = faltan([
-      {ok:!!o.nombre,                  q:"Cliente"},
-      {ok:!!(o.celular || o.telefono), q:"Celular o teléfono (con uno alcanza)"},
-      {ok:!!o.localidad_id,            q:"Localidad"},
-      {ok:o.derivacion !== "Visita a domicilio" || !!o.direccion, q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
-      {ok:o.resultado !== "No Vendido" || !!o.motivo_descarte_id, q:"Motivo de descarte (el resultado es «No Vendido»: hay que decir por qué no se cerró)"}
-    ]);
+    const fv = faltan(reglasProspecto(o));
     if (fv.length){ avisoFaltan("dmsg", fv, "el prospecto"); return; }
     $("dguardar").disabled = true;
     const pasaAVendido = o.resultado === "Vendido" && p.resultado !== "Vendido";
@@ -1513,16 +1550,18 @@ async function abrir(id){
       return;
     }
     p.resultado = o.resultado;
-    let extra = "";
+    let extra = await clienteSiHayVisita(Object.assign({}, o, {id:id}));
+    let ventaDesdePros = null;
     /* 10/8: si quien marca «Vendido» no puede registrar ventas, antes quedaba
        el prospecto Vendido sin venta detrás y sin ningún aviso. */
     if (pasaAVendido && !P("venta-agregar")){
-      extra = '<div class="msg err" style="margin-top:8px">El resultado quedó en «Vendido», pero tu rol no puede registrar ventas: <b>la venta NO se generó</b>. Avisale a alguien con permiso de ventas para que la registre desde el presupuesto.</div>';
+      extra += '<div class="msg err" style="margin-top:8px">El resultado quedó en «Vendido», pero tu rol no puede registrar ventas: <b>la venta NO se generó</b>. Avisale a alguien con permiso de ventas para que la registre desde el presupuesto.</div>';
     }
     if (pasaAVendido && P("venta-agregar")){
       $("dmsg").innerHTML = '<div class="msg">Cambios guardados. Registrando la venta…</div>';
       const r = await cerrarVentaDesdeProspecto(id);
-      extra = r.ok ? ' '+r.ok : '<div class="msg err" style="margin-top:8px">'+r.aviso+'</div>';
+      extra += r.ok ? ' '+r.ok : '<div class="msg err" style="margin-top:8px">'+r.aviso+'</div>';
+      if (r.ventaId) ventaDesdePros = r.ventaId;
       const nuevos = await presupuestosDeProspecto(id);
       if ($("dpres")) $("dpres").innerHTML = listaPresupPros(nuevos);
     }
@@ -1530,6 +1569,7 @@ async function abrir(id){
     $("dmsg").innerHTML = '<div class="msg ok">Cambios guardados.'+(extra.indexOf("<div")<0?extra:"")+'</div>'+
       (extra.indexOf("<div")>=0?extra:"");
     if (VISTA==="planilla") pintarPlanilla();
+    if (ventaDesdePros){ try{ await fichaVenta(Number(ventaDesdePros)); }catch(e){} }
   };
   /* El botón «Eliminar» se sacó el 11/8: borraba de verdad, contra la regla. */
   if (P("seguimiento-agregar")) $("sagregar").onclick = async function(){
@@ -3879,6 +3919,7 @@ async function abrirPresupuesto(id, desde){
   await db38();
   await db45();
   await db48();
+  await db56();
   if (id){
     const [c,i,a] = await Promise.all([
       sb.from("presupuestos").select("*").eq("id",id).single(),
@@ -3889,7 +3930,7 @@ async function abrirPresupuesto(id, desde){
     PRE = {cab:c.data, items:(i.data||[]), adic:(a.data||[]), borrarItems:[], borrarAdic:[], pros:null};
     /* los m² viven en el prospecto pero se editan desde acá */
     if (PRE.cab.prospecto_id && P("prospecto-consultar")){
-      const qp = await sb.from("prospectos").select("id,codigo,nombre,m2_cotizados,m2_colocar,nro_presup_papel").eq("id",PRE.cab.prospecto_id).single();
+      const qp = await sb.from("prospectos").select("id,codigo,nombre,m2_cotizados,m2_colocar,nro_presup_papel,derivacion").eq("id",PRE.cab.prospecto_id).single();
       PRE.pros = qp.data || null;
     }
   } else {
@@ -3899,7 +3940,7 @@ async function abrirPresupuesto(id, desde){
     window._PROSSEL = [];
     if (P("prospecto-consultar") && !(desde && desde.prospecto)){
       const pr = await sb.from("prospectos")
-        .select("id,codigo,nombre,celular,telefono,email,direccion,localidad_id,origen_id,vl_id,ato_id,nro_presup_papel,m2_cotizados,m2_colocar,fecha")
+        .select("id,codigo,nombre,celular,telefono,email,direccion,localidad_id,origen_id,vl_id,ato_id,nro_presup_papel,m2_cotizados,m2_colocar,fecha,derivacion")
         .order("id",{ascending:false}).limit(500);
       window._PROSSEL = pr.data || [];
     }
@@ -4010,12 +4051,18 @@ function pintarFichaPre(){
        '</div></div>'
      : '')+
    '<div class="grid">'+
-     (P("cliente-consultar")?'<div class="f"><label>Cliente registrado</label><select id="w_cliente_id" onchange="presClienteElegido()" '+d+'>'+selPer(CLIS, c.cliente_id?Number(c.cliente_id):null)+'</select></div>':'')+
-     '<div class="f"><label>Cliente *</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
-     '<div class="f"><label>Teléfono</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
+     /* 11/8, Gustavo: «si elijo prospecto debería ya figurar el mismo como
+        cliente; te da la opción de tener un prospecto y un cliente distinto y
+        eso está mal». Con prospecto elegido, el cliente queda clavado: es el de
+        ese prospecto y no se puede cambiar por otro. */
+     (P("cliente-consultar")?'<div class="f"><label>Cliente registrado</label><select id="w_cliente_id" onchange="presClienteElegido()" '+(c.prospecto_id?"disabled":d)+'>'+selPer(CLIS, c.cliente_id?Number(c.cliente_id):null)+'</select>'+
+       '<div class="muted" id="w_cli_nota" style="font-size:.85em;margin-top:4px">'+
+       (c.prospecto_id ? 'Viene de un prospecto: el cliente es ese y no se cambia acá.' : '')+'</div></div>':'')+
+     '<div class="f"><label>Cliente '+AST+'</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
+     '<div class="f"><label>Teléfono '+AST+'</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
      '<div class="f"><label>Email</label><input id="w_cliente_email" value="'+esc(c.cliente_email)+'" '+d+'></div>'+
-     '<div class="f"><label>Localidad</label><select id="w_localidad_id" '+d+'>'+selOpts(M.loc,c.localidad_id)+'</select></div>'+
-     '<div class="f"><label>Dirección de obra</label><input id="w_direccion_obra" value="'+esc(c.direccion_obra)+'" '+d+'></div>'+
+     '<div class="f"><label>Localidad '+AST+'</label><select id="w_localidad_id" '+d+'>'+selOpts(M.loc,c.localidad_id)+'</select></div>'+
+     '<div class="f"><label>Dirección de obra <span class="muted" style="font-size:.85em">(obligatoria si se instala)</span></label><input id="w_direccion_obra" value="'+esc(c.direccion_obra)+'" '+d+'></div>'+
    '</div>'+
    '<div class="sec">Datos del presupuesto</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><input type="date" id="w_fecha" value="'+(c.fecha||hoy())+'" '+d+'></div>'+
@@ -4032,8 +4079,8 @@ function pintarFichaPre(){
      '<div class="f"><label>Lista de precios</label><select id="w_lista_id" '+d+'>'+selOpts(LISTAS,c.lista_id)+'</select></div>'+
      '<div class="f"><label>Moneda</label><select id="w_moneda" '+d+' onchange="sincro()">'+selTxt(["ARS","USD"],c.moneda||"ARS")+'</select></div>'+
      '<div class="f"><label>Cotización USD</label><input type="number" step="0.01" id="w_cotizacion_usd" value="'+(c.cotizacion_usd==null?"":c.cotizacion_usd)+'" '+d+'></div>'+
-     '<div class="f"><label>N° de presupuesto en papel *</label><input id="w_nro_papel" value="'+esc(c.nro_papel)+'" '+d+' placeholder="el que escribió el ATO a mano">'+
-       '<div class="muted" style="font-size:.85em;margin-top:4px">Se carga acá, no en la ficha del prospecto.</div></div>'+
+     '<div class="f"><label>N° de presupuesto en papel <span class="muted" style="font-size:.85em">(obligatorio si viene de una visita)</span></label><input id="w_nro_papel" value="'+esc(c.nro_papel)+'" '+d+' placeholder="el que escribió el ATO a mano">'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">Se carga acá, no en la ficha del prospecto. En un presupuesto suelto, de mostrador, no hace falta.</div></div>'+
      /* Los m² viven en el prospecto, pero se cargan de este lado: el pedido de
         Gustavo fue que el presupuesto se complete en un solo lugar. Al guardar
         vuelven a la ficha del prospecto solos. */
@@ -4043,8 +4090,8 @@ function pintarFichaPre(){
        (c.m2_cotizados!=null ? c.m2_cotizados : ((PRE.pros&&PRE.pros.m2_cotizados!=null)?PRE.pros.m2_cotizados:""))+'" '+d+'></div>'+
      '<div class="f" id="w_boxm2p"><label>m² a colocar <span class="muted">(obligatorio si se instala)</span></label><input type="number" step="0.01" id="w_pros_m2p" value="'+
        (c.m2_colocar!=null ? c.m2_colocar : ((PRE.pros&&PRE.pros.m2_colocar!=null)?PRE.pros.m2_colocar:""))+'" '+d+'></div>'+
-     '<div class="f"><label>VL</label><select id="w_vl_id" '+d+'>'+selPer(VLS(),c.vl_id)+'</select></div>'+
-     '<div class="f"><label>ATO</label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
+     '<div class="f"><label>VL '+AST+'</label><select id="w_vl_id" '+d+'>'+selPer(VLS(),c.vl_id)+'</select></div>'+
+     '<div class="f"><label>ATO <span class="muted" style="font-size:.85em">(obligatorio si viene de una visita)</span></label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
      '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+selOpts(M.mot,c.motivo_rechazo_id)+'</select></div>'+
    '</div>'+
    /* La preferencia de pago se anota acá, que es donde se habla de plata, pero
@@ -4081,6 +4128,11 @@ function pintarFichaPre(){
    '<div id="w_tot"></div>'+
    '<div class="sec">Notas</div>'+
    '<div class="f"><label>Notas del presupuesto (se imprimen)</label><textarea id="w_notas" rows="3" '+d+'>'+esc(c.notas)+'</textarea></div>'+
+   /* 11/8, Gustavo: una nota interna que NO sale en la impresión ni en el PDF.
+      Es para lo que se anota entre nosotros —«el cliente regatea», «pasa el
+      lunes»— y no puede terminar en la hoja que se le entrega. */
+   (window._db56 ? '<div class="f"><label>Nota interna <span class="muted" style="font-size:.85em">(no sale en la impresión ni en el PDF)</span></label>'+
+     '<textarea id="w_nota_interna" rows="2" placeholder="Lo que es para nosotros: cómo viene la negociación, qué prometimos, con quién hablar." '+d+'>'+esc(c.nota_interna)+'</textarea></div>' : '')+
    '<div class="f"><label>Condiciones comerciales</label><textarea id="w_condiciones" rows="2" '+d+'>'+esc(c.condiciones)+'</textarea></div>'+
    /* Pedido de Gustavo (8/8/2026): pasar a venta con un BOTÓN a la vista, no
       cambiando el estado en un desplegable. Por dentro hace exactamente lo
@@ -4128,7 +4180,7 @@ function pintarItems(){
   const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
       .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
   $("w_items").innerHTML = !PRE.items.length ? '<div class="muted">Sin renglones todavía. Tocá «Agregar renglón».</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th>Instalación</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th>Instalación</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:180px">Cargar por</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    PRE.items.map(function(x,k){
      return '<tr>'+
        '<td><select style="width:100%;min-width:240px" id="it_'+k+'_producto_id" '+d+' onchange="itemProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
@@ -4136,7 +4188,7 @@ function pintarItems(){
        '<td><input id="it_'+k+'_descripcion" value="'+esc(x.descripcion)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.01" style="width:80px" id="it_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" '+d+' oninput="cantidadCambio('+k+')"></td>'+
        '<td><input style="width:70px" id="it_'+k+'_unidad" value="'+esc(x.unidad)+'" '+d+' oninput="sincro()"></td>'+
-       '<td style="min-width:150px">'+celdaMedida(x,k,d)+'</td>'+
+       '<td style="min-width:180px">'+celdaMedida(x,k,d)+'</td>'+
        '<td><input type="number" step="0.01" style="width:110px" id="it_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" '+d+' oninput="precioCambio('+k+')">'+
          '<div id="ph_'+k+'" class="muted" style="font-size:11px;color:#7a2415;'+(Number(x.precio_unit)>0?'display:none':'')+'">sin precio cargado</div></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="it_'+k+'_descuento_pct" value="'+(x.descuento_pct||0)+'" '+d+' oninput="sincro()"></td>'+
@@ -4150,13 +4202,16 @@ function pintarAdic(){
   const puede = PRE.cab.id ? P("presupuesto-modificar") : P("presupuesto-agregar");
   const d = puede ? "" : "disabled";
   $("w_adic").innerHTML = !PRE.adic.length ? '<div class="muted">Sin adicionales.</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Concepto</th><th>Importe</th><th>IVA %</th><th>Con IVA</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   /* 11/8, Gustavo: «el "con IVA" en adicional sacalo, porque ya está el ajuste
+      por porcentaje de IVA». Efectivamente eran dos llaves para lo mismo: el
+      adicional lleva IVA si su porcentaje es mayor que cero. Con 0 no lleva. */
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Concepto</th><th>Importe</th><th>IVA %</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    PRE.adic.map(function(x,k){
      return '<tr>'+
        '<td><input id="ad_'+k+'_concepto" value="'+esc(x.concepto)+'" '+d+' oninput="sincro()"></td>'+
        '<td><input type="number" step="0.01" style="width:120px" id="ad_'+k+'_importe" value="'+(x.importe==null?"":x.importe)+'" '+d+' oninput="sincro()"></td>'+
-       '<td><input type="number" step="0.1" style="width:70px" id="ad_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" '+d+' oninput="sincro()"></td>'+
-       '<td><select id="ad_'+k+'_aplica_iva" '+d+' onchange="sincro()"><option value="1" '+(x.aplica_iva===false?"":"selected")+'>Sí</option><option value="0" '+(x.aplica_iva===false?"selected":"")+'>No</option></select></td>'+
+       '<td><input type="number" step="0.1" style="width:70px" id="ad_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" '+d+' oninput="sincro()">'+
+         '<div class="muted" style="font-size:11px">0 = sin IVA</div></td>'+
        (puede?'<td><button class="btn2 btn-sm" onclick="adicQuitar('+k+')">Quitar</button></td>':'')+
      '</tr>';
    }).join("")+'</tbody></table></div>';
@@ -4206,11 +4261,12 @@ function sincro(){
     const ci = $("it_"+k+"_con_instalacion"); if (ci) x.con_instalacion = ci.value==="1";
   });
   PRE.adic.forEach(function(x,k){
-    const c1=$("ad_"+k+"_concepto"), c2=$("ad_"+k+"_importe"), c3=$("ad_"+k+"_iva_pct"), c4=$("ad_"+k+"_aplica_iva");
+    const c1=$("ad_"+k+"_concepto"), c2=$("ad_"+k+"_importe"), c3=$("ad_"+k+"_iva_pct");
     if (c1) x.concepto = c1.value;
     if (c2) x.importe = c2.value===""?0:Number(c2.value);
     if (c3) x.iva_pct = c3.value===""?0:Number(c3.value);
-    if (c4) x.aplica_iva = c4.value==="1";
+    /* el IVA lo decide el porcentaje, no un tilde aparte (11/8) */
+    x.aplica_iva = Number(x.iva_pct||0) > 0;
   });
   const dm = $("w_descuento_modo"); if (dm) PRE.cab.descuento_modo = dm.value;
   const dg = $("w_descuento_pct");   if (dg) PRE.cab.descuento_pct   = Number(dg.value||0);
@@ -4258,9 +4314,16 @@ function adicAgregar(){ sincro(); PRE.adic.push({concepto:"", importe:0, iva_pct
 function adicQuitar(k){ sincro(); const x = PRE.adic[k]; if (x.id) PRE.borrarAdic.push(x.id); PRE.adic.splice(k,1); pintarAdic(); pintarTotales(); }
 
 const CAMPOS_PRE = ["cliente_id","cliente_nombre","cliente_tel","cliente_email","localidad_id","direccion_obra","fecha","validez_dias","tipo","estado",
-  "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones"];
+  "lista_id","moneda","cotizacion_usd","nro_papel","vl_id","ato_id","motivo_rechazo_id","descuento_pct","notas","condiciones","nota_interna"];
 const NUM_PRE = ["cliente_id","localidad_id","validez_dias","lista_id","cotizacion_usd","motivo_rechazo_id","descuento_pct","medio_pago_pref_id"];
 /* ¿la base ya tiene el descuento por monto? (migración v48) */
+/* ¿la base ya tiene la nota interna? (migración v56) */
+async function db56(){
+  if (window._db56 !== undefined) return window._db56;
+  const t = await sb.from("presupuestos").select("nota_interna").limit(1);
+  window._db56 = !t.error;
+  return window._db56;
+}
 async function db48(){
   if (window._db48 !== undefined) return window._db48;
   const t = await sb.from("presupuestos").select("descuento_modo").limit(1);
@@ -4375,7 +4438,13 @@ async function presProspectoElegido(){
   const msg = t => { const e = $("qmsg"); if (e) e.innerHTML = t; };
   const id = sel.value;
   const verM2 = function(){};   /* los m² ahora se ven siempre: son del presupuesto */
-  if (!id){ PRE.cab.prospecto_id = null; PRE.pros = null; msg(""); return; }
+  if (!id){
+    PRE.cab.prospecto_id = null; PRE.pros = null; msg("");
+    /* Sacaron el prospecto: el cliente vuelve a poder elegirse a mano. */
+    if ($("w_cliente_id")) $("w_cliente_id").disabled = false;
+    if ($("w_cli_nota")) $("w_cli_nota").innerHTML = "";
+    return;
+  }
   const p = (window._PROSSEL||[]).find(x=>String(x.id)===String(id));
   if (!p) return;
   if (!p.nombre) return msg('<div class="msg err">Ese prospecto no tiene nombre cargado y el presupuesto lo necesita.</div>');
@@ -4393,7 +4462,15 @@ async function presProspectoElegido(){
   const selMP = $("w_medio_pago_pref_id");
   if (selMP && cl){ PRE.medioPagoPref = cl.medio_pago_pref_id||null; selMP.value = PRE.medioPagoPref||""; }
   const set = (k,v) => { const e = $(k); if (e && v != null && v !== "") e.value = v; };
-  if ($("w_cliente_id")) $("w_cliente_id").innerHTML = selPer(CLIS, cl ? Number(cl.id) : null);
+  /* El cliente queda clavado al del prospecto: no se puede elegir otro. */
+  if ($("w_cliente_id")){
+    $("w_cliente_id").innerHTML = selPer(CLIS, cl ? Number(cl.id) : null);
+    $("w_cliente_id").value = cl ? String(cl.id) : "";
+    $("w_cliente_id").disabled = true;
+  }
+  if ($("w_cli_nota")) $("w_cli_nota").innerHTML = cl
+    ? 'Es el cliente del prospecto <b>'+esc(p.codigo)+'</b>. No se cambia acá: si es otra persona, sacá el prospecto de arriba.'
+    : 'Todavía no es cliente. Se da de alta con el nombre del prospecto <b>'+esc(p.codigo)+'</b> al guardar.';
   if ($("w_cliente_nombre")) $("w_cliente_nombre").value = p.nombre || "";
   if ($("w_cliente_tel"))    $("w_cliente_tel").value    = p.celular || p.telefono || "";
   if ($("w_cliente_email"))  $("w_cliente_email").value  = p.email || "";
@@ -4429,6 +4506,7 @@ async function guardarPresupuesto(){
   const o = {};
   CAMPOS_PRE.forEach(function(c){ const el=$("w_"+c); if(!el) return; let v=el.value; if(v==="") v=null; else if(NUM_PRE.indexOf(c)>=0) v=Number(v); o[c]=v; });
   if (!window._db9) delete o.cliente_id;
+  if (!window._db56) delete o.nota_interna;
   /* el vínculo con el prospecto no es un campo de pantalla: viaja en la cabecera */
   if (PRE.cab.prospecto_id) o.prospecto_id = PRE.cab.prospecto_id;
   if (o.cliente_id == null && PRE.cab.cliente_id) o.cliente_id = PRE.cab.cliente_id;
@@ -4436,14 +4514,20 @@ async function guardarPresupuesto(){
   const m2col = Number((($("w_pros_m2p")||{}).value) || 0);
   const m2cot = Number((($("w_pros_m2c")||{}).value) || 0);
   const noCerro = ["Rechazado","Vencido","Anulado"].indexOf(o.estado) >= 0;
+  /* «Viene de visita» = está atado a un prospecto que se derivó a domicilio. */
+  const deVisita = !!(PRE.cab.prospecto_id && PRE.pros && PRE.pros.derivacion === "Visita a domicilio");
   const f = faltan([
     {ok:!!o.cliente_nombre,                 q:"Cliente"},
     {ok:!!o.cliente_tel,                    q:"Teléfono del cliente"},
     {ok:!!o.localidad_id,                   q:"Localidad"},
     {ok:Number(o.validez_dias) > 0,         q:"Validez del presupuesto, en días (mayor a cero)"},
-    {ok:!!o.nro_papel,                      q:"N° de presupuesto en papel"},
+    /* 11/8, Gustavo: «el N° de presupuesto de papel es obligatorio solo en un
+       presupuesto que viene de visita, igual que el ATO asignado; si es suelto,
+       no». Tiene lógica: el papel y el ATO existen porque alguien fue a la casa.
+       En un presupuesto de mostrador no hay ni papel ni ATO que anotar. */
+    {ok:!deVisita || !!o.nro_papel,         q:"N° de presupuesto en papel (este presupuesto viene de una visita: es el que escribió el ATO a mano)"},
     {ok:!!o.vl_id,                          q:"VL (la vendedora responsable)"},
-    {ok:!!o.ato_id,                         q:"ATO (el asesor técnico de obra)"},
+    {ok:!deVisita || !!o.ato_id,            q:"ATO (este presupuesto viene de una visita: hay que decir quién fue)"},
     {ok:!conInst || !!o.direccion_obra,     q:"Dirección de obra (este presupuesto lleva instalación: la cuadrilla tiene que saber adónde ir)"},
     {ok:!conInst || m2col > 0,              q:"m² a colocar (lleva instalación: sin los metros reales no se puede planificar ni costear la obra)"},
     {ok:!noCerro || !!o.motivo_rechazo_id,  q:"Motivo de rechazo (el presupuesto quedó en «"+esc(o.estado)+"»: hay que decir por qué no se cerró)"}
@@ -4536,7 +4620,7 @@ async function guardarPresupuesto(){
     if (r.error){ $("w_guardar").disabled=false; $("qmsg").innerHTML='<div class="msg err">Adicional '+(k+1)+': '+esc(r.error.message)+'</div>'; return; }
     if (!x.id && r.data) x.id = r.data.id;
   }
-  let msgVenta = "";
+  let msgVenta = "", ventaNueva = null;
   if (o.estado === "Vendido" && estadoAntes !== "Vendido"){
     // pasar a Vendido genera la venta: debita la cuenta corriente del cliente,
     // igual que en el sistema original. Si algo falta, el estado vuelve atras.
@@ -4545,6 +4629,15 @@ async function guardarPresupuesto(){
     else {
       const rv = await sb.rpc("registrar_venta_desde_presupuesto", {p_presupuesto:id});
       if (rv.error) errV = rv.error.message;
+      else {
+        ventaNueva = rv.data || null;
+        /* Si la función no devuelve el id, se busca la venta del presupuesto:
+           el dato existe igual y no hay por qué depender de lo que devuelva. */
+        if (!ventaNueva){
+          const bv = await sb.from("ventas").select("id").eq("presupuesto_id", id).order("id",{ascending:false}).limit(1);
+          ventaNueva = (bv.data && bv.data[0]) ? bv.data[0].id : null;
+        }
+      }
     }
     if (errV){
       await sb.from("presupuestos").update({estado: estadoAntes||"Abierto"}).eq("id",id);
@@ -4599,6 +4692,12 @@ async function guardarPresupuesto(){
   pintarFichaPre();
   $("qmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(PRE.cab.codigo)+'</b>. Total '+fmtM(PRE.cab.total,PRE.cab.moneda)+'.'+avisoCli+avisoMP+avisoPros+msgVenta+'</div>';
   if (VISTA==="presup") pintarPresupuestos();
+  /* 11/8, Gustavo: «cuando el presupuesto se pasa a venta y das OK, que abra la
+     pestaña con la venta automáticamente». Va al final de todo: primero se
+     termina de guardar y de avisar, y recién ahí se cambia de pantalla. */
+  if (ventaNueva){
+    try{ await fichaVenta(Number(ventaNueva)); }catch(e){}
+  }
 }
 
 function imprimirPresupuesto(){
@@ -6425,6 +6524,7 @@ async function fichaVenta(id){
   ]);
   if (v.error) return alert(v.error.message);
   const ve = v.data, items = i.data||[];
+  await db56();
   if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
   /* Las medidas salen de la ficha del producto: si el catálogo no está cargado,
      la venta mostraría unidades sin metros. */
@@ -6469,14 +6569,73 @@ async function fichaVenta(id){
      '<div class="f"><label>Colocador avisado</label><select id="ve_notificado" '+(P("venta-agregar")?"":"disabled")+'><option value="0" '+(ve.notificado_colocador?"":"selected")+'>No</option><option value="1" '+(ve.notificado_colocador?"selected":"")+'>Sí</option></select></div>'+
      '<div class="f"><label>Estado de la venta</label><select id="ve_estado" '+(P("venta-cerrar")?"":"disabled")+'>'+selTxt(["En curso","Pendiente a cerrar","Cerrada"], ve.estado)+'</select></div>'+
    '</div>'+
+   /* 11/8, Gustavo: nota interna en la venta, que NO sale en la impresión. */
+   (window._db56
+     ? '<div class="f"><label>Nota interna <span class="muted" style="font-size:.85em">(no sale en la impresión ni en el PDF)</span></label>'+
+       '<textarea id="ve_nota_interna" rows="2" '+(P("venta-agregar")?"":"disabled")+'>'+esc(ve.nota_interna)+'</textarea></div>'
+     : '')+
    (P("venta-agregar")?'<div class="acciones" style="margin-bottom:6px"><button class="btn2 btn-sm" onclick="guardarEntrega('+ve.id+')">Guardar entrega, instalación y estado</button></div>':'')+
    '<div class="acciones">'+
      (ve.presupuesto_id?'<button class="btn2" onclick="abrirPresupuesto('+ve.presupuesto_id+')">Ver el presupuesto</button>':'')+
      (cli?'<button class="btn2" onclick="fichaCliente('+cli.id+')">Ver el cliente</button>':'')+
+     '<button class="btn2" onclick="imprimirVenta('+ve.id+')">Imprimir / PDF</button>'+
      (!ve.anulado && P("venta-remito")?'<button class="btn2" onclick="formRemito('+ve.id+')">Remito de entrega</button>':'')+
      (!ve.anulado && P("venta-anular")?'<button class="btn2" onclick="anularVenta('+ve.id+')">Anular venta</button>':'')+
    '</div>';
   try{ $("dlg").showModal(); }catch(e){}
+}
+/* ── Imprimir la venta / hacer el PDF (11/8, Gustavo) ──
+   Mismo formato que el presupuesto, para que el cliente reciba siempre la misma
+   hoja. La NOTA INTERNA no se imprime: para eso existe. */
+async function imprimirVenta(id){
+  const [v,i] = await Promise.all([
+    sb.from("ventas").select("*").eq("id",id).single(),
+    sb.from("venta_items").select("*").eq("venta_id",id).order("id")
+  ]);
+  if (v.error) return alert(v.error.message);
+  const ve = v.data, items = i.data||[], m = ve.moneda||"ARS";
+  if (!PRODS.length) await cargarCatalogo();
+  if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
+  const cli = CLIS.find(x=>String(x.id)===String(ve.cliente_id)) || {};
+  const med = medidasDe(items);
+  const fila = x => '<tr><td>'+esc(x.descripcion)+(x.es_adicional?' <i>(adicional)</i>':'')+
+    (x.con_instalacion?' <b>(instalado, todo incluido)</b>':'')+'</td>'+
+    '<td class="r">'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
+    '<td class="r">'+fmtM(x.precio_unit,m)+'</td>'+
+    '<td class="r">'+(Number(x.descuento_pct)?fmtN(x.descuento_pct)+"%":"")+'</td>'+
+    '<td class="r">'+fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100),m)+'</td></tr>';
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(ve.codigo)+'</title><style>'+
+   'body{font:13px Georgia,serif;color:#1b2426;margin:34px;max-width:760px}'+
+   'h1{font-size:22px;color:#24393C;margin:0;letter-spacing:1px}.sub{color:#6b7679;font-size:12px;margin-bottom:18px}'+
+   'table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border:0;padding:3px 8px}.tot .g td{font-size:17px;font-weight:bold;border-top:2px solid #24393C}'+
+   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;margin:14px 0;background:#faf8f4}'+
+   '.pie{margin-top:26px;font-size:11px;color:#6b7679;border-top:1px solid #ddd;padding-top:10px}'+
+   '</style></head><body>'+
+   membrete('Venta '+esc(ve.codigo)+' · '+fmtF(ve.fecha))+
+   (ve.anulado ? '<div class="caja"><b>VENTA ANULADA</b> el '+fmtF(ve.anulado_en)+'. '+esc(ve.motivo_anulacion)+'</div>' : '')+
+   '<div class="caja"><b>'+esc(cli.nombre||"")+'</b>'+
+     (cli.celular||cli.telefono ? ' · '+esc(cli.celular||cli.telefono) : '')+
+     (cli.direccion ? '<br>'+esc(cli.direccion) : '')+
+     (ve.fecha_entrega ? '<br>Entrega: '+fmtF(ve.fecha_entrega)+(ve.horario_entrega?' · '+esc(ve.horario_entrega):'') : '')+
+     (ve.fecha_instalacion ? '<br>Instalación: '+fmtF(ve.fecha_instalacion) : '')+'</div>'+
+   '<table><thead><tr><th>Detalle</th><th class="r">Cant.</th><th>Un.</th><th class="r">Precio</th><th class="r">Desc.</th><th class="r">Subtotal</th></tr></thead><tbody>'+
+   items.map(fila).join("")+
+   (textoMedidasPlano(med)? '<tr><td><b>Medida total</b></td><td class="r" colspan="5"><b>'+textoMedidasPlano(med)+'</b></td></tr>':'')+
+   '</tbody></table>'+
+   '<table class="tot"><tbody>'+
+     '<tr><td class="r">Neto</td><td class="r">'+fmtM(ve.neto,m)+'</td></tr>'+
+     '<tr><td class="r">IVA</td><td class="r">'+fmtM(ve.iva,m)+'</td></tr>'+
+     '<tr class="g"><td class="r">TOTAL</td><td class="r">'+fmtM(ve.total,m)+'</td></tr>'+
+   '</tbody></table>'+
+   (ve.observaciones ? '<div class="caja">'+esc(ve.observaciones)+'</div>' : '')+
+   '<div class="pie">'+esc(cfg("pie_presupuesto"))+'</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes para este sitio y volvé a intentar."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
 }
 async function guardarEntrega(id){
   const est = $("ve_estado").value;
@@ -6484,6 +6643,7 @@ async function guardarEntrega(id){
              fecha_instalacion:$("ve_instalacion").value||null,
              instalador_id:$("ve_instalador").value||null,
              notificado_colocador:$("ve_notificado").value==="1"};
+  if (window._db56 && $("ve_nota_interna")) o.nota_interna = $("ve_nota_interna").value || null;
   const r = await sb.from("ventas").update(o).eq("id",id);
   if (r.error){ $("vnmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
   const e = await sb.rpc("cambiar_estado_venta",{p_id:id, p_estado:est});
@@ -6607,6 +6767,7 @@ function ventaSincro(){
       x[c] = (c==="descripcion"||c==="unidad") ? el.value : (el.value===""?null:Number(el.value));
     });
     const ci = $("vi_"+k+"_con_instalacion"); if (ci) x.con_instalacion = ci.value==="1";
+    if (x.es_adicional) x.aplica_iva = Number(x.iva_pct||0) > 0;
   });
   const f = $("v_fecha"); if (f) VTA.fecha = f.value || hoy();
   const o = $("v_obs");   if (o) VTA.obs = o.value;
@@ -6633,38 +6794,16 @@ function ventaInst(k){
   if (p) x.precio_unit = precioDe(p, listaDeVenta(), VTA.moneda, x.con_instalacion);
   pintarVentaItems(); pintarVentaTotales();
 }
-function celdaMedidaVenta(x,k){
-  if (x.es_adicional) return '<span class="muted">—</span>';
-  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
-  const c = convDe(p);
-  if (!c) return '<span class="muted">—</span>';
-  const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
-  return '<input type="number" step="0.01" style="width:80px" id="vi_'+k+'_medida" placeholder="'+c.um+'" onchange="ventaMedida('+k+')">'+
-    '<div class="muted" id="veq_'+k+'" style="font-size:11px;line-height:1.2;margin-top:2px">1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total</div>';
-}
-function ventaMedida(k){
-  const x = VTA.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
-  const c = convDe(p), el = $("vi_"+k+"_medida");
-  if (!c || !el) return;
-  const med = Number(el.value||0);
-  x.cantidad = Math.ceil(med / c.factor);
-  if (x.cantidad < 1) x.cantidad = 1;
-  pintarVentaItems(); pintarVentaTotales();
-}
+function celdaMedidaVenta(x,k){ return celdaMedidaGen(x, k, "", "vi"); }
 function ventaCantidad(k){
   ventaSincro();
-  const x = VTA.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
-  const c = convDe(p), el = $("veq_"+k);
-  if (c && el){
-    const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
-    el.innerHTML = '1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total';
-  }
+  refrescarEquiv("vi", k);
 }
 function pintarVentaItems(){
   const opts = v => '<option value=""></option>' + PRODS.filter(p=>p.activo && (p.disponible_venta || String(p.id)===String(v)))
       .map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
   $("v_items").innerHTML = !VTA.items.length ? '<div class="muted">Sin renglones todavía. Agregá el primero con «+ Producto».</div>' :
-   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th>Instalación</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:150px">Medida (m²/ml)</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:240px">Producto</th><th>Instalación</th><th style="min-width:140px">Descripción</th><th>Cantidad</th><th>Un.</th><th style="min-width:180px">Cargar por</th><th>Precio unit.</th><th>Desc %</th><th>IVA %</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
    VTA.items.map(function(x,k){
      return '<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'>'+
        '<td>'+(x.es_adicional?'<span class="muted">Adicional</span>':'<select style="width:100%;min-width:240px" id="vi_'+k+'_producto_id" onchange="ventaProducto('+k+')">'+opts(x.producto_id)+'</select>')+'</td>'+
@@ -6672,7 +6811,7 @@ function pintarVentaItems(){
        '<td><input id="vi_'+k+'_descripcion" value="'+esc(x.descripcion)+'" oninput="ventaSincro()" placeholder="'+(x.es_adicional?"Flete, colocación…":"")+'"></td>'+
        '<td><input type="number" step="0.01" style="width:80px" id="vi_'+k+'_cantidad" value="'+(x.cantidad==null?"":x.cantidad)+'" oninput="ventaCantidad('+k+')"></td>'+
        '<td><input style="width:70px" id="vi_'+k+'_unidad" value="'+esc(x.unidad)+'" oninput="ventaSincro()"></td>'+
-       '<td style="min-width:150px">'+celdaMedidaVenta(x,k)+'</td>'+
+       '<td style="min-width:180px">'+celdaMedidaVenta(x,k)+'</td>'+
        '<td><input type="number" step="0.01" style="width:110px" id="vi_'+k+'_precio_unit" value="'+(x.precio_unit==null?"":x.precio_unit)+'" oninput="ventaSincro()"></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="vi_'+k+'_descuento_pct" value="'+(x.descuento_pct||0)+'" oninput="ventaSincro()"></td>'+
        '<td><input type="number" step="0.1" style="width:70px" id="vi_'+k+'_iva_pct" value="'+(x.iva_pct==null?21:x.iva_pct)+'" oninput="ventaSincro()"></td>'+
@@ -8556,24 +8695,68 @@ function medidaRenglon(x, cant){
   if (!c) return "";
   return fmtN(Math.round(Number(cant||0)*c.factor*100)/100)+' '+c.um;
 }
-function celdaMedida(x, k, d){
-  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
-  const c = convDe(p);
-  if (!c) return '<span class="muted">—</span>';
-  const cant = Number(x.cantidad||0);
-  const total = Math.round(cant * c.factor * 100)/100;
-  return '<input type="number" step="0.01" style="width:80px" id="it_'+k+'_medida" value="'+(x.cantidad_medida==null?"":x.cantidad_medida)+'" placeholder="'+c.um+'" '+d+' onchange="medidaAcantidad('+k+')">'+
-         '<div class="muted" id="eq_'+k+'" style="font-size:11px;line-height:1.2;margin-top:2px">1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total</div>';
+/* ── «Cargar por»: elegir la unidad en cada renglón (11/8, Gustavo) ──
+   «Adonde dice m²/ml no se entiende la función; que ahí se pueda cambiar de una
+   unidad a otra según cómo está cargado el producto.»
+   Ahora el renglón tiene un selector: cargás en m² (o ml) —los que necesita el
+   cliente— o directamente en cajas. El sistema convierte y deja siempre la
+   CANTIDAD en la unidad de venta, que es lo que se factura y lo que se remite.
+   De m² a cajas redondea PARA ARRIBA: Yaten no vende cajas partidas. */
+function equivTexto(x, c){
+  const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
+  return '1 '+esc((x.unidad||"un").trim()||"un")+' = '+fmtN(c.factor)+' '+c.um+
+         '<br><b>'+fmtN(total)+' '+c.um+'</b> en total';
+}
+function itemsDe(pref){ return pref === "it" ? PRE.items : VTA.items; }
+function repintar(pref){
+  if (pref === "it"){ pintarItems(); pintarTotales(); }
+  else { pintarVentaItems(); pintarVentaTotales(); }
+}
+function celdaMedidaGen(x, k, d, pref){
+  if (x.es_adicional) return '<span class="muted">—</span>';
+  const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+  const uv = ((x.unidad||"un").trim()) || "un";
+  const propia = unidadMedida(uv);
+  /* El producto que YA se vende por metro no tiene dos unidades que elegir:
+     la cantidad es la medida. Se informa la caja equivalente y listo. */
+  if (!c) return '<span class="muted">el producto no tiene m² por caja ni ml por unidad</span>';
+  if (propia) return '<span class="muted">se vende por '+esc(uv)+'<br>≈ '+
+      fmtN(Math.round(Number(x.cantidad||0)/c.factor*100)/100)+' cajas</span>';
+  if (!x._um) x._um = "medida";
+  const enMedida = x._um === "medida";
+  const val = enMedida ? (x.cantidad_medida==null ? "" : x.cantidad_medida)
+                       : (x.cantidad==null ? "" : x.cantidad);
+  const eqId = pref === "it" ? "eq_" : "veq_";
+  return '<select style="width:74px" id="'+pref+'_'+k+'_um" '+d+' onchange="medidaUM(\''+pref+'\','+k+')">'+
+      '<option value="medida"'+(enMedida?" selected":"")+'>'+c.um+'</option>'+
+      '<option value="venta"'+(enMedida?"":" selected")+'>'+esc(uv)+'</option>'+
+    '</select> '+
+    '<input type="number" step="0.01" style="width:80px" id="'+pref+'_'+k+'_medida" value="'+val+'" '+d+
+      ' title="Cuánto necesita, en la unidad de al lado" onchange="medidaAcantidad(\''+pref+'\','+k+')">'+
+    '<div class="muted" id="'+eqId+k+'" style="font-size:11px;line-height:1.2;margin-top:2px">'+equivTexto(x,c)+'</div>';
+}
+function celdaMedida(x, k, d){ return celdaMedidaGen(x, k, d, "it"); }
+function medidaUM(pref, k){
+  const x = itemsDe(pref)[k], el = $(pref+"_"+k+"_um");
+  if (!x || !el) return;
+  x._um = el.value;
+  repintar(pref);
 }
 /* cuando cambia la cantidad a mano, recalcula el total en m²/ml y el subtotal en vivo */
 function cantidadCambio(k){
   sincro();
-  const x = PRE.items[k];
-  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
-  const c = convDe(p), el = $("eq_"+k);
-  if (c && el){
-    const total = Math.round(Number(x.cantidad||0) * c.factor * 100)/100;
-    el.innerHTML = '1 '+esc(x.unidad||"un")+' = '+fmtN(c.factor)+' '+c.um+'<br><b>'+fmtN(total)+' '+c.um+'</b> en total';
+  refrescarEquiv("it", k);
+}
+/* La cantidad se tocó a mano: se actualiza el equivalente en metros, y si el
+   renglón está cargándose por unidad de venta, también la casilla de al lado. */
+function refrescarEquiv(pref, k){
+  const x = itemsDe(pref)[k];
+  const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+  const el = $((pref === "it" ? "eq_" : "veq_") + k);
+  if (c && el) el.innerHTML = equivTexto(x, c);
+  if (c && x._um === "venta"){
+    const em = $(pref+"_"+k+"_medida");
+    if (em && document.activeElement !== em) em.value = (x.cantidad==null?"":x.cantidad);
   }
 }
 function precioCambio(k){
@@ -8581,22 +8764,29 @@ function precioCambio(k){
   const x = PRE.items[k], h = $("ph_"+k);
   if (h) h.style.display = Number(x.precio_unit)>0 ? "none" : "";
 }
-// el usuario carga los metros que necesita y el sistema saca cuantas cajas hay que vender, redondeando para arriba
-function medidaAcantidad(k){
-  const x = PRE.items[k];
-  const p = PRODS.find(y=>String(y.id)===String(x.producto_id));
-  const c = convDe(p);
-  const el = $("it_"+k+"_medida");
+/* El usuario carga lo que necesita —metros o cajas, según el selector— y el
+   sistema deja la CANTIDAD en la unidad de venta. De metros a cajas redondea
+   para arriba: no se vende media caja. */
+function medidaAcantidad(pref, k){
+  const x = itemsDe(pref)[k];
+  const c = convDe(PRODS.find(y=>String(y.id)===String(x.producto_id)));
+  const el = $(pref+"_"+k+"_medida");
   if (!c || !el) return;
-  const med = Number(el.value||0);
-  x.cantidad_medida = med || null;
-  x.unidad_medida = c.um;
-  if (med > 0){
-    x.cantidad = Math.ceil((med / c.factor) * 1000) / 1000;
-    x.cantidad = Math.ceil(med / c.factor);
-    if (x.cantidad < 1) x.cantidad = 1;
+  const v = Number(el.value||0);
+  if (x._um === "venta"){
+    /* cargó cajas: la medida en metros es una consecuencia, no un dato aparte */
+    x.cantidad = v > 0 ? v : 0;
+    x.cantidad_medida = null;
+    x.unidad_medida = null;
+  } else {
+    x.cantidad_medida = v || null;
+    x.unidad_medida = c.um;
+    if (v > 0){
+      x.cantidad = Math.ceil(v / c.factor);
+      if (x.cantidad < 1) x.cantidad = 1;
+    }
   }
-  pintarItems(); pintarTotales();
+  repintar(pref);
 }
 
 /* ─────────── actualización masiva de precios ─────────── */
