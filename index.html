@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-90";
+const VERSION = "v2026.08.11-91";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -474,7 +474,7 @@ const MENU = [
   {id:"docs",     t:"Documentos",      perm:"documento-consultar"},
   {id:"tags",     t:"Tags",            perm:"documento-consultar"},
   {id:"provee",   t:"Proveedores",     perm:"compra-consultar"},
-  {id:"compras",  t:"Compras",         perm:"compra-consultar"},
+  {id:"compras",  t:"Compras",         perm:"compra-consultar|compra-orden"},
   {id:"import",   t:"Importaciones",   perm:"compra-consultar"},
   {id:"stock",    t:"Stock",           perm:"stock-consultar"},
   {id:"gastos",   t:"Gastos",          perm:"finanzas-consultar"},
@@ -518,10 +518,14 @@ const SUBMENU = {
   /* En Pirka son tres secciones separadas del menú. Acá viven en Compras, pero con
      los mismos nombres y en la misma barra, para que se busquen en el mismo lugar. */
   compras: [
-    {id:"", t:"Órdenes de Compra"},
-    {id:"facturas", t:"Facturas de Compras"},
-    {id:"notas", t:"Notas de crédito y débito"},
-    {id:"pagos", t:"Pagos de Compras"}
+    /* 11/8, Gustavo: «no tiene que ver proveedores, no tiene que ver compras,
+       solo orden de compras». Depósito entra a recibir la mercadería y nada
+       más: la orden tiene su propia llave (migración v54), las facturas y los
+       pagos siguen siendo de Administración. */
+    {id:"", t:"Órdenes de Compra", perm:"compra-consultar|compra-orden"},
+    {id:"facturas", t:"Facturas de Compras", perm:"compra-consultar"},
+    {id:"notas", t:"Notas de crédito y débito", perm:"compra-consultar"},
+    {id:"pagos", t:"Pagos de Compras", perm:"compra-consultar"}
   ],
   presup: [
     {id:"", t:"Abiertos"},
