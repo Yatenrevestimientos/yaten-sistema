@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-84";
+const VERSION = "v2026.08.11-85";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -220,6 +220,11 @@ const DERIVA    = ["Visita a domicilio","Presupuesto directo"];
 const TIPOVENTA = ["Producto suelto","Instalado","Mixto"];
 const TIPOSEG   = ["Llamada","WhatsApp","Email","Visita","Otro"];
 const VISITADA  = ["Sin Decision","Senado","Vendido","No Vendido"];
+/* 11/8, Gustavo: «si está señado está vendido». La seña es el negocio cerrado
+   —falta cobrar, no falta decidir—, así que cuenta como venta en todo el
+   embudo. Por eso también se sacó el KPI «Señados» del tablero. */
+const VENDIDO_RES = ["Vendido","Senado"];
+const esVendido = p => VENDIDO_RES.indexOf(p.resultado) >= 0;
 
 /* ─────────── LOGIN ─────────── */
 function lmsg(t,k){ $("lmsg").innerHTML = t? '<div class="msg '+(k||'err')+'">'+esc(t)+'</div>' : ""; }
@@ -707,7 +712,7 @@ async function ventaConInstalacion(ids){
    alrededores cierran en venta a secas, que es el negocio del interior. */
 function cuadroZonas(mes, tipoV){
   const esVis   = p => VISITADA.indexOf(p.resultado) >= 0;
-  const vendido = p => p.resultado === "Vendido";
+  const vendido = esVendido;   /* señado cuenta como vendido */
   const pct = (a,b) => b ? '<span class="pill '+(a/b>=.5?"ok":a/b>=.3?"sen":"no")+'">'+Math.round(a/b*100)+'%</span>' : '<span class="muted">—</span>';
 
   const fila = function(rot, arr, esPropia){
@@ -756,8 +761,7 @@ VISTAS.tablero = async function(){
   const mesAct = hoy().slice(0,7);
   const mes = d.filter(p=>(p.fecha||"").startsWith(mesAct));
   const tipoV = await ventaConInstalacion(mes.map(function(p){ return p.id; }));
-  const vendidos = mes.filter(p=>p.resultado==="Vendido");
-  const senados  = mes.filter(p=>p.resultado==="Senado");
+  const vendidos = mes.filter(esVendido);
   const visitadas= mes.filter(p=>VISITADA.indexOf(p.resultado)>=0);
   const facturado= vendidos.filter(p=>p.moneda!=="USD").reduce((a,p)=>a+Number(p.importe||0),0);
   const pend     = d.filter(p=>p.resultado==="Pendiente a Visitar");
@@ -776,7 +780,7 @@ VISTAS.tablero = async function(){
       kpi("Prospectos del mes",mes.length, propia.length+" Bariloche · "+alr.length+" alrededores")+
       kpi("Visitas concretadas",visPropia.length)+
       kpi("Ventas con instalación",conInst.length)+
-      kpi("Vendidos (todos)",vendidos.length)+kpi("Señados",senados.length)+
+      kpi("Vendidos (todos)",vendidos.length,"la seña cuenta como venta")+
       '<div class="kpi"><div class="t">Facturado ARS</div><div class="n" style="font-size:20px">'+(fmtM(facturado,"ARS")||"$ 0")+'</div></div>'+
       kpi("Efectividad VL",vl.toFixed(0)+"%","visita sobre prospecto, Bariloche")+
       kpi("Efectividad ATO",ato.toFixed(0)+"%","instalada sobre visita")+
@@ -1543,7 +1547,7 @@ function filaEfec(d, meses, tipo, tipoV){
       const base = tipo==="ato" ? mm.filter(visitada) : mm;
       const logro= tipo==="vl"  ? mm.filter(visitada)
                  : tipo==="ato" ? mm.filter(p=>(tipoV||{})[p.id]==="con")
-                 :                mm.filter(p=>p.resultado==="Vendido");
+                 :                mm.filter(esVendido);
       const pct = base.length ? Math.round(logro.length/base.length*100) : null;
       return '<td>'+logro.length+'/'+base.length+(pct!==null?' <span class="pill '+(pct>=50?"ok":pct>=30?"sen":"no")+'">'+pct+'%</span>':"")+'</td>';
     }).join("");
@@ -2703,7 +2707,7 @@ const REPORTES = [
    const filas = [];
    g.forEach(function(arr, k){
      const visit = arr.filter(x=>x.fecha_visita).length;
-     const vend = arr.filter(x=>x.resultado==="Vendido").length;
+     const vend = arr.filter(esVendido).length;   /* la seña ya es venta */
      filas.push([nomP(k)||"Sin asignar", arr.length, visit, vend,
        arr.length? Math.round(visit/arr.length*1000)/10 : 0,
        visit? Math.round(vend/visit*1000)/10 : 0]);
