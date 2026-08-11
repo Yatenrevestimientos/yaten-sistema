@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-98";
+const VERSION = "v2026.08.11-99";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -8719,7 +8719,8 @@ function celdaMedidaGen(x, k, d, pref){
   const propia = unidadMedida(uv);
   /* El producto que YA se vende por metro no tiene dos unidades que elegir:
      la cantidad es la medida. Se informa la caja equivalente y listo. */
-  if (!c) return '<span class="muted">el producto no tiene m² por caja ni ml por unidad</span>';
+  if (!x.producto_id) return '<span class="muted">elegí el producto</span>';
+  if (!c) return '<span class="muted">este producto no tiene cargado el m² por caja ni el ml por unidad</span>';
   if (propia) return '<span class="muted">se vende por '+esc(uv)+'<br>≈ '+
       fmtN(Math.round(Number(x.cantidad||0)/c.factor*100)/100)+' cajas</span>';
   if (!x._um) x._um = "medida";
