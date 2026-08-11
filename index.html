@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-101";
+const VERSION = "v2026.08.11-102";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2190,8 +2190,17 @@ VISTAS.config = async function(){
 /* Las tablas que la aplicación graba DIRECTO (las demás pasan por funciones que
    chequean permiso, y esas se prueban con el guion de homologación). */
 const DIAG_TABLAS = ["presupuestos","presupuesto_items","presupuesto_adicionales","prospectos","clientes",
-  "notas_cliente","seguimientos","ventas","productos","proveedores","documentos","tags","leads",
+  "notas_cliente","seguimientos","productos","proveedores","documentos","tags","leads",
   "listas_precios","tipos_producto","tipos_cuenta","cuentas","perfiles","embarque_items","embarque_costos"];
+/* «ventas» NO está en la lista de arriba a propósito: no se puede escribir directo
+   —adentro viven el neto, el IVA y el total, y eso es plata— y se graba por la
+   función de la v57. Acá se prueba que la función esté y conteste. */
+const DIAG_FUNCIONES = [
+  {f:"guardar_entrega_venta", args:{p_id:-1, p_fecha_entrega:null, p_horario:null, p_fecha_instalacion:null,
+     p_instalador:null, p_notificado:false, p_nota_interna:null},
+   espera:/no se encontro la venta/i,
+   que:"guardar la entrega, la instalación y la nota interna de una venta"}
+];
 /* Columna preferida para la prueba: se elige la más inofensiva que exista. */
 const DIAG_PREF = ["observaciones","descripcion","nombre","concepto","texto","titulo","codigo","estado"];
 /* Lo que la aplicación lee para llenar las pantallas. Si algo de acá no se lee,
@@ -2229,6 +2238,20 @@ async function correrDiagnostico(){
     if (u.error)               filas.push({t:t, q:"escribir", r:"mal", d:"error: "+u.error.message});
     else if (!u.data.length)   filas.push({t:t, q:"escribir", r:"mal", d:"NO ESCRIBE: devuelve cero filas y ningún error. La pantalla que grabe acá va a decir «Guardado» sin guardar."});
     else                       filas.push({t:t, q:"escribir", r:"bien", d:"probado con la columna «"+col+"»"});
+  }
+
+  /* ── 1 bis. Las que se graban por función: ¿la función está y contesta? ──
+     Se la llama con un id que no existe: no toca ningún dato y el error que
+     devuelve dice si la función está viva o si falta correr la migración. */
+  for (const fn of DIAG_FUNCIONES){
+    const r = await sb.rpc(fn.f, fn.args);
+    const msg = r.error ? String(r.error.message||"") : "";
+    if (fn.espera.test(msg))
+      filas.push({t:fn.f+"()", q:"escribir por función", r:"bien", d:"la función está y contesta — sirve para "+fn.que});
+    else if (/could not find the function|schema cache/i.test(msg))
+      filas.push({t:fn.f+"()", q:"escribir por función", r:"mal", d:"FALTA LA FUNCIÓN: hay una migración sin correr. Sin esto no se guarda "+fn.que});
+    else
+      filas.push({t:fn.f+"()", q:"escribir por función", r:"ojo", d:"contestó algo distinto de lo esperado: "+(msg||"sin error")});
   }
 
   /* ── 2. ¿Se leen las vistas que alimentan las pantallas? ── */
