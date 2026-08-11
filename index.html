@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-85";
+const VERSION = "v2026.08.11-86";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -688,69 +688,92 @@ function zonaDe(p){
   return l.visita_propia ? "propia" : "alrededores";
 }
 
-/* Si la venta de un prospecto fue con instalación o sin ella. El dato sale del
-   PRESUPUESTO vendido —que es donde vive el tipo de venta— y no de una copia en
-   el prospecto: un dato se carga en un solo lugar.
+/* Qué pasó con la venta de cada prospecto: si fue con instalación o sin ella,
+   CUÁNDO cerró y por cuánto. El tipo sale del PRESUPUESTO vendido —que es donde
+   vive— y la fecha y el importe salen de la VENTA, que es el cierre de verdad.
+   Nada se copia al prospecto: un dato se carga en un solo lugar.
    «Mixto» cuenta como CON instalación: si está marcada la instalación, eso la
-   define (Gustavo, 11/8). Lo vendido sin un presupuesto que diga el tipo queda
-   como «sin dato» y se muestra aparte: no se estima. */
-async function ventaConInstalacion(ids){
+   define (Gustavo, 11/8). */
+async function infoVentaProspectos(ids){
   const out = {};
   if (!ids.length) return out;
-  const r = await sb.from("presupuestos").select("prospecto_id,estado,tipo")
+  const pre = await sb.from("presupuestos").select("id,prospecto_id,tipo")
     .in("prospecto_id", ids).eq("estado","Vendido").limit(2000);
-  (r.data||[]).forEach(function(x){
+  const preIds = (pre.data||[]).map(function(x){ return x.id; });
+  let ven = {data:[]};
+  if (preIds.length) ven = await sb.from("ventas").select("presupuesto_id,fecha,total,moneda,anulado")
+    .in("presupuesto_id", preIds).limit(2000);
+  const porPre = {};
+  (ven.data||[]).forEach(function(v){ if (!v.anulado) porPre[v.presupuesto_id] = v; });
+  (pre.data||[]).forEach(function(x){
     const con = x.tipo === "Instalado" || x.tipo === "Mixto";
-    if (con) out[x.prospecto_id] = "con";
-    else if (out[x.prospecto_id] !== "con") out[x.prospecto_id] = x.tipo ? "sin" : "sindato";
+    const v = porPre[x.id];
+    const dato = {tipo: con ? "con" : (x.tipo ? "sin" : "sindato"),
+                  fecha: v ? v.fecha : null, total: v ? Number(v.total||0) : 0, moneda: v ? v.moneda : null};
+    const prev = out[x.prospecto_id];
+    /* si tuviera más de uno, manda el que lleva instalación */
+    if (!prev || (con && prev.tipo !== "con")) out[x.prospecto_id] = dato;
   });
   return out;
 }
 
 /* El cuadro: una fila por zona, con el embudo entero y el porcentaje que
    corresponde a cada una. Bariloche cierra en venta CON instalación; los
-   alrededores cierran en venta a secas, que es el negocio del interior. */
-function cuadroZonas(mes, tipoV){
-  const esVis   = p => VISITADA.indexOf(p.resultado) >= 0;
-  const vendido = esVendido;   /* señado cuenta como vendido */
-  const pct = (a,b) => b ? '<span class="pill '+(a/b>=.5?"ok":a/b>=.3?"sen":"no")+'">'+Math.round(a/b*100)+'%</span>' : '<span class="muted">—</span>';
+   alrededores cierran en venta a secas, que es el negocio del interior.
 
-  const fila = function(rot, arr, esPropia){
-    const vis  = arr.filter(esVis).length;
-    const con  = arr.filter(p=>tipoV[p.id]==="con").length;
-    const sin  = arr.filter(p=>tipoV[p.id]==="sin").length;
-    const vend = arr.filter(vendido).length;
-    const sd   = Math.max(0, vend - con - sin);
+   CADA ETAPA SE CUENTA EN EL MES EN QUE PASÓ (Gustavo, 11/8): «que no importe
+   cuándo entró el prospecto; si cierra en agosto y el prospecto es de mayo,
+   computa todo en agosto». El prospecto cuenta en el mes en que entró, la
+   visita en el mes en que se concretó, y la venta en el mes en que se cerró.
+   Por eso un mes puntual puede dar más de 100%: se cerró trabajo viejo. Es a
+   propósito, y a la larga se acomoda. */
+function cuadroZonas(d, info, mesAct){
+  const enMes = s => String(s||"").startsWith(mesAct);
+  const pct = (a,b) => b ? '<span class="pill '+(a/b>=.5?"ok":a/b>=.3?"sen":"no")+'">'+Math.round(a/b*100)+'%</span>' : '<span class="muted">—</span>';
+  const cerroEnMes = (p,t) => { const i = info[p.id]; return !!i && i.tipo===t && enMes(i.fecha); };
+
+  const fila = function(rot, z, esPropia){
+    const dz   = d.filter(p=>zonaDe(p)===z);
+    const pros = dz.filter(p=>enMes(p.fecha)).length;
+    const vis  = dz.filter(p=>enMes(p.fecha_visita)).length;
+    const con  = dz.filter(p=>cerroEnMes(p,"con")).length;
+    const sin  = dz.filter(p=>cerroEnMes(p,"sin")).length;
     return '<tr><td><b>'+esc(rot)+'</b></td>'+
-      '<td><b>'+arr.length+'</b></td>'+
+      '<td><b>'+pros+'</b></td>'+
       '<td>'+(esPropia ? vis : '<span class="muted">no aplica</span>')+'</td>'+
       '<td><b>'+con+'</b></td><td>'+sin+'</td>'+
-      '<td>'+(sd? '<span class="pill sen">'+sd+'</span>' : '—')+'</td>'+
-      '<td>'+(esPropia ? pct(vis, arr.length) : '<span class="muted">—</span>')+'</td>'+
-      '<td>'+(esPropia ? pct(con, vis) : pct(vend, arr.length))+'</td>'+
-      '<td>'+(esPropia ? pct(con, arr.length) : pct(vend, arr.length))+'</td></tr>';
+      '<td>'+(esPropia ? pct(vis, pros) : '<span class="muted">—</span>')+'</td>'+
+      '<td>'+(esPropia ? pct(con, vis) : pct(con+sin, pros))+'</td>'+
+      '<td>'+(esPropia ? pct(con, pros) : pct(con+sin, pros))+'</td></tr>';
   };
 
-  const propia = mes.filter(p=>zonaDe(p)==="propia");
-  const alr    = mes.filter(p=>zonaDe(p)==="alrededores");
-  const sinLoc = mes.filter(p=>zonaDe(p)==="sin");
+  const sinLoc = d.filter(p=>zonaDe(p)==="sin" && enMes(p.fecha)).length;
+  /* Lo que falta cargar, en total: son los casos que no se pueden ubicar en un
+     mes. Se avisan en vez de estimarlos. */
+  const sinFechaVis = d.filter(p=>VISITADA.indexOf(p.resultado)>=0 && !p.fecha_visita).length;
+  const sinTipo     = d.filter(p=>esVendido(p) && (!info[p.id] || info[p.id].tipo==="sindato" || !info[p.id].fecha)).length;
+  const avisos = [];
+  if (sinLoc)       avisos.push('<b>'+sinLoc+'</b> prospecto(s) del mes <b>sin localidad</b>: no entran en ninguna fila');
+  if (sinFechaVis)  avisos.push('<b>'+sinFechaVis+'</b> visitado(s) <b>sin fecha de visita</b>: no se pueden contar en ningún mes');
+  if (sinTipo)      avisos.push('<b>'+sinTipo+'</b> venta(s) <b>sin fecha o sin tipo</b> (las anteriores a la v50): no suman al cierre');
 
   return '<div class="panel"><h2>Embudo del mes por zona</h2>'+
     '<div class="desc">Bariloche y Dina Huapi se miden hasta la <b>venta con instalación</b>, que es el negocio: prospecto → visita → instalada. '+
     'Alrededores no lleva visita, y cierra en venta de producto. La separación sale del tilde «Visita propia» de Tablas básicas › Localidades.</div>'+
     '<div class="tablewrap"><table><thead><tr><th>Zona</th><th>Prospectos</th><th>Visitas</th>'+
-      '<th>Ventas c/ instalación</th><th>Ventas s/ instalación</th><th>Sin dato</th>'+
+      '<th>Ventas c/ instalación</th><th>Ventas s/ instalación</th>'+
       '<th>% visita</th><th>% cierre</th><th>% final</th></tr></thead><tbody>'+
-      fila("Bariloche y Dina Huapi", propia, true)+
-      fila("Alrededores", alr, false)+
-      (sinLoc.length ? '<tr style="opacity:.7"><td><b>Sin localidad cargada</b></td><td><b>'+sinLoc.length+'</b></td>'+
-        '<td colspan="7" class="muted">No entran en ningún porcentaje hasta que se les cargue la localidad.</td></tr>' : '')+
+      fila("Bariloche y Dina Huapi", "propia", true)+
+      fila("Alrededores", "alrededores", false)+
     '</tbody></table></div>'+
     '<div class="muted" style="margin-top:8px">'+
+      '<b>Cada cosa se cuenta en el mes en que pasó</b>: el prospecto cuando entró, la visita cuando se concretó y la venta cuando se cerró. '+
+      'Una venta de agosto de un prospecto de mayo suma toda en agosto — por eso un mes puede dar más de 100%, cuando se cierra trabajo viejo.<br>'+
       '<b>% visita</b>: visitas sobre prospectos (trabajo de la VL) · <b>% cierre</b>: en Bariloche, ventas con instalación sobre visitas (trabajo del ATO); en alrededores, ventas sobre prospectos · '+
-      '<b>% final</b>: de cada 100 prospectos, cuántos terminaron en el negocio que buscás. '+
-      'Una venta de Bariloche que salió <b>sin instalación</b> no suma al cierre: queda contada en su columna. '+
-      '«Sin dato» son ventas sin un presupuesto que diga el tipo — se cuentan pero no se estiman.</div></div>';
+      '<b>% final</b>: de cada 100 prospectos del mes, cuántas ventas del negocio que buscás se cerraron. '+
+      'Una venta de Bariloche que salió <b>sin instalación</b> no suma al cierre: queda contada en su columna.'+
+      (avisos.length ? '<br><span style="color:#7a5415">Falta cargar: '+avisos.join(' · ')+'.</span>' : '')+
+    '</div></div>';
 }
 
 /* ─────────── TABLERO ─────────── */
@@ -759,34 +782,39 @@ VISTAS.tablero = async function(){
   if (!(M.loc||[]).length) await cargarMaestras();
   const d = await traerProspectos();
   const mesAct = hoy().slice(0,7);
-  const mes = d.filter(p=>(p.fecha||"").startsWith(mesAct));
-  const tipoV = await ventaConInstalacion(mes.map(function(p){ return p.id; }));
-  const vendidos = mes.filter(esVendido);
-  const visitadas= mes.filter(p=>VISITADA.indexOf(p.resultado)>=0);
-  const facturado= vendidos.filter(p=>p.moneda!=="USD").reduce((a,p)=>a+Number(p.importe||0),0);
-  const pend     = d.filter(p=>p.resultado==="Pendiente a Visitar");
-  /* Los dos porcentajes de arriba son los de Bariloche, que es donde hay embudo
-     de visita. Antes mezclaban las dos zonas y el denominador salía de una
-     población distinta que el numerador: podía dar más de 100%. */
-  const propia    = mes.filter(p=>zonaDe(p)==="propia");
-  const alr       = mes.filter(p=>zonaDe(p)==="alrededores");
-  const visPropia = propia.filter(p=>VISITADA.indexOf(p.resultado)>=0);
-  const conInst   = propia.filter(p=>tipoV[p.id]==="con");
-  const vl = propia.length    ? visPropia.length/propia.length*100 : 0;
-  const ato= visPropia.length ? conInst.length/visPropia.length*100 : 0;
+  /* Se pide la info de venta de TODOS los prospectos, no solo los del mes:
+     una venta de este mes puede venir de un prospecto de hace tres meses. */
+  const info = await infoVentaProspectos(d.map(function(p){ return p.id; }));
+  const enMes = s => String(s||"").startsWith(mesAct);
+  const cerro = (p,t) => { const i = info[p.id]; return !!i && i.tipo===t && enMes(i.fecha); };
+  const pend  = d.filter(p=>p.resultado==="Pendiente a Visitar");
+
+  const prosMes   = d.filter(p=>enMes(p.fecha));
+  const propiaMes = prosMes.filter(p=>zonaDe(p)==="propia");
+  const alrMes    = prosMes.filter(p=>zonaDe(p)==="alrededores");
+  /* visitas y ventas del mes: por SU fecha, no por la del prospecto */
+  const visMes    = d.filter(p=>zonaDe(p)==="propia" && enMes(p.fecha_visita));
+  const conMes    = d.filter(p=>zonaDe(p)==="propia" && cerro(p,"con"));
+  const vendMes   = d.filter(p=>cerro(p,"con") || cerro(p,"sin"));
+  /* Facturado: sale de la venta cerrada en el mes, no de la copia del importe
+     en el prospecto, que solo se escribía al guardar el presupuesto. */
+  const facturado = vendMes.filter(p=>(info[p.id].moneda||"ARS")!=="USD")
+                           .reduce(function(a,p){ return a + Number(info[p.id].total||0); },0);
+  const vl = propiaMes.length ? visMes.length/propiaMes.length*100 : 0;
+  const ato= visMes.length    ? conMes.length/visMes.length*100 : 0;
   const kpi = (t,n,s)=>'<div class="kpi"><div class="t">'+t+'</div><div class="n">'+n+'</div>'+(s?'<div class="muted" style="font-size:.8em">'+s+'</div>':'')+'</div>';
   $("main").innerHTML =
     '<div class="kpis">'+
-      kpi("Prospectos del mes",mes.length, propia.length+" Bariloche · "+alr.length+" alrededores")+
-      kpi("Visitas concretadas",visPropia.length)+
-      kpi("Ventas con instalación",conInst.length)+
-      kpi("Vendidos (todos)",vendidos.length,"la seña cuenta como venta")+
-      '<div class="kpi"><div class="t">Facturado ARS</div><div class="n" style="font-size:20px">'+(fmtM(facturado,"ARS")||"$ 0")+'</div></div>'+
+      kpi("Prospectos del mes",prosMes.length, propiaMes.length+" Bariloche · "+alrMes.length+" alrededores")+
+      kpi("Visitas del mes",visMes.length,"por fecha de visita")+
+      kpi("Ventas con instalación",conMes.length,"cerradas este mes")+
+      kpi("Ventas del mes",vendMes.length,"la seña cuenta como venta")+
+      '<div class="kpi"><div class="t">Facturado ARS</div><div class="n" style="font-size:20px">'+(fmtM(facturado,"ARS")||"$ 0")+'</div><div class="muted" style="font-size:.8em">ventas cerradas este mes</div></div>'+
       kpi("Efectividad VL",vl.toFixed(0)+"%","visita sobre prospecto, Bariloche")+
-      kpi("Efectividad ATO",ato.toFixed(0)+"%","instalada sobre visita")+
+      kpi("Efectividad ATO",ato.toFixed(0)+"%","instalada sobre visita del mes")+
       kpi("Pendientes a visitar",pend.length)+
     '</div>'+
-    cuadroZonas(mes, tipoV)+
+    cuadroZonas(d, info, mesAct)+
     '<div class="panel"><h2>Pendientes a visitar</h2><div class="desc">Derivados que todavía no tienen la visita cerrada.</div>'+
       tabla(pend.slice(0,40),["codigo","fecha","nombre","localidad","ato","fecha_visita","hora_visita"])+'</div>'+
     '<div class="panel"><h2>Últimos movimientos</h2>'+
@@ -1517,14 +1545,15 @@ VISTAS.efect = async function(){
   $("main").innerHTML = '<div class="muted">Calculando…</div>';
   if (!(M.loc||[]).length) await cargarMaestras();
   const d = await traerProspectos();
-  const tipoV = await ventaConInstalacion(d.map(function(p){ return p.id; }));
+  const tipoV = await infoVentaProspectos(d.map(function(p){ return p.id; }));
   const meses = Object.keys(d.reduce((a,p)=>{ const m=(p.fecha||"").slice(0,7); if(m) a[m]=1; return a; },{})).sort().reverse().slice(0,12);
   $("main").innerHTML =
     '<div class="panel"><h2>Efectividad VL — Bariloche y Dina Huapi</h2>'+
       '<div class="desc">De prospecto a visita concretada, en la zona donde se puede visitar. Es el trabajo de la vendedora de local.</div>'+
       filaEfec(d,meses,"vl",tipoV)+'</div>'+
     '<div class="panel"><h2>Efectividad ATO — Bariloche y Dina Huapi</h2>'+
-      '<div class="desc">De visita concretada a <b>venta con instalación</b>, que es el negocio. Una visita que terminó en venta de producto suelto <b>no cuenta como cierre</b>: se ve igual, en su columna del tablero.</div>'+
+      '<div class="desc">De visita concretada a <b>venta con instalación</b>, que es el negocio. Una visita que terminó en venta de producto suelto <b>no cuenta como cierre</b>: se ve igual, en su columna del tablero. '+
+      'Cada cosa cuenta en el mes en que pasó: <b>una venta de agosto de un prospecto de mayo suma en agosto</b>. Por eso un mes puede pasar de 100% —se cerró trabajo viejo— y se acomoda solo.</div>'+
       filaEfec(d,meses,"ato",tipoV)+'</div>'+
     '<div class="panel"><h2>Alrededores — venta sin visita</h2>'+
       '<div class="desc">Prospectos de las localidades sin visita propia: El Bolsón, Villa La Angostura, Alto Valle, Chubut… Acá no hay visita que sacar, así que se mide de prospecto a venta de producto. Es el trabajo del interior.</div>'+
@@ -1538,16 +1567,19 @@ function filaEfec(d, meses, tipo, tipoV){
   const gente = tipo==="ato" ? ATOS() : VLS();
   const key   = tipo==="ato" ? "ato_id" : "vl_id";
   if (!gente.length) return '<div class="muted">No hay personas cargadas con ese rol.</div>';
-  const visitada = p => VISITADA.indexOf(p.resultado)>=0;
   const zonaOk   = p => tipo==="alr" ? zonaDe(p)==="alrededores" : zonaDe(p)==="propia";
+  const enM = (s,m) => String(s||"").startsWith(m);
+  const cerro = (p,m) => { const i = (tipoV||{})[p.id]; return !!i && i.fecha && enM(i.fecha,m); };
   const rows = gente.map(function(g){
     const suyos = d.filter(p=>String(p[key])===String(g.id) && zonaOk(p));
     const cel = meses.map(function(m){
-      const mm = suyos.filter(p=>(p.fecha||"").startsWith(m));
-      const base = tipo==="ato" ? mm.filter(visitada) : mm;
-      const logro= tipo==="vl"  ? mm.filter(visitada)
-                 : tipo==="ato" ? mm.filter(p=>(tipoV||{})[p.id]==="con")
-                 :                mm.filter(esVendido);
+      /* Cada etapa, en el mes en que pasó: el prospecto por su fecha, la visita
+         por la fecha de visita y la venta por la fecha de la venta. */
+      const base = tipo==="ato" ? suyos.filter(p=>enM(p.fecha_visita,m))
+                                : suyos.filter(p=>enM(p.fecha,m));
+      const logro= tipo==="vl"  ? suyos.filter(p=>enM(p.fecha_visita,m))
+                 : tipo==="ato" ? suyos.filter(p=>cerro(p,m) && tipoV[p.id].tipo==="con")
+                 :                suyos.filter(p=>cerro(p,m));
       const pct = base.length ? Math.round(logro.length/base.length*100) : null;
       return '<td>'+logro.length+'/'+base.length+(pct!==null?' <span class="pill '+(pct>=50?"ok":pct>=30?"sen":"no")+'">'+pct+'%</span>':"")+'</td>';
     }).join("");
