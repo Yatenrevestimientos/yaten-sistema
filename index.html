@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-88";
+const VERSION = "v2026.08.11-89";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -667,9 +667,22 @@ function irAPrimeraVista(){
 }
 function ir(v, sub){
   VISTA = v; SUBVISTA = sub || "";
-  /* La puerta, antes de dibujar nada. */
-  const falta = permisoQueFalta(v, SUBVISTA);
-  if (falta){ pintarNav(); pantallaSinPermiso(v, SUBVISTA, falta); return; }
+  /* La puerta, antes de dibujar nada.
+     1) Si falta el permiso de la SECCIÓN, no se entra: cartel y nada más.
+     2) Si la sección se puede pero la solapa por defecto no —Información
+        arranca en Finanzas, que no todos ven— se entra por la primera solapa
+        permitida, que es lo que la gente espera. Solo si no hay ninguna, cartel.
+     3) Si alguien pide una solapa puntual que no le corresponde, cartel: ahí
+        no hay que adivinar, hay que decirlo. */
+  const secc = MENU.find(function(x){ return x.id === v; });
+  if (secc && secc.perm && !P(secc.perm)){ pintarNav(); pantallaSinPermiso(v, "", secc.perm); return; }
+  const subs = SUBMENU[v] || [];
+  const pedida = subs.find(function(x){ return x.id === SUBVISTA; });
+  if (pedida && pedida.perm && !P(pedida.perm)){
+    const alt = (SUBVISTA === "") ? subs.find(function(x){ return !x.perm || P(x.perm); }) : null;
+    if (alt) SUBVISTA = alt.id;
+    else { pintarNav(); pantallaSinPermiso(v, SUBVISTA, pedida.perm); return; }
+  }
   // las opciones "Nuevo" abren la ficha y dejan el listado detrás
   if (SUBVISTA === "nuevo"){
     /* 10/8: Importaciones→Nuevo y Gastos→Nuevo estaban en bloques de más abajo
