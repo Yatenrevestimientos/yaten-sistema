@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.11-96";
+const VERSION = "v2026.08.11-97";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5152,16 +5152,28 @@ VISTAS.stock = async function(){
   if (SUBVISTA === "productos") return pintarStockProductos(rows, disp, falt);
   // Planeamiento: agrupado por tipo de producto, como en Pirka
   const grupos = {};
-  rows.forEach(function(x){ const k = x.tipo_id||0; grupos[k] = grupos[k]||{t:nom(TIPOSP,x.tipo_id)||"Sin tipo", stock:0, comp:0, pend:0, disp:0, falt:0};
+  rows.forEach(function(x){ const k = x.tipo_id||0; grupos[k] = grupos[k]||{t:nom(TIPOSP,x.tipo_id)||"Sin tipo", stock:0, comp:0, pend:0, disp:0, falt:0, ids:[]};
     grupos[k].stock += Number(x.stock||0); grupos[k].comp += Number(x.comprometido||0);
-    grupos[k].pend += Number(x.pend_recepcion||0); grupos[k].disp += disp(x); grupos[k].falt += falt(x); });
+    grupos[k].pend += Number(x.pend_recepcion||0); grupos[k].disp += disp(x); grupos[k].falt += falt(x);
+    grupos[k].ids.push(x.producto_id); });
   const gs = Object.keys(grupos).map(k=>grupos[k]);
+  /* 11/8, Gustavo: «si tengo stock comprometido y cliqueo ahí me tiene que abrir
+     los clientes a los que pertenece ese stock, y de ahí entrar al cliente y a la
+     venta para sacar remito. Lo mismo para pendiente de recepción, que debería
+     llevarte a las órdenes de compra». Un número que no se puede abrir obliga a
+     buscar a mano en otra pantalla: el número tiene que llevar al documento. */
+  const cel = (valor, fn, ids, titulo) =>
+    (Number(valor||0) > 0 && ids.length)
+      ? '<td><button class="btn2 btn-sm" style="font-weight:600" title="'+titulo+'" onclick="'+fn+'('+JSON.stringify(ids).replace(/"/g,"&quot;")+')">'+fmtN(valor)+' ›</button></td>'
+      : '<td>'+fmtN(valor)+'</td>';
   $("main").innerHTML = '<div class="panel"><h2>Planeamiento de stock</h2>'+
-   '<div class="desc">Lo que hay, lo que ya está vendido y todavía no se entregó, y lo que viene en camino. <b>Comprometido</b> sale solo de las ventas abiertas; <b>pendiente de recepción</b>, de las órdenes de compra sin recibir.</div>'+
+   '<div class="desc">Lo que hay, lo que ya está vendido y todavía no se entregó, y lo que viene en camino. <b>Comprometido</b> sale solo de las ventas abiertas; <b>pendiente de recepción</b>, de las órdenes de compra sin recibir.<br><b>Los dos números se pueden abrir</b>: tocá el número y te dice de qué ventas y de qué clientes es, o de qué órdenes de compra viene, con el botón para sacar el remito o registrar la recepción.</div>'+
    '<div class="sec">Por tipo de producto</div>'+
    (gs.length? '<div class="tablewrap"><table><thead><tr>'+
      ['Tipo de producto','Stock','Comprometido','Pend. recepción','Disponible','Faltante'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     gs.map(g=>'<tr><td><b>'+esc(g.t)+'</b></td><td>'+fmtN(g.stock)+'</td><td>'+fmtN(g.comp)+'</td><td>'+fmtN(g.pend)+'</td>'+
+     gs.map(g=>'<tr><td><b>'+esc(g.t)+'</b></td><td>'+fmtN(g.stock)+'</td>'+
+       cel(g.comp, "verComprometido", g.ids, "Ver de qué ventas y de qué clientes es")+
+       cel(g.pend, "verPendRecepcion", g.ids, "Ver de qué órdenes de compra viene")+
        '<td style="'+(g.disp<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(g.disp)+'</td>'+
        '<td style="'+(g.falt>0?'color:#7a2415;font-weight:600':'')+'">'+(g.falt>0?fmtN(g.falt):'—')+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Todavía no hay productos que registren stock.</div>')+
@@ -5171,7 +5183,9 @@ VISTAS.stock = async function(){
    (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Producto','Un.','Stock','Comprometido','Pend. recepción','Disponible','Mínimo','Faltante'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(x=>'<tr><td>'+esc(x.codigo)+'</td><td><b>'+esc(x.nombre)+'</b></td><td>'+esc(x.unidad)+'</td>'+
-       '<td>'+fmtN(x.stock)+'</td><td>'+fmtN(x.comprometido)+'</td><td>'+fmtN(x.pend_recepcion)+'</td>'+
+       '<td>'+fmtN(x.stock)+'</td>'+
+       cel(x.comprometido, "verComprometido", [x.producto_id], "Ver de qué ventas y de qué clientes es")+
+       cel(x.pend_recepcion, "verPendRecepcion", [x.producto_id], "Ver de qué órdenes de compra viene")+
        '<td style="'+(disp(x)<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(disp(x))+'</td>'+
        '<td>'+fmtN(x.stock_minimo)+'</td>'+
        '<td style="'+(falt(x)>0?'color:#7a2415;font-weight:600':'')+'">'+(falt(x)>0?fmtN(falt(x)):'—')+'</td></tr>').join("")+
@@ -5179,6 +5193,100 @@ VISTAS.stock = async function(){
    '</div>';
   $("st_btn").onclick = function(){ FSTK = $("st_txt").value.trim(); VISTAS.stock(); };
 };
+/* ═══════════ De dónde sale el número del planeamiento ═══════════
+   Comprometido y pendiente de recepción no son un cálculo: son documentos. Acá se
+   listan uno por uno, con el botón para ir a resolverlos. */
+async function verComprometido(ids){
+  if (!P("venta-consultar")){
+    $("dtit").textContent = "Stock comprometido";
+    $("dbody").innerHTML = '<div class="msg err">No tenés permiso para ver las ventas, que es de donde sale este número.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+    try{ $("dlg").showModal(); }catch(e){} return;
+  }
+  $("dtit").textContent = "Stock comprometido";
+  $("dbody").innerHTML = '<div class="muted">Buscando las ventas…</div>';
+  try{ $("dlg").showModal(); }catch(e){}
+  if (!PRODS.length) await cargarCatalogo();
+  if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
+  const it = await sb.from("venta_items").select("*").in("producto_id", ids);
+  const items = (it.data||[]).filter(x=>Number(x.cantidad||0) - Number(x.entregado||0) > 0.0001);
+  const vids = Array.from(new Set(items.map(x=>x.venta_id)));
+  const vs = vids.length ? await sb.from("ventas").select("*").in("id", vids) : {data:[]};
+  const vmap = {}; (vs.data||[]).forEach(function(v){ vmap[v.id] = v; });
+  /* La venta anulada libera lo comprometido: no puede aparecer acá. */
+  const filas = items.filter(x=>vmap[x.venta_id] && !vmap[x.venta_id].anulado)
+    .map(function(x){ return {it:x, v:vmap[x.venta_id], pend:Number(x.cantidad||0)-Number(x.entregado||0)}; })
+    .sort(function(a,b){ return String(a.v.fecha).localeCompare(String(b.v.fecha)); });
+  const nomCli = id => { const c = CLIS.find(y=>String(y.id)===String(id)); return c ? c.nombre : ("Cliente #"+id); };
+  const totalListado = filas.reduce(function(a,f){ return a + f.pend; }, 0);
+  const totalVista = (STK||[]).filter(x=>ids.indexOf(x.producto_id)>=0)
+    .reduce(function(a,x){ return a + Number(x.comprometido||0); }, 0);
+  $("dbody").innerHTML =
+   '<div class="muted" style="margin-bottom:10px">Mercadería <b>vendida y todavía no entregada</b>. Sigue en el depósito pero ya tiene dueño: se libera cuando sale el remito, o si se anula la venta.</div>'+
+   (filas.length? '<div class="tablewrap"><table><thead><tr><th>Venta</th><th>Cliente</th><th>Fecha</th><th>Estado</th><th>Producto</th><th>Falta entregar</th><th></th></tr></thead><tbody>'+
+     filas.map(function(f){
+       const med = medidaRenglon(f.it, f.pend);
+       return '<tr><td><b>'+esc(f.v.codigo)+'</b></td>'+
+         '<td style="white-space:normal">'+esc(nomCli(f.v.cliente_id))+'</td>'+
+         '<td>'+fmtF(f.v.fecha)+'</td><td>'+esc(f.v.estado||"")+'</td>'+
+         '<td style="white-space:normal">'+esc(f.it.descripcion)+'</td>'+
+         '<td><b>'+fmtN(f.pend)+'</b> '+esc(f.it.unidad||"")+(med?'<div class="muted" style="font-size:11px">'+med+'</div>':'')+'</td>'+
+         '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="fichaVenta('+f.v.id+')">Ver la venta</button>'+
+           (P("venta-remito")? ' <button class="btn2 btn-sm" onclick="formRemito('+f.v.id+')">Remito</button>':'')+
+           (P("cliente-consultar")&&f.v.cliente_id? ' <button class="btn2 btn-sm" onclick="fichaCliente('+f.v.cliente_id+')">Cliente</button>':'')+
+         '</td></tr>';
+     }).join("")+
+     '<tr style="background:#f6f3ee"><td colspan="5"><b>Total listado</b></td><td colspan="2"><b>'+fmtN(Math.round(totalListado*1000)/1000)+'</b></td></tr>'+
+     '</tbody></table></div>'
+    : '<div class="muted">No hay ventas con entregas pendientes de este producto.</div>')+
+   (Math.abs(totalListado - totalVista) > 0.001
+     ? '<div class="msg err" style="margin-top:8px">El planeamiento dice <b>'+fmtN(totalVista)+'</b> y acá suman <b>'+fmtN(totalListado)+'</b>. Avisá: hay algo que no cierra entre la vista de stock y las ventas.</div>' : '')+
+   '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+}
+async function verPendRecepcion(ids){
+  const puedeOC = P("compra-consultar") || P("compra-orden");
+  $("dtit").textContent = "Pendiente de recepción";
+  if (!puedeOC){
+    $("dbody").innerHTML = '<div class="msg err">No tenés permiso para ver las órdenes de compra, que es de donde sale este número.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+    try{ $("dlg").showModal(); }catch(e){} return;
+  }
+  $("dbody").innerHTML = '<div class="muted">Buscando las órdenes…</div>';
+  try{ $("dlg").showModal(); }catch(e){}
+  if (!PRODS.length) await cargarCatalogo();
+  if (!PROVS.length) await cargarProveedores();
+  const it = await sb.from("oc_items").select("*").in("producto_id", ids);
+  const items = (it.data||[]).filter(x=>Number(x.cantidad||0) - Number(x.recibido||0) > 0.0001);
+  const oids = Array.from(new Set(items.map(x=>x.orden_id)));
+  const os = oids.length ? await sb.from("ordenes_compra").select("*").in("id", oids) : {data:[]};
+  const omap = {}; (os.data||[]).forEach(function(o){ omap[o.id] = o; });
+  const filas = items.filter(x=>omap[x.orden_id] && !omap[x.orden_id].anulado)
+    .map(function(x){ return {it:x, o:omap[x.orden_id], pend:Number(x.cantidad||0)-Number(x.recibido||0)}; })
+    .sort(function(a,b){ return String(a.o.fecha_recepcion||a.o.fecha).localeCompare(String(b.o.fecha_recepcion||b.o.fecha)); });
+  const totalListado = filas.reduce(function(a,f){ return a + f.pend; }, 0);
+  const totalVista = (STK||[]).filter(x=>ids.indexOf(x.producto_id)>=0)
+    .reduce(function(a,x){ return a + Number(x.pend_recepcion||0); }, 0);
+  $("dbody").innerHTML =
+   '<div class="muted" style="margin-bottom:10px">Mercadería <b>pedida al proveedor y todavía no recibida</b>. Entra al stock cuando se registra la recepción de la orden.</div>'+
+   (filas.length? '<div class="tablewrap"><table><thead><tr><th>Orden</th><th>Proveedor</th><th>Fecha</th><th>Recepción estimada</th><th>Producto</th><th>Falta recibir</th><th></th></tr></thead><tbody>'+
+     filas.map(function(f){
+       const med = medidaRenglon(f.it, f.pend);
+       return '<tr><td><b>'+esc(f.o.codigo)+'</b></td>'+
+         '<td style="white-space:normal">'+esc(nomProv(f.o.proveedor_id))+'</td>'+
+         '<td>'+fmtF(f.o.fecha)+'</td>'+
+         '<td>'+(f.o.fecha_recepcion? fmtF(f.o.fecha_recepcion) : '<span class="muted">sin fecha</span>')+'</td>'+
+         '<td style="white-space:normal">'+esc(f.it.descripcion)+'</td>'+
+         '<td><b>'+fmtN(f.pend)+'</b> '+esc(f.it.unidad||"")+(med?'<div class="muted" style="font-size:11px">'+med+'</div>':'')+'</td>'+
+         '<td style="white-space:nowrap">'+(P("stock-modificar")? '<button class="btn2 btn-sm" onclick="formRecepcion('+f.o.id+')">Recibir</button> ':'')+
+           '<button class="btn2 btn-sm" onclick="document.getElementById(\'dlg\').close(); ir(\'compras\',\'\')">Ver en Compras</button></td></tr>';
+     }).join("")+
+     '<tr style="background:#f6f3ee"><td colspan="5"><b>Total listado</b></td><td colspan="2"><b>'+fmtN(Math.round(totalListado*1000)/1000)+'</b></td></tr>'+
+     '</tbody></table></div>'
+    : '<div class="muted">No hay órdenes de compra pendientes de recibir de este producto.</div>')+
+   (Math.abs(totalListado - totalVista) > 0.001
+     ? '<div class="msg err" style="margin-top:8px">El planeamiento dice <b>'+fmtN(totalVista)+'</b> y acá suman <b>'+fmtN(totalListado)+'</b>. Avisá: hay algo que no cierra entre la vista de stock y las órdenes.</div>' : '')+
+   '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+}
 function pintarStockProductos(rows, disp, falt){
   const puede = P("stock-modificar");
   $("main").innerHTML = '<div class="panel"><h2>Stock por producto</h2>'+
@@ -5196,7 +5304,10 @@ function pintarStockProductos(rows, disp, falt){
          ? '<button class="btn2 btn-sm" style="font-weight:normal" onclick="formUbicacion('+x.producto_id+')">'+
            (x.ubicacion? esc(x.ubicacion) : '<span class="muted">+ ubicar</span>')+'</button>'
          : esc(x.ubicacion))+'</td>'+
-       '<td><b>'+fmtN(x.stock)+'</b></td><td>'+fmtN(x.comprometido)+'</td>'+
+       '<td><b>'+fmtN(x.stock)+'</b></td>'+
+       (Number(x.comprometido||0)>0
+         ? '<td><button class="btn2 btn-sm" style="font-weight:600" onclick="verComprometido(['+x.producto_id+'])">'+fmtN(x.comprometido)+' ›</button></td>'
+         : '<td>'+fmtN(x.comprometido)+'</td>')+
        '<td style="'+(disp(x)<0?'color:#7a2415;font-weight:600':'')+'">'+fmtN(disp(x))+'</td><td>'+fmtN(x.stock_minimo)+'</td>'+
        (puede?'<td><button class="btn2 btn-sm" onclick="formAjusteStock('+x.producto_id+')">Ajustar</button></td>':'')+'</tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Sin productos con esa búsqueda.</div>')+
