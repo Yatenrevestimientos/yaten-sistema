@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.10-82";
+const VERSION = "v2026.08.11-83";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -384,6 +384,29 @@ async function cargarConfig(){
 function cfg(clave, porDefecto){
   const v = CFG ? CFG[clave] : null;
   return (v == null || v === "") ? (porDefecto == null ? "" : porDefecto) : v;
+}
+/* ── Cotización para reportes que cruzan monedas (pedido de Gustavo, 11/8) ──
+   Cadena: la cotización propia del documento si la tiene → el PROMEDIO DEL MES
+   (de los presupuestos con cotización cargada) → la de Configuración → y si no
+   hay nada, null: no se estima, y el reporte dice cuántos casos quedaron afuera. */
+let _COTMES = null;
+async function cotizacionesMes(){
+  if (_COTMES) return _COTMES;
+  const r = await sb.from("presupuestos").select("fecha,cotizacion_usd")
+    .not("cotizacion_usd","is",null).gt("cotizacion_usd",0).limit(2000);
+  const porMes = {};
+  (r.data||[]).forEach(function(x){ const k=(x.fecha||"").slice(0,7); (porMes[k]=porMes[k]||[]).push(Number(x.cotizacion_usd)); });
+  const prom = {};
+  Object.keys(porMes).forEach(function(k){ prom[k] = porMes[k].reduce(function(a,b){return a+b;},0)/porMes[k].length; });
+  _COTMES = prom;
+  return prom;
+}
+function cotizPara(fecha, propia, proms){
+  if (Number(propia) > 0) return Number(propia);
+  const k = (fecha||"").slice(0,7);
+  if (proms && proms[k] > 0) return proms[k];
+  const c = Number(cfg("cotizacion_usd",0)) || 0;
+  return c > 0 ? c : null;
 }
 /* El membrete de todo lo que se imprime sale de Configuracion > Datos de impresion.
    Antes estaba escrito a mano adentro del codigo y no se podia cambiar. */
@@ -1244,7 +1267,8 @@ async function abrir(id){
          venta detrás, para no venderle dos veces. */
       (P("venta-agregar") && P("presupuesto-consultar") && p.resultado!=="Vendido" && !presPros.some(x=>x.estado==="Vendido")
         ?'<button class="btn2" onclick="ventaDesdeProspecto('+id+')" title="Venta rápida: si el cliente no existe lo cargás ahí mismo, y el presupuesto cerrado queda solo detrás">Venta directa</button>':'')+
-      (P("prospecto-eliminar")?'<button class="btn3" id="dborrar">Eliminar</button>':'')+
+      /* 11/8, decisión de Gustavo: el prospecto NUNCA se borra ni se anula.
+         Se edita cuando haga falta; si no va más, queda DESCARTADO con motivo. */
     '</div>'+
     (P("presupuesto-consultar")
       ? '<div class="sec">Presupuestos de este prospecto</div>'+
@@ -1252,7 +1276,7 @@ async function abrir(id){
         /* el botón vive arriba, dentro del bloque Presupuesto: acá solo la lista */
         '<div id="dpres">'+listaPresupPros(presPros)+'</div>'
       : '')+
-    '<div class="sec">Seguimientos</div><div id="dseg">'+listaSeg(seg||[])+'</div>'+
+    '<div class="sec">Seguimientos</div><div id="dseg">'+listaSeg(seg||[], id)+'</div>'+
     (P("seguimiento-agregar")?
       '<div class="grid" style="margin-top:10px">'+
       '<div class="f"><label>Fecha</label><input type="date" id="s_fecha" value="'+hoy()+'"></div>'+
@@ -1300,12 +1324,7 @@ async function abrir(id){
       (extra.indexOf("<div")>=0?extra:"");
     if (VISTA==="planilla") pintarPlanilla();
   };
-  if (P("prospecto-eliminar")) $("dborrar").onclick = async function(){
-    if (!confirm("¿Eliminar "+p.codigo+"? No se puede deshacer.")) return;
-    const {error} = await sb.from("prospectos").delete().eq("id",id);
-    if (error) return alert(error.message);
-    $("dlg").close(); ir(VISTA);
-  };
+  /* El botón «Eliminar» se sacó el 11/8: borraba de verdad, contra la regla. */
   if (P("seguimiento-agregar")) $("sagregar").onclick = async function(){
     const o = {prospecto_id:id, fecha:$("s_fecha").value||hoy(), tipo:$("s_tipo").value||null,
                observacion:$("s_observacion").value||null, proxima_accion:$("s_proxima_accion").value||null,
@@ -1313,17 +1332,19 @@ async function abrir(id){
     const {error} = await sb.from("seguimientos").insert(o);
     if (error) return alert(error.message);
     const {data:s2} = await sb.from("seguimientos").select("*").eq("prospecto_id",id).order("fecha",{ascending:false});
-    $("dseg").innerHTML = listaSeg(s2||[]);
+    $("dseg").innerHTML = listaSeg(s2||[], id);
     $("s_observacion").value=""; $("s_proxima_accion").value=""; $("s_proxima_fecha").value="";
   };
   $("dlg").showModal();
 }
-function listaSeg(s){
+function listaSeg(s, prosId){
   if (!s.length) return '<div class="muted">Sin seguimientos.</div>';
-  return '<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Quién</th><th>Observación</th><th>Próxima</th></tr></thead><tbody>'+
-    s.map(x=>'<tr><td>'+fmtF(x.fecha)+'</td><td>'+esc(x.tipo)+'</td><td>'+esc(nomP(x.quien_id))+'</td>'+
+  return '<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Quién</th><th>Observación</th><th>Próxima</th><th></th></tr></thead><tbody>'+
+    s.map(x=>'<tr'+(x.cerrado?' style="opacity:.55"':'')+'><td>'+fmtF(x.fecha)+'</td><td>'+esc(x.tipo)+'</td><td>'+esc(nomP(x.quien_id))+'</td>'+
       '<td style="white-space:normal;min-width:220px">'+esc(x.observacion)+'</td>'+
-      '<td>'+(x.proxima_fecha?fmtF(x.proxima_fecha)+" · "+esc(x.proxima_accion||""):"")+'</td></tr>').join("")+'</tbody></table></div>';
+      '<td>'+(x.proxima_fecha?fmtF(x.proxima_fecha)+" · "+esc(x.proxima_accion||""):"")+'</td>'+
+      '<td>'+(x.cerrado?'<span class="pill">Cerrado</span>'
+        : (x.proxima_fecha && prosId && P("seguimiento-agregar") ? '<button class="btn2 btn-sm" onclick="segCerrarFicha('+x.id+','+prosId+')">✓ Cerrar</button>' : ''))+'</td></tr>').join("")+'</tbody></table></div>';
 }
 
 /* ─────────── AGENDA ATO ─────────── */
@@ -1360,19 +1381,37 @@ VISTAS.segui = async function(){
       '<td style="'+(s.proxima_fecha<h?"color:#7a2415;font-weight:600":"")+'">'+fmtF(s.proxima_fecha)+'</td>'+
       '<td>'+esc(p.codigo)+'</td><td>'+esc(p.nombre)+'</td><td>'+esc(p.celular||p.telefono||"")+'</td>'+
       '<td>'+esc(s.proxima_accion)+'</td><td style="white-space:normal;min-width:220px">'+esc(s.observacion)+'</td>'+
-      '<td>'+esc(nomP(s.quien_id))+'</td><td>'+badge(p.resultado||"")+'</td></tr>'; };
+      '<td>'+esc(nomP(s.quien_id))+'</td><td>'+badge(p.resultado||"")+'</td>'+
+      /* 11/8, pedido de Gustavo: cerrar o descartar el seguimiento para que
+         «Vencidos» no crezca para siempre. Sale de la lista, no se borra. */
+      (P("seguimiento-agregar")?'<td onclick="event.stopPropagation()"><button class="btn2 btn-sm" onclick="segCerrar('+s.id+')">✓ Cerrar</button></td>':'<td></td>')+
+      '</tr>'; };
   const ts = (window.FSEG||"").toLowerCase();
   const pasa = s => { const p = pros[s.prospecto_id]||{};
     return !ts || ((p.codigo||"")+" "+(p.nombre||"")+" "+(p.celular||"")+" "+(p.telefono||"")+" "+(s.proxima_accion||"")+" "+(s.observacion||"")).toLowerCase().indexOf(ts)>=0; };
   const venc = (seg||[]).filter(s=>s.proxima_fecha<h && pasa(s)), prox = (seg||[]).filter(s=>s.proxima_fecha>=h && pasa(s));
   const bloque = (t,rows,de) => '<div class="panel"><h2>'+t+'</h2><div class="desc">'+de+'</div>'+
-    (rows.length?'<div class="tablewrap"><table><thead><tr><th>Próxima</th><th>Código</th><th>Cliente</th><th>Contacto</th><th>Acción</th><th>Última observación</th><th>Quién</th><th>Resultado</th></tr></thead><tbody>'+rows.map(fila).join("")+'</tbody></table></div>':'<div class="muted">Nada pendiente.</div>')+'</div>';
+    (rows.length?'<div class="tablewrap"><table><thead><tr><th>Próxima</th><th>Código</th><th>Cliente</th><th>Contacto</th><th>Acción</th><th>Última observación</th><th>Quién</th><th>Resultado</th><th></th></tr></thead><tbody>'+rows.map(fila).join("")+'</tbody></table></div>':'<div class="muted">Nada pendiente.</div>')+'</div>';
   $("main").innerHTML = '<div class="panel"><div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="sg_txt" placeholder="cliente, teléfono, acción u observación" value="'+esc(window.FSEG||"")+'"></div>'+
     '<div style="min-width:auto"><button class="btn" id="sg_btn">Buscar</button></div></div></div>'+
     bloque("Vencidos", venc, "Acciones cuya fecha ya pasó y siguen abiertas.") +
     bloque("Próximos", prox, "Agenda de contacto por delante.");
   $("sg_btn").onclick = function(){ window.FSEG = $("sg_txt").value.trim(); VISTAS.segui(); };
 };
+/* Cierra (o descarta) un seguimiento: deja de aparecer en Vencidos y Próximos.
+   No se borra: queda en la ficha del prospecto, marcado. */
+async function segCerrar(id){
+  if (!confirm("¿Cerrar este seguimiento? Sale de la lista de pendientes. Queda guardado en la ficha del prospecto.")) return;
+  const {error} = await sb.from("seguimientos").update({cerrado:true}).eq("id",id);
+  if (error) return alert(error.message);
+  VISTAS.segui();
+}
+async function segCerrarFicha(id, prosId){
+  const {error} = await sb.from("seguimientos").update({cerrado:true}).eq("id",id);
+  if (error) return alert(error.message);
+  const {data:s2} = await sb.from("seguimientos").select("*").eq("prospecto_id",prosId).order("fecha",{ascending:false});
+  if ($("dseg")) $("dseg").innerHTML = listaSeg(s2||[], prosId);
+}
 
 /* ─────────── EFECTIVIDAD ─────────── */
 VISTAS.efect = async function(){
@@ -2193,13 +2232,16 @@ async function infoVentas(){
   const h = hoy(), mes = h.slice(0,8)+"01", anio = h.slice(0,4)+"-01-01";
   const [v, p, sv] = await Promise.all([
     sb.from("ventas").select("fecha,moneda,total,estado,anulado").gte("fecha", anio).limit(5000),
-    sb.from("presupuestos").select("fecha,moneda,total,estado").gte("fecha", anio).limit(5000),
+    sb.from("presupuestos").select("fecha,moneda,total,estado,automatico").gte("fecha", anio).limit(5000),
     sb.from("v_saldos_venta").select("saldo,moneda,estado")
   ]);
   const vivas = (v.data||[]).filter(x=>!x.anulado);
   const suma = (arr,m,desde) => arr.filter(x=>x.moneda===m && x.fecha>=desde).reduce((a,x)=>a+Number(x.total||0),0);
   const cuenta = (arr,desde) => arr.filter(x=>x.fecha>=desde).length;
-  const pres = (p.data||[]).filter(x=>x.estado!=="Anulado");
+  /* 11/8: los presupuestos automáticos (los que nacen detrás de una venta
+     directa) quedan afuera también acá, igual que en el reporte Conversión:
+     nacen vendidos y inflaban la efectividad. */
+  const pres = (p.data||[]).filter(x=>x.estado!=="Anulado" && !x.automatico);
   const abiertos = pres.filter(x=>x.estado==="Abierto"||x.estado==="Enviado");
   const vendidos = pres.filter(x=>x.estado==="Vendido");
   const porCerrar = vivas.filter(x=>x.estado==="En curso"||x.estado==="Pendiente a cerrar");
@@ -2515,20 +2557,23 @@ const REPORTES = [
  }},
 
 {id:"comisiones", t:"Ventas (Comisiones)", g:"Comercial", perm:"reporte-comision",
- ay:"Cuánto vendió cada uno y cuánta comisión le corresponde. El porcentaje sale de la ficha de cada persona en Equipo; si está en cero, la comisión da cero.",
+ ay:"Cuánto vendió cada uno y cuánta comisión le corresponde, calculada sobre el NETO sin IVA (definición de Gustavo, 11/8: el IVA no es ingreso). El porcentaje sale de la ficha de cada persona en Equipo; si está en cero, la comisión da cero.",
  run: async function(f){
-   const v = (await traer("ventas","fecha,moneda,total,anulado,vl_id",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
+   const v = (await traer("ventas","fecha,moneda,neto,total,anulado,vl_id",f,"fecha")).filter(x=>!x.anulado && (!f.moneda||x.moneda===f.moneda));
    const pf = await sb.from("perfiles").select("id,nombre,comision_pct");
    const pct = {}; (pf.data||[]).forEach(p=>pct[p.id]=Number(p.comision_pct||0));
    const g = agrupar(v, x=>x.vl_id+"|"+x.moneda);
    const filas = [];
    g.forEach(function(arr, k){
      const [vl, mon] = k.split("|");
-     const tot = sum(arr, x=>x.total), p = pct[vl]||0;
+     /* 11/8: la base de la comisión es el neto, igual que en el Estado de
+        resultado. Antes este reporte usaba el total con IVA y los dos números
+        no cuadraban entre sí. */
+     const tot = sum(arr, x=>x.neto!=null?x.neto:x.total), p = pct[vl]||0;
      filas.push([nomP(vl)||"Sin asignar", mon, arr.length, tot, p, Math.round(tot*p/100*100)/100]);
    });
    filas.sort((a,b)=>b[3]-a[3]);
-   return {cols:[{t:"Vendedor"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Vendido",tipo:"m"},{t:"Comisión %",tipo:"n"},{t:"Comisión",tipo:"m"}], filas:filas,
+   return {cols:[{t:"Vendedor"},{t:"Moneda"},{t:"Ventas",tipo:"n"},{t:"Vendido (neto)",tipo:"m"},{t:"Comisión %",tipo:"n"},{t:"Comisión",tipo:"m"}], filas:filas,
      nota: (pf.error? "No pude leer los porcentajes de comisión: tu rol no tiene permiso de usuarios." : "")};
  }},
 
@@ -2558,29 +2603,44 @@ const REPORTES = [
 {id:"conversion_pre", t:"Conversión de presupuestos", g:"Comercial", perm:"reporte-ventas",
  ay:"De los presupuestos presentados en el período, cuántos se vendieron, por vendedora. NO cuenta los presupuestos automáticos —los que el sistema genera solo detrás de una venta directa—, porque nacen ya vendidos y darían 100% de cierre. El botón Detalle abre los presupuestos de cada renglón.",
  run: async function(f){
-   const p = (await traer("presupuestos","id,codigo,fecha,cliente_nombre,vl_id,moneda,total,estado,tipo,automatico",f,"fecha"))
+   const p = (await traer("presupuestos","id,codigo,fecha,cliente_nombre,vl_id,moneda,total,estado,tipo,automatico,cotizacion_usd",f,"fecha"))
      .filter(x=>x.estado !== "Anulado" && (!f.moneda||x.moneda===f.moneda));
    const autos = p.filter(x=>x.automatico).length;
    const reales = p.filter(x=>!x.automatico);
+   /* 11/8: con moneda «las dos», antes sumaba pesos y dólares como si fueran la
+      misma plata. Ahora los USD se convierten a pesos con la cadena de
+      cotización (la del documento → promedio del mes → Configuración); lo que
+      no tiene cotización no se suma y la nota dice cuántos son. */
+   const proms = f.moneda ? null : await cotizacionesMes();
+   let sinCot = 0;
+   const enPesos = function(x){
+     if (f.moneda) return Number(x.total||0);
+     if ((x.moneda||"ARS") === "ARS") return Number(x.total||0);
+     const c = cotizPara(x.fecha, x.cotizacion_usd, proms);
+     if (!c){ sinCot++; return 0; }
+     return Number(x.total||0)*c;
+   };
    const g = agrupar(reales, x=>x.vl_id||"sin");
    const pares = [];
    g.forEach(function(arr,k){
      const vend = arr.filter(x=>x.estado==="Vendido");
      pares.push({fila:[nomP(k)||"Sin asignar", arr.length, vend.length,
        arr.length? Math.round(vend.length/arr.length*1000)/10 : 0,
-       sum(arr,x=>x.total), sum(vend,x=>x.total)], arr:arr});
+       sum(arr,enPesos), sum(vend,enPesos)], arr:arr});
    });
    const or = ordenarConDetalle(pares, (a,b)=>b[1]-a[1]);
    const filas = or.filas, dets = or.dets;
+   const etq = f.moneda ? "" : " (eq $)";
    return {cols:[{t:"Vendedora"},{t:"Presupuestos",tipo:"n"},{t:"Vendidos",tipo:"n"},{t:"% que cierra",tipo:"n"},
-                 {t:"Presupuestado",tipo:"n"},{t:"Vendido",tipo:"n"}], filas:filas,
+                 {t:"Presupuestado"+etq,tipo:"n"},{t:"Vendido"+etq,tipo:"n"}], filas:filas,
      det: function(i){
        const arr = (dets[i]||[]).slice().sort((a,b)=> a.fecha<b.fecha?-1:1);
        return {titulo:(filas[i]||[])[0],
          cols:[{t:"Presupuesto"},{t:"Fecha",tipo:"f"},{t:"Cliente"},{t:"Tipo"},{t:"Estado"},{t:"Moneda"},{t:"Total",tipo:"m"}],
          filas: arr.map(x=>[x.codigo, x.fecha, x.cliente_nombre||"—", x.tipo||"—", x.estado, x.moneda, x.total])};
      },
-     nota: autos ? (autos+" presupuesto(s) automáticos quedaron afuera de la cuenta: son los que el sistema generó detrás de una venta directa y nacen vendidos.") : ""};
+     nota: [autos ? (autos+" presupuesto(s) automáticos quedaron afuera de la cuenta: son los que el sistema generó detrás de una venta directa y nacen vendidos.") : "",
+            sinCot ? (sinCot+" presupuesto(s) en USD sin ninguna cotización (ni propia, ni promedio del mes, ni de Configuración) no se sumaron al equivalente en pesos.") : ""].filter(Boolean).join(" · ")};
  }},
 
 {id:"origen_ventas", t:"¿Cómo nos conocieron? (Ventas)", g:"Comercial", perm:"reporte-origen",
@@ -3047,6 +3107,10 @@ const REPORTES = [
                 .filter(function(x){ return !x.anulado && (!f.moneda || x.moneda===f.moneda); });
    if (!PRODS.length) await cargarCatalogo();
    const cot = Number(cfg("cotizacion_usd",0))||0;
+   /* 11/8: para cruzar monedas se usa el promedio de cotización del mes
+      (cadena: promedio del mes → Configuración). Lo que no tiene cotización
+      no se estima: se cuenta y el aviso lo dice. */
+   const proms = await cotizacionesMes();
    const mes = function(d){ return String(d||"").slice(0,7); };
    const acc = {};
    const tocar = function(k){ if (!acc[k]) acc[k] = {ventas:0, costo:0, comis:0, instal:0, finan:0, gastos:0}; return acc[k]; };
@@ -3093,13 +3157,21 @@ const REPORTES = [
        if (!y.es_adicional){
          const pr = PRODS.find(function(z){ return z.id === y.producto_id; });
          const cu = pr ? Number(pr.costo_usd||0) : 0;
-         if (!cu || (m === "ARS" && !cot)) sinCosto++;
-         else acc[k].costo += (m === "USD" ? cu : cu*cot) * Number(y.cantidad||0);
+         const cA = cotizPara(ven.fecha, null, proms) || cot || null;
+         if (!cu || (m === "ARS" && !cA)) sinCosto++;
+         else acc[k].costo += (m === "USD" ? cu : cu*cA) * Number(y.cantidad||0);
        }
        if (y.con_instalacion){
          const ins0 = INST.find(function(z){ return String(z.id)===String(ven.instalador_id); });
          const cm2 = ins0 ? Number(ins0.costo_m2||0) : 0;
+         /* 11/8: el costo del instalador está en pesos. En una venta en USD
+            antes se restaba sin convertir — pesos como si fueran dólares. */
          if (!cm2) sinInstalador++;
+         else if (m === "USD"){
+           const c2 = cotizPara(ven.fecha, null, proms) || cot || null;
+           if (!c2) sinInstalador++;
+           else acc[k].instal += (cm2 / c2) * Number(y.cantidad||0);
+         }
          else acc[k].instal += cm2 * Number(y.cantidad||0);
        }
      });
@@ -3142,7 +3214,7 @@ const REPORTES = [
    });
 
    if (sinCosto)       avisos.push(sinCosto+" renglón(es) de venta sin «Costo USD» en el producto, o sin cotización del dólar en Configuración: ese costo quedó en CERO, así que el margen se lee de más");
-   if (sinInstalador)  avisos.push(sinInstalador+" renglón(es) marcados «con instalación» sin costo por m² del instalador: la cuadrilla no se descontó");
+   if (sinInstalador)  avisos.push(sinInstalador+" renglón(es) marcados «con instalación» sin costo por m² del instalador o sin cotización para convertirlo: la cuadrilla no se descontó");
    if (sinFormaPago)   avisos.push(sinFormaPago+" venta(s) sin forma de pago con «Costo %» cargado: se contaron como si la cobranza no costara nada");
    if (sinComis)       avisos.push(sinComis+" venta(s) con vendedora o ATO asignado pero sin comisión cargada en su perfil");
 
@@ -3794,7 +3866,9 @@ function pintarFichaPre(){
    '<div class="acciones">'+
      (puede?'<button class="btn2" id="w_guardar">Guardar presupuesto</button>':'<span class="muted">Tu rol consulta los presupuestos y no los modifica.</span>')+
      (c.id?'<button class="btn2" onclick="imprimirPresupuesto()">Imprimir o guardar PDF</button>':'')+
-     (c.id&&!vendido&&P("presupuesto-eliminar")?'<button class="btn3" id="w_borrar">Eliminar</button>':'')+
+     /* 11/8, decisión de Gustavo: el presupuesto tampoco se borra. Se edita
+        mientras esté abierto; vendido queda con llave; si no salió, va a
+        Rechazado / Vencido con su motivo. */
    '</div>';
   pintarItems(); pintarAdic(); modoDescuento(true); pintarTotales();
   if ($("w_vender")) $("w_vender").onclick = function(){
@@ -3811,12 +3885,7 @@ function pintarFichaPre(){
     guardarPresupuesto();
   };
   if (puede) $("w_guardar").onclick = guardarPresupuesto;
-  if (c.id && !vendido && P("presupuesto-eliminar")) $("w_borrar").onclick = async function(){
-    if (!confirm("¿Eliminar "+c.codigo+"? No se puede deshacer.")) return;
-    const {error} = await sb.from("presupuestos").delete().eq("id",c.id);
-    if (error) return alert(error.message);
-    $("dlg").close(); pintarPresupuestos();
-  };
+  /* El botón «Eliminar» se sacó el 11/8: borraba de verdad, contra la regla. */
 }
 
 function pintarItems(){
