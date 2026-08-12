@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.12-104";
+const VERSION = "v2026.08.12-105";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5933,11 +5933,24 @@ async function fichaProveedor(id, tab){
       sb.from("notas_proveedor").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false})
     ]);
     mov = m.data||[]; precios = pr.data||[]; ocs = o.data||[]; facs = f.data||[]; nots = n.data||[];
-    /* cuánto se le pagó a cada factura: es lo que define si está paga o no */
+    /* Cuánto se le pagó a cada factura: es lo que define si está paga o no.
+       ══ OJO, error encontrado el 12/8 probando ══
+       Un pago ANULADO deja su imputación en la tabla. Si se suman todas, una
+       factura cuyo pago se anuló figura «Paga» y no lo está: el proveedor sigue
+       esperando la plata. Se descuentan los pagos anulados. */
     const ids = facs.map(x=>x.id);
     if (ids.length){
       const im = await sb.from("pago_imputaciones").select("factura_id,importe,pago_id").in("factura_id", ids);
-      (im.data||[]).forEach(function(x){ imput[x.factura_id] = (imput[x.factura_id]||0) + Number(x.importe||0); });
+      const filas = im.data||[];
+      let anulados = {};
+      if (filas.length){
+        const pg = await sb.from("pagos_compra").select("id,anulado").in("id", filas.map(x=>x.pago_id));
+        (pg.data||[]).forEach(function(x){ anulados[x.id] = !!x.anulado; });
+      }
+      filas.forEach(function(x){
+        if (anulados[x.pago_id]) return;
+        imput[x.factura_id] = (imput[x.factura_id]||0) + Number(x.importe||0);
+      });
     }
   }
   $("dtit").textContent = p ? p.nombre : "Proveedor nuevo";
@@ -6711,6 +6724,8 @@ async function verFactura(id){
   if (f.error) return alert(f.error.message);
   const x = f.data;
   if (!PROVS.length) await cargarProveedores();
+  /* la cuenta de donde salió cada pago; si el rol no puede ver finanzas, queda en «—» */
+  if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
   /* Los pagos que se le imputaron: es lo que dice si está cancelada o no */
   const imps = im.data||[];
   let pagos = [];
@@ -6752,8 +6767,10 @@ async function verFactura(id){
          '<td>'+esc(cta?cta.nombre:"—")+'</td>'+
          '<td style="text-align:right">'+fmtM(y.importe,x.moneda)+'</td></tr>';
      }).join("")+
-     '<tr style="background:#f6f3ee"><td colspan="3"><b>Pagado</b></td><td style="text-align:right"><b>'+fmtM(pagado,x.moneda)+'</b></td></tr>'+
-     '</tbody></table></div>'
+     '<tr style="background:#f6f3ee"><td colspan="3"><b>Pagado</b></td><td style="text-align:right"><b>'+fmtM0(pagado,x.moneda)+'</b></td></tr>'+
+     '</tbody></table></div>'+
+     (pagos.some(function(y){ return y.anulado; })
+       ? '<div class="msg" style="margin-top:6px">Hay pagos <b>anulados</b> entre los imputados: figuran tachados y <b>no cuentan</b> como pagado. La factura sigue debiéndose.</div>' : '')
     : '<div class="muted">Todavía no se le imputó ningún pago a esta factura.</div>')+
    '<div class="sec">Impuestos del comprobante</div>'+
    ((i.data||[]).length? '<div class="tablewrap"><table><thead><tr><th>Impuesto</th><th style="text-align:right">Base</th><th style="text-align:right">%</th><th>Detalle</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
