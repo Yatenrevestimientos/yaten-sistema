@@ -8,7 +8,7 @@
 <style>
 :root{
   --petroleo:#24393C; --oxido:#5E1F10; --ocre:#8A5F1B; --grafito:#12181A; --arena:#EFEAE3;
-  --linea:#d9d2c8; --texto:#1b2426; --suave:#6b7679;
+  --linea:#d9d2c8; --texto:#141c1e; --suave:#4a5658; --cebra:#f7f4ef;
   --entrada:#eef3f3; --visita:#f6efe2; --venta:#f3e9e6; --segui:#eceef0;
 }
 *{box-sizing:border-box}
@@ -25,7 +25,7 @@ button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid transparen
 .btn-sm{padding:5px 10px;font-size:13px;border-radius:6px}
 input,select,textarea{font:inherit;padding:8px 10px;border:1px solid var(--linea);border-radius:8px;background:#fff;width:100%;color:var(--texto)}
 input:focus,select:focus,textarea:focus{outline:2px solid #b9c6c7;outline-offset:-1px}
-label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--suave);margin-bottom:4px}
+label{display:block;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--suave);margin-bottom:4px}
 .f{margin-bottom:12px}
 .hide{display:none!important}
 
@@ -46,7 +46,7 @@ header button{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,
 nav{background:var(--grafito);width:230px;min-width:230px;position:sticky;top:47px;
     max-height:calc(100dvh - 47px);overflow-y:auto;padding:6px 0 30px;z-index:39;
     -webkit-overflow-scrolling:touch}
-nav .sec-btn{display:flex;align-items:center;gap:8px;width:100%;background:transparent;color:#c9d2d3;
+nav .sec-btn{display:flex;align-items:center;gap:8px;width:100%;background:transparent;color:#dbe3e4;
     border:0;border-radius:0;padding:10px 14px;text-align:left;font-size:14px;line-height:1.25;
     border-left:3px solid transparent}
 nav .sec-btn:hover{background:rgba(255,255,255,.06);color:#fff}
@@ -55,8 +55,8 @@ nav .flecha{margin-left:auto;font-size:10px;opacity:.6;transition:transform .15s
 nav .sec-btn.abierto .flecha{transform:rotate(90deg);opacity:1}
 nav .subs{background:rgba(0,0,0,.22);overflow:hidden}
 nav .subs.cerrado{display:none}
-nav .subs button{display:block;width:100%;background:transparent;color:#a9b5b7;border:0;border-radius:0;
-    padding:8px 14px 8px 30px;text-align:left;font-size:13px;line-height:1.3;border-left:3px solid transparent}
+nav .subs button{display:block;width:100%;background:transparent;color:#c2cdcf;border:0;border-radius:0;
+    padding:8px 14px 8px 30px;text-align:left;font-size:13.5px;line-height:1.3;border-left:3px solid transparent}
 nav .subs button:hover{color:#fff;background:rgba(255,255,255,.05)}
 nav .subs button.on{color:#fff;font-weight:600;border-left-color:var(--ocre);background:rgba(255,255,255,.08)}
 #tapa{display:none}
@@ -65,22 +65,27 @@ nav button{background:transparent;color:#c9d2d3;border:0;border-radius:0;padding
 nav button.on{color:#fff;border-bottom-color:var(--ocre);background:rgba(255,255,255,.05)}
 
 #subnav:empty{display:none}
-#subnav button{background:transparent;border:0;border-radius:0;padding:8px 13px;white-space:nowrap;font-size:13px;color:#5b6668;border-bottom:3px solid transparent}
+#subnav button{background:transparent;border:0;border-radius:0;padding:8px 13px;white-space:nowrap;font-size:13.5px;color:#3d4a4c;border-bottom:3px solid transparent}
 #subnav button.on{color:var(--petroleo);font-weight:600;border-bottom-color:var(--ocre);background:#fff}
 main{padding:16px;flex:1;max-width:1600px;width:100%;margin:0 auto}
 .panel{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:16px;margin-bottom:16px}
 .panel>h2{font-size:17px;margin-bottom:2px}
-.panel>.desc{font-size:13px;color:var(--suave);margin-bottom:14px}
+.panel>.desc{font-size:13.5px;color:var(--suave);margin-bottom:14px;line-height:1.5}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
 .kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px}
 .kpi{background:#fff;border:1px solid var(--linea);border-left:4px solid var(--ocre);border-radius:10px;padding:12px 14px}
 .kpi .n{font-family:Georgia,serif;font-size:26px;color:var(--petroleo)}
-.kpi .t{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--suave)}
+.kpi .t{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--suave)}
 .tablewrap{overflow-x:auto;border:1px solid var(--linea);border-radius:10px;background:#fff}
-table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}
-th,td{padding:7px 9px;border-bottom:1px solid #eee;text-align:left}
-thead th{position:sticky;top:0;background:#fff;z-index:2;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--suave)}
-tbody tr:hover{background:#fbf9f6}
+table{border-collapse:collapse;width:100%;font-size:14px;white-space:nowrap;font-variant-numeric:tabular-nums}
+th,td{padding:6px 9px;border-bottom:1px solid #e8e2d8;text-align:left}
+thead th{position:sticky;top:0;background:#f4f1ea;z-index:2;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--petroleo);border-bottom:2px solid var(--linea)}
+/* Renglones alternados: con tablas anchas es lo que hace que el ojo no se
+   pierda de columna. Los renglones con color propio (la planilla) mandan ellos,
+   porque el color lo llevan las celdas y tapan al de la fila. */
+tbody tr:nth-child(even){background:var(--cebra)}
+tbody tr:hover{background:#eae4d9}
+tbody tr:hover td{background:transparent}
 .b-e{background:var(--entrada)}.b-v{background:var(--visita)}.b-s{background:var(--venta)}.b-u{background:var(--segui)}
 .grupo th{text-align:center;font-family:Georgia,serif;font-size:12px;letter-spacing:.08em;color:var(--petroleo);border-bottom:2px solid var(--linea)}
 /* Ordenar haciendo clic en el título de la columna. Pedido de Gilda, 7/8/2026. */
@@ -89,24 +94,34 @@ thead th.ord:hover{color:var(--petroleo)}
 thead th.ord::after{content:"⇅";opacity:.28;margin-left:5px;font-size:10px}
 thead th.orden-asc::after{content:"▲";opacity:.85}
 thead th.orden-desc::after{content:"▼";opacity:.85}
-.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--linea);background:#f6f3ee}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid var(--linea);background:#f6f3ee}
 .pill.ok{background:#e6f2e8;border-color:#bcd8c2;color:#1d5b2c}
 .pill.no{background:#f7e6e3;border-color:#e0bdb6;color:#7a2415}
 .pill.sen{background:#fdf0d8;border-color:#e6cf9d;color:#7a5a12}
 .pill.esp{background:#eef3f3;border-color:#c6d3d4;color:#2c4448}
-.msg{padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:12px}
+.msg{padding:10px 12px;border-radius:8px;font-size:13.5px;line-height:1.5;margin-bottom:12px}
 .msg.err{background:#f9e7e4;color:#7a2415;border:1px solid #e6c3bb}
 .msg.ok{background:#e7f1e9;color:#1d5b2c;border:1px solid #c3ddc8}
-.muted{color:var(--suave);font-size:13px}
+.muted{color:var(--suave);font-size:13.5px}
 .acciones{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 .filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px}
 .filtros>div{min-width:150px}
+/* 13/8, Gustavo: «un gasto nuevo y no tengo que correr la pantalla para ver el
+   botón». Con muchos filtros, Filtrar / Limpiar / + Nuevo caían al final de la
+   barra —y a veces afuera de la pantalla, a la derecha— y había que correrla
+   para apretarlos. Ahora van primero, arriba a la izquierda, sin ocupar un
+   renglón de más. */
+.filtros>div:has(>button){order:-1;min-width:auto;margin-left:0!important}
 dialog{border:0;border-radius:14px;padding:0;max-width:1500px;width:97vw;box-shadow:0 24px 70px rgba(0,0,0,.3)}
 dialog::backdrop{background:rgba(18,24,26,.55)}
 dialog .dhead{background:var(--petroleo);color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px}
 dialog .dhead h3{font-size:16px}
 dialog .dhead button{margin-left:auto;background:rgba(255,255,255,.15);color:#fff;border-color:transparent}
 dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
+/* Lo mismo adentro de un formulario largo: el botón de guardar no se persigue
+   scrolleando, queda pegado abajo del cuadro. */
+dialog .dbody>.acciones:last-child{position:sticky;bottom:-16px;background:#fff;
+  padding:10px 0 4px;margin-top:12px;border-top:1px solid var(--linea);z-index:3}
 .sec{font-family:Georgia,serif;font-size:14px;color:var(--petroleo);border-bottom:1px solid var(--linea);padding-bottom:5px;margin:18px 0 10px}
 .sec:first-child{margin-top:0}
 @media(max-width:700px){
@@ -206,7 +221,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-113";
+const VERSION = "v2026.08.13-114";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
