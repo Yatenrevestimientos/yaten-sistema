@@ -206,7 +206,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-112";
+const VERSION = "v2026.08.13-113";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -7392,6 +7392,10 @@ function medioAgregar(){
   pintarMedios();
 }
 function medioQuitar(k){ pagSincro(); PAG.medios.splice(k,1); pintarMedios(); }
+/* Al cambiar la cuenta hay que ANOTAR el cambio antes de redibujar: si se
+   redibuja primero, la tabla se arma con la cuenta vieja y el cambio se pierde
+   sin decir nada. Es el mismo error que ya me comí con la grilla de impuestos. */
+function medioCuenta(k){ pagSincro(); pintarMedios(); }
 function pagoMoneda(){ pagSincro(); pintarMedios(); }
 
 function rotuloMedio(x){
@@ -7426,7 +7430,7 @@ function pintarMedios(){
             ? '<span class="muted">Efectivo o banco</span>'
             : rotuloMedio(x))+'</td>'+
           '<td>'+(esCta
-            ? '<select id="pm_'+k+'_cuenta" style="min-width:170px" onchange="pintarMedios()">'+
+            ? '<select id="pm_'+k+'_cuenta" style="min-width:170px" onchange="medioCuenta('+k+')">'+
               cs.map(c=>'<option value="'+c.id+'" '+(String(x.cuenta_id)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select>'
             : esc(cta?cta.nombre:"—")+' <span class="muted">('+mcta+')</span>')+'</td>'+
           '<td>'+(esCta
