@@ -177,6 +177,13 @@ dialog .dbody{padding:16px;max-height:86dvh;overflow:auto}
   <div class="dbody" id="dbody"></div>
 </dialog>
 
+<!-- ventana de segundo nivel: la cartera de cheques y el cheque propio, que se
+     abren desde arriba de la orden de pago sin cerrarla -->
+<dialog id="dlg2" style="max-width:900px">
+  <div class="dhead"><h3 id="d2tit">Cheques</h3><button class="btn-sm" onclick="cerrarDlg2()">Cerrar</button></div>
+  <div class="dbody" id="d2body"></div>
+</dialog>
+
 <script>
 /* @supabase/supabase-js v2 (UMD, embebido para no depender de internet externo) */
 var supabase=(function(e){function t(e,t){var n={};for(var r in e)Object.prototype.hasOwnProperty.call(e,r)&&t.indexOf(r)<0&&(n[r]=e[r]);if(e!=null&&typeof Object.getOwnPropertySymbols==`function`)for(var i=0,r=Object.getOwnPropertySymbols(e);i<r.length;i++)t.indexOf(r[i])<0&&Object.prototype.propertyIsEnumerable.call(e,r[i])&&(n[r[i]]=e[r[i]]);return n}function n(e,t,n,r){function i(e){return e instanceof n?e:new n(function(t){t(e)})}return new(n||=Promise)(function(n,a){function o(e){try{c(r.next(e))}catch(e){a(e)}}function s(e){try{c(r.throw(e))}catch(e){a(e)}}function c(e){e.done?n(e.value):i(e.value).then(o,s)}c((r=r.apply(e,t||[])).next())})}let r=e=>e?(...t)=>e(...t):(...e)=>fetch(...e);var i=class extends Error{constructor(e,t=`FunctionsError`,n){super(e),this.name=t,this.context=n}toJSON(){return{name:this.name,message:this.message,context:this.context}}},a=class extends i{constructor(e){super(`Failed to send a request to the Edge Function`,`FunctionsFetchError`,e)}},o=class extends i{constructor(e){super(`Relay Error invoking the Edge Function`,`FunctionsRelayError`,e)}},s=class extends i{constructor(e){super(`Edge Function returned a non-2xx status code`,`FunctionsHttpError`,e)}},c;(function(e){e.Any=`any`,e.ApNortheast1=`ap-northeast-1`,e.ApNortheast2=`ap-northeast-2`,e.ApSouth1=`ap-south-1`,e.ApSoutheast1=`ap-southeast-1`,e.ApSoutheast2=`ap-southeast-2`,e.CaCentral1=`ca-central-1`,e.EuCentral1=`eu-central-1`,e.EuWest1=`eu-west-1`,e.EuWest2=`eu-west-2`,e.EuWest3=`eu-west-3`,e.SaEast1=`sa-east-1`,e.UsEast1=`us-east-1`,e.UsWest1=`us-west-1`,e.UsWest2=`us-west-2`})(c||={});var l=class{constructor(e,{headers:t={},customFetch:n,region:i=c.Any}={}){this.url=e,this.headers=t,this.region=i,this.fetch=r(n)}setAuth(e){this.headers.Authorization=`Bearer ${e}`}invoke(e){return n(this,arguments,void 0,function*(e,t={}){var n;let r,i,c;try{let{headers:n,method:l,body:u,signal:d,timeout:f}=t,p={},{region:m}=t;m||=this.region;let h=new URL(`${this.url}/${e}`);m&&m!==`any`&&(p[`x-region`]=m,h.searchParams.set(`forceFunctionRegion`,m));let g,ee=!!n&&Object.keys(n).some(e=>e.toLowerCase()===`content-type`);u&&!ee?typeof Blob<`u`&&u instanceof Blob||u instanceof ArrayBuffer?(p[`Content-Type`]=`application/octet-stream`,g=u):typeof u==`string`?(p[`Content-Type`]=`text/plain`,g=u):typeof FormData<`u`&&u instanceof FormData?g=u:(p[`Content-Type`]=`application/json`,g=JSON.stringify(u)):g=u&&typeof u!=`string`&&!(typeof Blob<`u`&&u instanceof Blob)&&!(u instanceof ArrayBuffer)&&!(typeof FormData<`u`&&u instanceof FormData)?JSON.stringify(u):u;let te=d;f&&(i=new AbortController,r=setTimeout(()=>i.abort(),f),d?(te=i.signal,c=()=>i.abort(),d.addEventListener(`abort`,c)):te=i.signal);let _=yield this.fetch(h.toString(),{method:l||`POST`,headers:Object.assign(Object.assign(Object.assign({},p),this.headers),n),body:g,signal:te}).catch(e=>{throw new a(e)}),ne=_.headers.get(`x-relay-error`);if(ne&&ne===`true`)throw new o(_);if(!_.ok)throw new s(_);let v=(_.headers.get(`Content-Type`)??`text/plain`).split(`;`)[0].trim().toLowerCase(),re;return re=v===`application/json`?yield _.json():v===`application/octet-stream`||v===`application/pdf`?yield _.blob():v===`text/event-stream`?_:v===`multipart/form-data`?yield _.formData():yield _.text(),{data:re,error:null,response:_}}catch(e){return{data:null,error:e,response:e instanceof s||e instanceof o?e.context:void 0}}finally{r&&clearTimeout(r),c&&((n=t.signal)==null||n.removeEventListener(`abort`,c))}})}};let u=e=>Math.min(1e3*2**e,3e4),d=[520,503],f=[`GET`,`HEAD`,`OPTIONS`];var p=class extends Error{constructor(e){super(e.message),this.name=`PostgrestError`,this.details=e.details,this.hint=e.hint,this.code=e.code}toJSON(){return{name:this.name,message:this.message,details:this.details,hint:this.hint,code:this.code}}};function m(e,t){return new Promise(n=>{if(t?.aborted){n();return}let r=setTimeout(()=>{t?.removeEventListener(`abort`,i),n()},e);function i(){clearTimeout(r),n()}t?.addEventListener(`abort`,i)})}function h(e,t,n,r){return!(!r||n>=3||!f.includes(e)||!d.includes(t))}var g=class{constructor(e){this.shouldThrowOnError=!1,this.retryEnabled=!0,this.method=e.method,this.url=e.url,this.headers=new Headers(e.headers),this.schema=e.schema,this.body=e.body,this.shouldThrowOnError=e.shouldThrowOnError??!1,this.signal=e.signal,this.isMaybeSingle=e.isMaybeSingle??!1,this.shouldStripNulls=e.shouldStripNulls??!1,this.urlLengthLimit=e.urlLengthLimit??8e3,this.retryEnabled=e.retry??!0,e.fetch?this.fetch=e.fetch:this.fetch=fetch}throwOnError(){return this.shouldThrowOnError=!0,this}stripNulls(){if(this.headers.get(`Accept`)===`text/csv`)throw Error(`stripNulls() cannot be used with csv()`);return this.shouldStripNulls=!0,this}setHeader(e,t){return this.headers=new Headers(this.headers),this.headers.set(e,t),this}retry(e){return this.retryEnabled=e,this}then(e,t){var n=this;if(this.schema===void 0||([`GET`,`HEAD`].includes(this.method)?this.headers.set(`Accept-Profile`,this.schema):this.headers.set(`Content-Profile`,this.schema)),this.method!==`GET`&&this.method!==`HEAD`&&this.headers.set(`Content-Type`,`application/json`),this.shouldStripNulls){let e=this.headers.get(`Accept`);e===`application/vnd.pgrst.object+json`?this.headers.set(`Accept`,`application/vnd.pgrst.object+json;nulls=stripped`):(!e||e===`application/json`)&&this.headers.set(`Accept`,`application/vnd.pgrst.array+json;nulls=stripped`)}let r=this.fetch,i=(async()=>{let e=0;for(;;){let t={};n.headers.forEach((e,n)=>{t[n]=e}),e>0&&(t[`X-Retry-Count`]=String(e));let i;try{i=await r(n.url.toString(),{method:n.method,headers:t,body:JSON.stringify(n.body,(e,t)=>typeof t==`bigint`?t.toString():t),signal:n.signal})}catch(t){if(t?.name===`AbortError`||t?.code===`ABORT_ERR`||!f.includes(n.method))throw t;if(n.retryEnabled&&e<3){let t=u(e);e++,await m(t,n.signal);continue}throw t}if(h(n.method,i.status,e,n.retryEnabled)){let t=i.headers?.get(`Retry-After`)??null,r=t===null?u(e):Math.max(0,parseInt(t,10)||0)*1e3;await i.text(),e++,await m(r,n.signal);continue}return await n.processResponse(i)}})();return this.shouldThrowOnError||(i=i.catch(e=>{let t=``,n=``,r=``,i=e?.cause;if(i){let n=i?.message??``,r=i?.code??``;t=`${e?.name??`FetchError`}: ${e?.message}`,t+=`\n\nCaused by: ${i?.name??`Error`}: ${n}`,r&&(t+=` (${r})`),i?.stack&&(t+=`\n${i.stack}`)}else t=e?.stack??``;let a=this.url.toString().length;return e?.name===`AbortError`||e?.code===`ABORT_ERR`?(r=``,n=`Request was aborted (timeout or manual cancellation)`,a>this.urlLengthLimit&&(n+=`. Note: Your request URL is ${a} characters, which may exceed server limits. If selecting many fields, consider using views. If filtering with large arrays (e.g., .in('id', [many IDs])), consider using an RPC function to pass values server-side.`)):(i?.name===`HeadersOverflowError`||i?.code===`UND_ERR_HEADERS_OVERFLOW`)&&(r=``,n=`HTTP headers exceeded server limits (typically 16KB)`,a>this.urlLengthLimit&&(n+=`. Your request URL is ${a} characters. If selecting many fields, consider using views. If filtering with large arrays (e.g., .in('id', [200+ IDs])), consider using an RPC function instead.`)),{success:!1,error:{message:`${e?.name??`FetchError`}: ${e?.message}`,details:t,hint:n,code:r},data:null,count:null,status:0,statusText:``}})),i.then(e,t)}async processResponse(e){var t=this;let n=null,r=null,i=null,a=e.status,o=e.statusText;if(e.ok){if(t.method!==`HEAD`){let i=await e.text();if(i!==``)if(t.headers.get(`Accept`)===`text/csv`)r=i;else if(t.headers.get(`Accept`)&&t.headers.get(`Accept`)?.includes(`application/vnd.pgrst.plan+text`))r=i;else try{r=JSON.parse(i)}catch{if(n={message:i},r=null,t.shouldThrowOnError)throw new p({message:i,details:``,hint:``,code:``})}}let s=t.headers.get(`Prefer`)?.match(/count=(exact|planned|estimated)/),c=e.headers.get(`content-range`)?.split(`/`);s&&c&&c.length>1&&(i=parseInt(c[1])),t.isMaybeSingle&&Array.isArray(r)&&(r.length>1?(n={code:`PGRST116`,details:`Results contain ${r.length} rows, application/vnd.pgrst.object+json requires 1 row`,hint:null,message:`JSON object requested, multiple (or no) rows returned`},r=null,i=null,a=406,o=`Not Acceptable`):r=r.length===1?r[0]:null)}else{let i=await e.text();try{n=JSON.parse(i),Array.isArray(n)&&e.status===404&&(r=[],n=null,a=200,o=`OK`)}catch{e.status===404&&i===``?(a=204,o=`No Content`):n={message:i}}if(n&&t.shouldThrowOnError)throw new p(n)}return{success:n===null,error:n,data:r,count:i,status:a,statusText:o}}returns(){return this}overrideTypes(){return this}},ee=class extends g{throwOnError(){return super.throwOnError()}select(e){let t=!1,n=(e??`*`).split(``).map(e=>/\s/.test(e)&&!t?``:(e===`"`&&(t=!t),e)).join(``);return this.url.searchParams.set(`select`,n),this.headers.append(`Prefer`,`return=representation`),this}order(e,{ascending:t=!0,nullsFirst:n,foreignTable:r,referencedTable:i=r}={}){let a=i?`${i}.order`:`order`,o=this.url.searchParams.get(a);return this.url.searchParams.set(a,`${o?`${o},`:``}${e}.${t?`asc`:`desc`}${n===void 0?``:n?`.nullsfirst`:`.nullslast`}`),this}limit(e,{foreignTable:t,referencedTable:n=t}={}){let r=n===void 0?`limit`:`${n}.limit`;return this.url.searchParams.set(r,`${e}`),this}range(e,t,{foreignTable:n,referencedTable:r=n}={}){let i=r===void 0?`offset`:`${r}.offset`,a=r===void 0?`limit`:`${r}.limit`;return this.url.searchParams.set(i,`${e}`),this.url.searchParams.set(a,`${t-e+1}`),this}abortSignal(e){return this.signal=e,this}single(){return this.headers.set(`Accept`,`application/vnd.pgrst.object+json`),this}maybeSingle(){return this.isMaybeSingle=!0,this}csv(){return this.headers.set(`Accept`,`text/csv`),this}geojson(){return this.headers.set(`Accept`,`application/geo+json`),this}explain({analyze:e=!1,verbose:t=!1,settings:n=!1,buffers:r=!1,wal:i=!1,format:a=`text`}={}){let o=[e?`analyze`:null,t?`verbose`:null,n?`settings`:null,r?`buffers`:null,i?`wal`:null].filter(Boolean).join(`|`),s=this.headers.get(`Accept`)??`application/json`;return this.headers.set(`Accept`,`application/vnd.pgrst.plan+${a}; for="${s}"; options=${o};`),this}rollback(){return this.headers.append(`Prefer`,`tx=rollback`),this}returns(){return this}maxAffected(e){return this.headers.append(`Prefer`,`handling=strict`),this.headers.append(`Prefer`,`max-affected=${e}`),this}};let te=RegExp(`[,()]`);var _=class extends ee{throwOnError(){return super.throwOnError()}eq(e,t){return this.url.searchParams.append(e,`eq.${t}`),this}neq(e,t){return this.url.searchParams.append(e,`neq.${t}`),this}gt(e,t){return this.url.searchParams.append(e,`gt.${t}`),this}gte(e,t){return this.url.searchParams.append(e,`gte.${t}`),this}lt(e,t){return this.url.searchParams.append(e,`lt.${t}`),this}lte(e,t){return this.url.searchParams.append(e,`lte.${t}`),this}like(e,t){return this.url.searchParams.append(e,`like.${t}`),this}likeAllOf(e,t){return this.url.searchParams.append(e,`like(all).{${t.join(`,`)}}`),this}likeAnyOf(e,t){return this.url.searchParams.append(e,`like(any).{${t.join(`,`)}}`),this}ilike(e,t){return this.url.searchParams.append(e,`ilike.${t}`),this}ilikeAllOf(e,t){return this.url.searchParams.append(e,`ilike(all).{${t.join(`,`)}}`),this}ilikeAnyOf(e,t){return this.url.searchParams.append(e,`ilike(any).{${t.join(`,`)}}`),this}regexMatch(e,t){return this.url.searchParams.append(e,`match.${t}`),this}regexIMatch(e,t){return this.url.searchParams.append(e,`imatch.${t}`),this}is(e,t){return this.url.searchParams.append(e,`is.${t}`),this}isDistinct(e,t){return this.url.searchParams.append(e,`isdistinct.${t}`),this}in(e,t){let n=Array.from(new Set(t)).map(e=>typeof e==`string`&&te.test(e)?`"${e}"`:`${e}`).join(`,`);return this.url.searchParams.append(e,`in.(${n})`),this}notIn(e,t){let n=Array.from(new Set(t)).map(e=>typeof e==`string`&&te.test(e)?`"${e}"`:`${e}`).join(`,`);return this.url.searchParams.append(e,`not.in.(${n})`),this}contains(e,t){return typeof t==`string`?this.url.searchParams.append(e,`cs.${t}`):Array.isArray(t)?this.url.searchParams.append(e,`cs.{${t.join(`,`)}}`):this.url.searchParams.append(e,`cs.${JSON.stringify(t)}`),this}containedBy(e,t){return typeof t==`string`?this.url.searchParams.append(e,`cd.${t}`):Array.isArray(t)?this.url.searchParams.append(e,`cd.{${t.join(`,`)}}`):this.url.searchParams.append(e,`cd.${JSON.stringify(t)}`),this}rangeGt(e,t){return this.url.searchParams.append(e,`sr.${t}`),this}rangeGte(e,t){return this.url.searchParams.append(e,`nxl.${t}`),this}rangeLt(e,t){return this.url.searchParams.append(e,`sl.${t}`),this}rangeLte(e,t){return this.url.searchParams.append(e,`nxr.${t}`),this}rangeAdjacent(e,t){return this.url.searchParams.append(e,`adj.${t}`),this}overlaps(e,t){return typeof t==`string`?this.url.searchParams.append(e,`ov.${t}`):this.url.searchParams.append(e,`ov.{${t.join(`,`)}}`),this}textSearch(e,t,{config:n,type:r}={}){let i=``;r===`plain`?i=`pl`:r===`phrase`?i=`ph`:r===`websearch`&&(i=`w`);let a=n===void 0?``:`(${n})`;return this.url.searchParams.append(e,`${i}fts${a}.${t}`),this}match(e){return Object.entries(e).filter(([e,t])=>t!==void 0).forEach(([e,t])=>{this.url.searchParams.append(e,`eq.${t}`)}),this}not(e,t,n){return this.url.searchParams.append(e,`not.${t}.${n}`),this}or(e,{foreignTable:t,referencedTable:n=t}={}){let r=n?`${n}.or`:`or`;return this.url.searchParams.append(r,`(${e})`),this}filter(e,t,n){return this.url.searchParams.append(e,`${t}.${n}`),this}},ne=class{constructor(e,{headers:t={},schema:n,fetch:r,urlLengthLimit:i=8e3,retry:a}){this.url=e,this.headers=new Headers(t),this.schema=n,this.fetch=r,this.urlLengthLimit=i,this.retry=a}cloneRequestState(){return{url:new URL(this.url.toString()),headers:new Headers(this.headers)}}select(e,t){let{head:n=!1,count:r}=t??{},i=n?`HEAD`:`GET`,a=!1,o=(e??`*`).split(``).map(e=>/\s/.test(e)&&!a?``:(e===`"`&&(a=!a),e)).join(``),{url:s,headers:c}=this.cloneRequestState();return s.searchParams.set(`select`,o),r&&c.append(`Prefer`,`count=${r}`),new _({method:i,url:s,headers:c,schema:this.schema,fetch:this.fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}insert(e,{count:t,defaultToNull:n=!0}={}){let{url:r,headers:i}=this.cloneRequestState();if(t&&i.append(`Prefer`,`count=${t}`),n||i.append(`Prefer`,`missing=default`),Array.isArray(e)){let t=e.reduce((e,t)=>e.concat(Object.keys(t)),[]);if(t.length>0){let e=[...new Set(t)].map(e=>`"${e}"`);r.searchParams.set(`columns`,e.join(`,`))}}return new _({method:`POST`,url:r,headers:i,schema:this.schema,body:e,fetch:this.fetch??fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}upsert(e,{onConflict:t,ignoreDuplicates:n=!1,count:r,defaultToNull:i=!0}={}){let{url:a,headers:o}=this.cloneRequestState();if(o.append(`Prefer`,`resolution=${n?`ignore`:`merge`}-duplicates`),t!==void 0&&a.searchParams.set(`on_conflict`,t),r&&o.append(`Prefer`,`count=${r}`),i||o.append(`Prefer`,`missing=default`),Array.isArray(e)){let t=e.reduce((e,t)=>e.concat(Object.keys(t)),[]);if(t.length>0){let e=[...new Set(t)].map(e=>`"${e}"`);a.searchParams.set(`columns`,e.join(`,`))}}return new _({method:`POST`,url:a,headers:o,schema:this.schema,body:e,fetch:this.fetch??fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}update(e,{count:t}={}){let{url:n,headers:r}=this.cloneRequestState();return t&&r.append(`Prefer`,`count=${t}`),new _({method:`PATCH`,url:n,headers:r,schema:this.schema,body:e,fetch:this.fetch??fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}delete({count:e}={}){let{url:t,headers:n}=this.cloneRequestState();return e&&n.append(`Prefer`,`count=${e}`),new _({method:`DELETE`,url:t,headers:n,schema:this.schema,fetch:this.fetch??fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}};function v(e){"@babel/helpers - typeof";return v=typeof Symbol==`function`&&typeof Symbol.iterator==`symbol`?function(e){return typeof e}:function(e){return e&&typeof Symbol==`function`&&e.constructor===Symbol&&e!==Symbol.prototype?`symbol`:typeof e},v(e)}function re(e,t){if(v(e)!=`object`||!e)return e;var n=e[Symbol.toPrimitive];if(n!==void 0){var r=n.call(e,t||`default`);if(v(r)!=`object`)return r;throw TypeError(`@@toPrimitive must return a primitive value.`)}return(t===`string`?String:Number)(e)}function ie(e){var t=re(e,`string`);return v(t)==`symbol`?t:t+``}function ae(e,t,n){return(t=ie(t))in e?Object.defineProperty(e,t,{value:n,enumerable:!0,configurable:!0,writable:!0}):e[t]=n,e}function oe(e,t){var n=Object.keys(e);if(Object.getOwnPropertySymbols){var r=Object.getOwnPropertySymbols(e);t&&(r=r.filter(function(t){return Object.getOwnPropertyDescriptor(e,t).enumerable})),n.push.apply(n,r)}return n}function se(e){for(var t=1;t<arguments.length;t++){var n=arguments[t]==null?{}:arguments[t];t%2?oe(Object(n),!0).forEach(function(t){ae(e,t,n[t])}):Object.getOwnPropertyDescriptors?Object.defineProperties(e,Object.getOwnPropertyDescriptors(n)):oe(Object(n)).forEach(function(t){Object.defineProperty(e,t,Object.getOwnPropertyDescriptor(n,t))})}return e}var ce=class e{constructor(e,{headers:t={},schema:n,fetch:r,timeout:i,urlLengthLimit:a=8e3,retry:o}={}){this.url=e,this.headers=new Headers(t),this.schemaName=n,this.urlLengthLimit=a;let s=r??globalThis.fetch;i!==void 0&&i>0?this.fetch=(e,t)=>{let n=new AbortController,r=setTimeout(()=>n.abort(),i),a=t?.signal;if(a){if(a.aborted)return clearTimeout(r),s(e,t);let i=()=>{clearTimeout(r),n.abort()};return a.addEventListener(`abort`,i,{once:!0}),s(e,se(se({},t),{},{signal:n.signal})).finally(()=>{clearTimeout(r),a.removeEventListener(`abort`,i)})}return s(e,se(se({},t),{},{signal:n.signal})).finally(()=>clearTimeout(r))}:this.fetch=s,this.retry=o}from(e){if(!e||typeof e!=`string`||e.trim()===``)throw Error(`Invalid relation name: relation must be a non-empty string.`);return new ne(new URL(`${this.url}/${e}`),{headers:new Headers(this.headers),schema:this.schemaName,fetch:this.fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}schema(t){return new e(this.url,{headers:this.headers,schema:t,fetch:this.fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}rpc(e,t={},{head:n=!1,get:r=!1,count:i}={}){let a,o=new URL(`${this.url}/rpc/${e}`),s,c=e=>typeof e==`object`&&!!e&&(!Array.isArray(e)||e.some(c)),l=n&&Object.values(t).some(c);l?(a=`POST`,s=t):n||r?(a=n?`HEAD`:`GET`,Object.entries(t).filter(([e,t])=>t!==void 0).map(([e,t])=>[e,Array.isArray(t)?`{${t.join(`,`)}}`:`${t}`]).forEach(([e,t])=>{o.searchParams.append(e,t)})):(a=`POST`,s=t);let u=new Headers(this.headers);return l?u.set(`Prefer`,i?`count=${i},return=minimal`:`return=minimal`):i&&u.set(`Prefer`,`count=${i}`),new _({method:a,url:o,headers:u,schema:this.schemaName,body:s,fetch:this.fetch??fetch,urlLengthLimit:this.urlLengthLimit,retry:this.retry})}},le=class{constructor(){}static detectEnvironment(){if(typeof WebSocket<`u`)return{type:`native`,wsConstructor:WebSocket};let e=globalThis;if(typeof globalThis<`u`&&e.WebSocket!==void 0)return{type:`native`,wsConstructor:e.WebSocket};let t=typeof global<`u`?global:void 0;if(t&&t.WebSocket!==void 0)return{type:`native`,wsConstructor:t.WebSocket};if(typeof globalThis<`u`&&e.WebSocketPair!==void 0&&globalThis.WebSocket===void 0)return{type:`cloudflare`,error:`Cloudflare Workers detected. WebSocket clients are not supported in Cloudflare Workers.`,workaround:`Use Cloudflare Workers WebSocket API for server-side WebSocket handling, or deploy to a different runtime.`};if(typeof globalThis<`u`&&e.EdgeRuntime||typeof navigator<`u`&&navigator.userAgent?.includes(`Vercel-Edge`))return{type:`unsupported`,error:`Edge runtime detected (Vercel Edge/Netlify Edge). WebSockets are not supported in edge functions.`,workaround:`Use serverless functions or a different deployment target for WebSocket functionality.`};let n=globalThis.process;if(n){let e=n.versions;if(e&&e.node)return{type:`unsupported`,error:`Node.js detected but native WebSocket not found.`,workaround:`Ensure you are running Node.js 22+ or provide a WebSocket implementation via the transport option.`}}return{type:`unsupported`,error:`Unknown JavaScript runtime without WebSocket support.`,workaround:`Ensure you're running in a supported environment (browser, Node.js, Deno) or provide a custom WebSocket implementation.`}}static getWebSocketConstructor(){let e=this.detectEnvironment();if(e.wsConstructor)return e.wsConstructor;let t=e.error||`WebSocket not supported in this environment.`;throw e.workaround&&(t+=`\n\nSuggested solution: ${e.workaround}`),Error(t)}static isWebSocketSupported(){try{return this.detectEnvironment().type===`native`}catch{return!1}}};let y={closed:`closed`,errored:`errored`,joined:`joined`,joining:`joining`,leaving:`leaving`},ue={close:`phx_close`,error:`phx_error`,join:`phx_join`,reply:`phx_reply`,leave:`phx_leave`,access_token:`access_token`},de={connecting:`connecting`,open:`open`,closing:`closing`,closed:`closed`};var fe=class{constructor(e){this.HEADER_LENGTH=1,this.USER_BROADCAST_PUSH_META_LENGTH=6,this.KINDS={userBroadcastPush:3,userBroadcast:4},this.BINARY_ENCODING=0,this.JSON_ENCODING=1,this.BROADCAST_EVENT=`broadcast`,this.allowedMetadataKeys=[],this.allowedMetadataKeys=e??[]}encode(e,t){if(e.event===this.BROADCAST_EVENT&&!(e.payload instanceof ArrayBuffer)&&typeof e.payload.event==`string`)return t(this._binaryEncodeUserBroadcastPush(e));let n=[e.join_ref,e.ref,e.topic,e.event,e.payload];return t(JSON.stringify(n))}_binaryEncodeUserBroadcastPush(e){return this._isArrayBuffer(e.payload?.payload)?this._encodeBinaryUserBroadcastPush(e):this._encodeJsonUserBroadcastPush(e)}_encodeBinaryUserBroadcastPush(e){let t=e.payload?.payload??new ArrayBuffer(0);return this._encodeUserBroadcastPush(e,this.BINARY_ENCODING,t)}_encodeJsonUserBroadcastPush(e){let t=e.payload?.payload??{},n=new TextEncoder().encode(JSON.stringify(t)).buffer;return this._encodeUserBroadcastPush(e,this.JSON_ENCODING,n)}_encodeUserBroadcastPush(e,t,n){let r=new TextEncoder,i=r.encode(e.topic),a=r.encode(e.ref??``),o=r.encode(e.join_ref??``),s=r.encode(e.payload.event),c=this.allowedMetadataKeys?this._pick(e.payload,this.allowedMetadataKeys):{},l=r.encode(Object.keys(c).length===0?``:JSON.stringify(c));if(o.length>255)throw Error(`joinRef length ${o.length} exceeds maximum of 255`);if(a.length>255)throw Error(`ref length ${a.length} exceeds maximum of 255`);if(i.length>255)throw Error(`topic length ${i.length} exceeds maximum of 255`);if(s.length>255)throw Error(`userEvent length ${s.length} exceeds maximum of 255`);if(l.length>255)throw Error(`metadata length ${l.length} exceeds maximum of 255`);let u=this.USER_BROADCAST_PUSH_META_LENGTH+o.length+a.length+i.length+s.length+l.length,d=new ArrayBuffer(this.HEADER_LENGTH+u),f=new DataView(d),p=new Uint8Array(d),m=0;f.setUint8(m++,this.KINDS.userBroadcastPush),f.setUint8(m++,o.length),f.setUint8(m++,a.length),f.setUint8(m++,i.length),f.setUint8(m++,s.length),f.setUint8(m++,l.length),f.setUint8(m++,t),p.set(o,m),m+=o.length,p.set(a,m),m+=a.length,p.set(i,m),m+=i.length,p.set(s,m),m+=s.length,p.set(l,m),m+=l.length;var h=new Uint8Array(d.byteLength+n.byteLength);return h.set(new Uint8Array(d),0),h.set(new Uint8Array(n),d.byteLength),h.buffer}decode(e,t){if(this._isArrayBuffer(e))return t(this._binaryDecode(e));if(typeof e==`string`){let[n,r,i,a,o]=JSON.parse(e);return t({join_ref:n,ref:r,topic:i,event:a,payload:o})}return t({})}_binaryDecode(e){let t=new DataView(e),n=t.getUint8(0),r=new TextDecoder;switch(n){case this.KINDS.userBroadcast:return this._decodeUserBroadcast(e,t,r)}}_decodeUserBroadcast(e,t,n){let r=t.getUint8(1),i=t.getUint8(2),a=t.getUint8(3),o=t.getUint8(4),s=this.HEADER_LENGTH+4,c=n.decode(e.slice(s,s+r));s+=r;let l=n.decode(e.slice(s,s+i));s+=i;let u=n.decode(e.slice(s,s+a));s+=a;let d=e.slice(s,e.byteLength),f=o===this.JSON_ENCODING?JSON.parse(n.decode(d)):d,p={type:this.BROADCAST_EVENT,event:l,payload:f};return a>0&&(p.meta=JSON.parse(u)),{join_ref:null,ref:null,topic:c,event:this.BROADCAST_EVENT,payload:p}}_isArrayBuffer(e){return e instanceof ArrayBuffer||e?.constructor?.name===`ArrayBuffer`}_pick(e,t){return!e||typeof e!=`object`?{}:Object.fromEntries(Object.entries(e).filter(([e])=>t.includes(e)))}},b;(function(e){e.abstime=`abstime`,e.bool=`bool`,e.date=`date`,e.daterange=`daterange`,e.float4=`float4`,e.float8=`float8`,e.int2=`int2`,e.int4=`int4`,e.int4range=`int4range`,e.int8=`int8`,e.int8range=`int8range`,e.json=`json`,e.jsonb=`jsonb`,e.money=`money`,e.numeric=`numeric`,e.oid=`oid`,e.reltime=`reltime`,e.text=`text`,e.time=`time`,e.timestamp=`timestamp`,e.timestamptz=`timestamptz`,e.timetz=`timetz`,e.tsrange=`tsrange`,e.tstzrange=`tstzrange`})(b||={});let pe=(e,t,n={})=>{let r=n.skipTypes??[];return t?Object.keys(t).reduce((n,i)=>(n[i]=me(i,e,t,r),n),{}):{}},me=(e,t,n,r)=>{let i=t.find(t=>t.name===e)?.type,a=n[e];return i&&!r.includes(i)?he(i,a):ge(a)},he=(e,t)=>{if(e.charAt(0)===`_`)return be(t,e.slice(1,e.length));switch(e){case b.bool:return _e(t);case b.float4:case b.float8:case b.int2:case b.int4:case b.int8:case b.numeric:case b.oid:return ve(t);case b.json:case b.jsonb:return ye(t);case b.timestamp:return xe(t);case b.abstime:case b.date:case b.daterange:case b.int4range:case b.int8range:case b.money:case b.reltime:case b.text:case b.time:case b.timestamptz:case b.timetz:case b.tsrange:case b.tstzrange:return ge(t);default:return ge(t)}},ge=e=>e,_e=e=>{switch(e){case`t`:return!0;case`f`:return!1;default:return e}},ve=e=>{if(typeof e==`string`){let t=parseFloat(e);if(!Number.isNaN(t))return t}return e},ye=e=>{if(typeof e==`string`)try{return JSON.parse(e)}catch{return e}return e},be=(e,t)=>{if(typeof e!=`string`)return e;let n=e.length-1,r=e[n];if(e[0]===`{`&&r===`}`){let r,i=e.slice(1,n);try{r=JSON.parse(`[`+i+`]`)}catch{r=i?i.split(`,`):[]}return r.map(e=>he(t,e))}return e},xe=e=>typeof e==`string`?e.replace(` `,`T`):e,Se=e=>{let t=new URL(e);return t.protocol=t.protocol.replace(/^ws/i,`http`),t.pathname=t.pathname.replace(/\/+$/,``).replace(/\/socket\/websocket$/i,``).replace(/\/socket$/i,``).replace(/\/websocket$/i,``),t.pathname===``||t.pathname===`/`?t.pathname=`/api/broadcast`:t.pathname+=`/api/broadcast`,t.href};var Ce=e=>typeof e==`function`?e:function(){return e},we=typeof self<`u`?self:null,x=typeof window<`u`?window:null,S=we||x||globalThis,Te=`2.0.0`,Ee=1e4,De=1e3,Oe=100,C={connecting:0,open:1,closing:2,closed:3},w={closed:`closed`,errored:`errored`,joined:`joined`,joining:`joining`,leaving:`leaving`},T={close:`phx_close`,error:`phx_error`,join:`phx_join`,reply:`phx_reply`,leave:`phx_leave`},ke={longpoll:`longpoll`,websocket:`websocket`},Ae={complete:4},je=`base64url.bearer.phx.`,Me=class{constructor(e,t,n,r){this.channel=e,this.event=t,this.payload=n||function(){return{}},this.receivedResp=null,this.timeout=r,this.timeoutTimer=null,this.recHooks=[],this.sent=!1,this.ref=void 0}resend(e){this.timeout=e,this.reset(),this.send()}send(){this.hasReceived(`timeout`)||(this.startTimeout(),this.sent=!0,this.channel.socket.push({topic:this.channel.topic,event:this.event,payload:this.payload(),ref:this.ref,join_ref:this.channel.joinRef()}))}receive(e,t){return this.hasReceived(e)&&t(this.receivedResp.response),this.recHooks.push({status:e,callback:t}),this}reset(){this.cancelRefEvent(),this.ref=null,this.refEvent=null,this.receivedResp=null,this.sent=!1}destroy(){this.cancelRefEvent(),this.cancelTimeout()}matchReceive({status:e,response:t,_ref:n}){this.recHooks.filter(t=>t.status===e).forEach(e=>e.callback(t))}cancelRefEvent(){this.refEvent&&this.channel.off(this.refEvent)}cancelTimeout(){clearTimeout(this.timeoutTimer),this.timeoutTimer=null}startTimeout(){this.timeoutTimer&&this.cancelTimeout(),this.ref=this.channel.socket.makeRef(),this.refEvent=this.channel.replyEventName(this.ref),this.channel.on(this.refEvent,e=>{this.cancelRefEvent(),this.cancelTimeout(),this.receivedResp=e,this.matchReceive(e)}),this.timeoutTimer=setTimeout(()=>{this.trigger(`timeout`,{})},this.timeout)}hasReceived(e){return this.receivedResp&&this.receivedResp.status===e}trigger(e,t){this.channel.trigger(this.refEvent,{status:e,response:t})}},Ne=class{constructor(e,t){this.callback=e,this.timerCalc=t,this.timer=void 0,this.tries=0}reset(){this.tries=0,clearTimeout(this.timer)}scheduleTimeout(){clearTimeout(this.timer),this.timer=setTimeout(()=>{this.tries+=1,this.callback()},this.timerCalc(this.tries+1))}},Pe=class{constructor(e,t,n){this.state=w.closed,this.topic=e,this.params=Ce(t||{}),this.socket=n,this.bindings=[],this.bindingRef=0,this.timeout=this.socket.timeout,this.joinedOnce=!1,this.joinPush=new Me(this,T.join,this.params,this.timeout),this.pushBuffer=[],this.stateChangeRefs=[],this.rejoinTimer=new Ne(()=>{this.socket.isConnected()&&this.rejoin()},this.socket.rejoinAfterMs),this.stateChangeRefs.push(this.socket.onError(()=>this.rejoinTimer.reset())),this.stateChangeRefs.push(this.socket.onOpen(()=>{this.rejoinTimer.reset(),this.isErrored()&&this.rejoin()})),this.joinPush.receive(`ok`,()=>{this.state=w.joined,this.rejoinTimer.reset(),this.pushBuffer.forEach(e=>e.send()),this.pushBuffer=[]}),this.joinPush.receive(`error`,e=>{this.state=w.errored,this.socket.hasLogger()&&this.socket.log(`channel`,`error ${this.topic}`,e),this.socket.isConnected()&&this.rejoinTimer.scheduleTimeout()}),this.onClose(()=>{this.rejoinTimer.reset(),this.socket.hasLogger()&&this.socket.log(`channel`,`close ${this.topic}`),this.state=w.closed,this.socket.remove(this)}),this.onError(e=>{this.socket.hasLogger()&&this.socket.log(`channel`,`error ${this.topic}`,e),this.isJoining()&&this.joinPush.reset(),this.state=w.errored,this.socket.isConnected()&&this.rejoinTimer.scheduleTimeout()}),this.joinPush.receive(`timeout`,()=>{this.socket.hasLogger()&&this.socket.log(`channel`,`timeout ${this.topic}`,this.joinPush.timeout),new Me(this,T.leave,Ce({}),this.timeout).send(),this.state=w.errored,this.joinPush.reset(),this.socket.isConnected()&&this.rejoinTimer.scheduleTimeout()}),this.on(T.reply,(e,t)=>{this.trigger(this.replyEventName(t),e)})}join(e=this.timeout){if(this.joinedOnce)throw Error(`tried to join multiple times. 'join' can only be called a single time per channel instance`);return this.timeout=e,this.joinedOnce=!0,this.rejoin(),this.joinPush}teardown(){this.pushBuffer.forEach(e=>e.destroy()),this.pushBuffer=[],this.rejoinTimer.reset(),this.joinPush.destroy(),this.state=w.closed,this.bindings=[]}onClose(e){this.on(T.close,e)}onError(e){return this.on(T.error,t=>e(t))}on(e,t){let n=this.bindingRef++;return this.bindings.push({event:e,ref:n,callback:t}),n}off(e,t){this.bindings=this.bindings.filter(n=>!(n.event===e&&(t===void 0||t===n.ref)))}canPush(){return this.socket.isConnected()&&this.isJoined()}push(e,t,n=this.timeout){if(t||={},!this.joinedOnce)throw Error(`tried to push '${e}' to '${this.topic}' before joining. Use channel.join() before pushing events`);let r=new Me(this,e,function(){return t},n);return this.canPush()?r.send():(r.startTimeout(),this.pushBuffer.push(r)),r}leave(e=this.timeout){this.rejoinTimer.reset(),this.joinPush.cancelTimeout(),this.state=w.leaving;let t=()=>{this.socket.hasLogger()&&this.socket.log(`channel`,`leave ${this.topic}`),this.trigger(T.close,`leave`)},n=new Me(this,T.leave,Ce({}),e);return n.receive(`ok`,()=>t()).receive(`timeout`,()=>t()),n.send(),this.canPush()||n.trigger(`ok`,{}),n}onMessage(e,t,n){return t}filterBindings(e,t,n){return!0}isMember(e,t,n,r){return this.topic===e?r&&r!==this.joinRef()?(this.socket.hasLogger()&&this.socket.log(`channel`,`dropping outdated message`,{topic:e,event:t,payload:n,joinRef:r}),!1):!0:!1}joinRef(){return this.joinPush.ref}rejoin(e=this.timeout){this.isLeaving()||(this.socket.leaveOpenTopic(this.topic),this.state=w.joining,this.joinPush.resend(e))}trigger(e,t,n,r){let i=this.onMessage(e,t,n,r);if(t&&!i)throw Error(`channel onMessage callbacks must return the payload, modified or unmodified`);let a=this.bindings.filter(r=>r.event===e&&this.filterBindings(r,t,n));for(let e=0;e<a.length;e++)a[e].callback(i,n,r||this.joinRef())}replyEventName(e){return`chan_reply_${e}`}isClosed(){return this.state===w.closed}isErrored(){return this.state===w.errored}isJoined(){return this.state===w.joined}isJoining(){return this.state===w.joining}isLeaving(){return this.state===w.leaving}},Fe=class{static request(e,t,n,r,i,a,o){if(S.XDomainRequest){let n=new S.XDomainRequest;return this.xdomainRequest(n,e,t,r,i,a,o)}else if(S.XMLHttpRequest){let s=new S.XMLHttpRequest;return this.xhrRequest(s,e,t,n,r,i,a,o)}else if(S.fetch&&S.AbortController)return this.fetchRequest(e,t,n,r,i,a,o);else throw Error(`No suitable XMLHttpRequest implementation found`)}static fetchRequest(e,t,n,r,i,a,o){let s={method:e,headers:n,body:r},c=null;return i&&(c=new AbortController,setTimeout(()=>c.abort(),i),s.signal=c.signal),S.fetch(t,s).then(e=>e.text()).then(e=>this.parseJSON(e)).then(e=>o&&o(e)).catch(e=>{e.name===`AbortError`&&a?a():o&&o(null)}),c}static xdomainRequest(e,t,n,r,i,a,o){return e.timeout=i,e.open(t,n),e.onload=()=>{let t=this.parseJSON(e.responseText);o&&o(t)},a&&(e.ontimeout=a),e.onprogress=()=>{},e.send(r),e}static xhrRequest(e,t,n,r,i,a,o,s){e.open(t,n,!0),e.timeout=a;for(let[t,n]of Object.entries(r))e.setRequestHeader(t,n);return e.onerror=()=>s&&s(null),e.onreadystatechange=()=>{e.readyState===Ae.complete&&s&&s(this.parseJSON(e.responseText))},o&&(e.ontimeout=o),e.send(i),e}static parseJSON(e){if(!e||e===``)return null;try{return JSON.parse(e)}catch{return console&&console.log(`failed to parse JSON response`,e),null}}static serialize(e,t){let n=[];for(var r in e){if(!Object.prototype.hasOwnProperty.call(e,r))continue;let i=t?`${t}[${r}]`:r,a=e[r];typeof a==`object`?n.push(this.serialize(a,i)):n.push(encodeURIComponent(i)+`=`+encodeURIComponent(a))}return n.join(`&`)}static appendParams(e,t){return Object.keys(t).length===0?e:`${e}${e.match(/\?/)?`&`:`?`}${this.serialize(t)}`}},Ie=e=>{let t=``,n=new Uint8Array(e),r=n.byteLength;for(let e=0;e<r;e++)t+=String.fromCharCode(n[e]);return btoa(t)},Le=class{constructor(e,t){t&&t.length===2&&t[1].startsWith(je)&&(this.authToken=atob(t[1].slice(je.length))),this.endPoint=null,this.token=null,this.skipHeartbeat=!0,this.reqs=new Set,this.awaitingBatchAck=!1,this.currentBatch=null,this.currentBatchTimer=null,this.batchBuffer=[],this.onopen=function(){},this.onerror=function(){},this.onmessage=function(){},this.onclose=function(){},this.pollEndpoint=this.normalizeEndpoint(e),this.readyState=C.connecting,setTimeout(()=>this.poll(),0)}normalizeEndpoint(e){return e.replace(`ws://`,`http://`).replace(`wss://`,`https://`).replace(RegExp(`(.*)/`+ke.websocket),`$1/`+ke.longpoll)}endpointURL(){return Fe.appendParams(this.pollEndpoint,{token:this.token})}closeAndRetry(e,t,n){this.close(e,t,n),this.readyState=C.connecting}ontimeout(){this.onerror(`timeout`),this.closeAndRetry(1005,`timeout`,!1)}isActive(){return this.readyState===C.open||this.readyState===C.connecting}poll(){let e={Accept:`application/json`};this.authToken&&(e[`X-Phoenix-AuthToken`]=this.authToken),this.ajax(`GET`,e,null,()=>this.ontimeout(),e=>{if(e){var{status:t,token:n,messages:r}=e;if(t===410&&this.token!==null){this.onerror(410),this.closeAndRetry(3410,`session_gone`,!1);return}this.token=n}else t=0;switch(t){case 200:r.forEach(e=>{setTimeout(()=>this.onmessage({data:e}),0)}),this.poll();break;case 204:this.poll();break;case 410:this.readyState=C.open,this.onopen({}),this.poll();break;case 403:this.onerror(403),this.close(1008,`forbidden`,!1);break;case 0:case 500:this.onerror(500),this.closeAndRetry(1011,`internal server error`,500);break;default:throw Error(`unhandled poll status ${t}`)}})}send(e){typeof e!=`string`&&(e=Ie(e)),this.currentBatch?this.currentBatch.push(e):this.awaitingBatchAck?this.batchBuffer.push(e):(this.currentBatch=[e],this.currentBatchTimer=setTimeout(()=>{this.batchSend(this.currentBatch),this.currentBatch=null},0))}batchSend(e,t=0){this.awaitingBatchAck=!0;let n=t+Oe,r=e.slice(t,n);this.ajax(`POST`,{"Content-Type":`application/x-ndjson`},r.join(`
@@ -199,7 +206,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-110";
+const VERSION = "v2026.08.13-111";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6907,12 +6914,13 @@ async function verFactura(id){
    comprobantes cancela y con qué se paga. Se consulta desde la cuenta corriente
    y desde el listado, igual que una factura. */
 async function verPagoCompra(id){
-  const [p, im] = await Promise.all([
+  const [p, im, me] = await Promise.all([
     sb.from("pagos_compra").select("*").eq("id",id).single(),
-    sb.from("pago_imputaciones").select("*").eq("pago_id",id)
+    sb.from("pago_imputaciones").select("*").eq("pago_id",id),
+    sb.from("pago_medios").select("*").eq("pago_id",id).order("id")
   ]);
   if (p.error) return alert(p.error.message);
-  const x = p.data, imps = im.data||[];
+  const x = p.data, imps = im.data||[], medios = me.data||[];
   if (!PROVS.length) await cargarProveedores();
   if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
   let facs = [];
@@ -6920,6 +6928,9 @@ async function verPagoCompra(id){
     const f = await sb.from("facturas_compra").select("*").in("id", imps.map(y=>y.factura_id));
     facs = f.data||[];
   }
+  let chqs = [];
+  const chIds = medios.map(y=>y.cheque_id).filter(Boolean);
+  if (chIds.length){ const c = await sb.from("cheques").select("*").in("id", chIds); chqs = c.data||[]; }
   const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
   const imputado = imps.reduce(function(a,y){ return a+Number(y.importe||0); },0);
   const sinImputar = Number(x.importe||0) - imputado;
@@ -6946,8 +6957,23 @@ async function verPagoCompra(id){
      '</tbody></table></div>'
     : '<div class="muted">Este pago no se imputó a ningún comprobante: bajó la deuda general del proveedor.</div>')+
    '<div class="sec">Forma de pago</div>'+
-   '<div class="tablewrap"><table><thead><tr><th>Sale de</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
-     '<tr><td>'+esc(cta?cta.nombre:"—")+'</td><td style="text-align:right"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
+   '<div class="tablewrap"><table><thead><tr><th>Forma de pago</th><th>Sale de</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
+     (medios.length
+       ? medios.map(function(y){
+           const c2 = (CTAS||[]).find(z=>String(z.id)===String(y.cuenta_id));
+           const ch = chqs.find(z=>String(z.id)===String(y.cheque_id));
+           return '<tr><td style="white-space:normal">'+(ch
+              ? '<b>Cheque '+(String(ch.tipo).toLowerCase().indexOf("prop")>=0?"propio":"de terceros")+'</b> N° '+esc(ch.numero)+
+                (ch.vencimiento?' · vence '+fmtF(ch.vencimiento):'')+
+                (ch.librador?'<br><span class="muted">'+esc(ch.librador)+'</span>':'')
+              : esc(y.detalle||"Efectivo o banco"))+'</td>'+
+             '<td>'+esc(c2?c2.nombre:"—")+'</td>'+
+             '<td style="text-align:right"><b>'+fmtM0(y.importe,x.moneda)+'</b>'+
+             (Number(y.cotizacion)>0 ? '<br><span class="muted">salieron '+fmtM0(y.sale,(c2||{}).moneda||x.moneda)+'</span>' : '')+
+             '</td></tr>';
+         }).join("")+
+         '<tr style="background:#f6f3ee"><td colspan="2"><b>TOTAL</b></td><td style="text-align:right"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'
+       : '<tr><td class="muted">Efectivo o banco</td><td>'+esc(cta?cta.nombre:"—")+'</td><td style="text-align:right"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>')+
    '</tbody></table></div>'+
    (x.observaciones?'<div class="muted" style="margin-top:8px">'+esc(x.observaciones)+'</div>':'')+
    selloAuditoria(x)+
@@ -6962,12 +6988,13 @@ async function verPagoCompra(id){
 /* El comprobante impreso, en las tres partes que pidió Gilda: encabezado con el
    número y el proveedor · qué cancela · con qué se paga. */
 async function imprimirPagoCompra(id){
-  const [p, im] = await Promise.all([
+  const [p, im, me] = await Promise.all([
     sb.from("pagos_compra").select("*").eq("id",id).single(),
-    sb.from("pago_imputaciones").select("*").eq("pago_id",id)
+    sb.from("pago_imputaciones").select("*").eq("pago_id",id),
+    sb.from("pago_medios").select("*").eq("pago_id",id).order("id")
   ]);
   if (p.error) return alert(p.error.message);
-  const x = p.data, imps = im.data||[];
+  const x = p.data, imps = im.data||[], medios = me.data||[];
   if (!PROVS.length) await cargarProveedores();
   if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
   let facs = [];
@@ -6975,6 +7002,9 @@ async function imprimirPagoCompra(id){
     const f = await sb.from("facturas_compra").select("*").in("id", imps.map(y=>y.factura_id));
     facs = f.data||[];
   }
+  let chqs = [];
+  const chIds = medios.map(y=>y.cheque_id).filter(Boolean);
+  if (chIds.length){ const c = await sb.from("cheques").select("*").in("id", chIds); chqs = c.data||[]; }
   const pv = PROVS.find(y=>y.id===x.proveedor_id) || {};
   const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
   const imputado = imps.reduce(function(a,y){ return a+Number(y.importe||0); },0);
@@ -7003,9 +7033,20 @@ async function imprimirPagoCompra(id){
      '</tbody></table>'
     : '<div>Sin imputar a comprobantes: baja la deuda general del proveedor.</div>')+
    '<h3>Forma de pago</h3>'+
-   '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
-     '<tr><td>'+esc(cta?cta.nombre:"—")+'</td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>'+
-     '<tr class="tot"><td class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
+   '<table><thead><tr><th>Medio</th><th>Sale de</th><th class="r">Importe</th></tr></thead><tbody>'+
+     (medios.length
+       ? medios.map(function(y){
+           const c2 = (CTAS||[]).find(z=>String(z.id)===String(y.cuenta_id));
+           const ch = chqs.find(z=>String(z.id)===String(y.cheque_id));
+           return '<tr><td>'+(ch
+              ? 'Cheque '+(String(ch.tipo).toLowerCase().indexOf("prop")>=0?"propio":"de terceros")+' N° '+esc(ch.numero)+
+                (ch.vencimiento?' (vence '+fmtF(ch.vencimiento)+')':'')
+              : esc(y.detalle||"Efectivo o banco"))+'</td>'+
+             '<td>'+esc(c2?c2.nombre:"—")+'</td>'+
+             '<td class="r">'+fmtM0(y.importe,x.moneda)+'</td></tr>';
+         }).join("")
+       : '<tr><td>Efectivo o banco</td><td>'+esc(cta?cta.nombre:"—")+'</td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>')+
+     '<tr class="tot"><td colspan="2" class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
    '</tbody></table>'+
    (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
    '<div class="firma"><div>Firma y aclaración de quien paga</div><div>Recibí conforme</div></div>'+
@@ -7265,48 +7306,174 @@ async function anularNota(id){
   await cargarProveedores(); VISTAS.compras();
 }
 
-/* ─── Pago a proveedor ─── */
+/* ─── Orden de Pago · pago a proveedor ─── */
 let PAG = null;
+
+/* 13/8, Gilda: una orden de pago puede combinar varias formas de pago —parte en
+   efectivo, parte con cheques de terceros de la cartera, parte con un cheque
+   propio— y sigue siendo UN solo comprobante (decisión de Gustavo). Quedan
+   afuera los fondos de inversión, los plazos fijos y las tarjetas: de ahí no se
+   le paga a un proveedor. Las cuentas de cheques tampoco se eligen como cuenta:
+   se elige el cheque, y el sistema ya sabe de qué cuenta sale. */
+const CTA_FUERA_DE_PAGO = /fondo|inversi|plazo\s*fijo|tarjeta/i;
+const CTA_DE_CHEQUES    = /cheque/i;
+function nomTipoCta(id){ const t=(TCTAS||[]).find(x=>String(x.id)===String(id)); return t?String(t.nombre||""):""; }
+function ctasDePago(){
+  return (CTAS||[]).filter(function(c){
+    if (!c.activo) return false;
+    const n = nomTipoCta(c.tipo_cuenta_id);
+    return !CTA_FUERA_DE_PAGO.test(n) && !CTA_DE_CHEQUES.test(n);
+  });
+}
+function dlg2(){ return document.getElementById("dlg2"); }
+function cerrarDlg2(){ const d=dlg2(); if (d){ try{ d.close(); }catch(e){} } }
+
 async function formPagoCompra(provId){
   $("dtit").textContent = "Orden de Pago · pago a proveedor";
   if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
-  if (!CTAS.filter(c=>c.activo).length){ $("dbody").innerHTML = avisoSinCuentas("Un pago sale de una cuenta: primero tiene que existir la cuenta."); try{$("dlg").showModal();}catch(e){} return; }
-  PAG = {proveedor_id:(provId||null), fecha:hoy(), moneda:"ARS", cuenta_id:null, importe:0, cotizacion:null, obs:"", facturas:[]};
+  if (!CTAS.length){ try{ await cargarFin(); }catch(e){} }
+  if (!ctasDePago().length){
+    $("dbody").innerHTML = avisoSinCuentas("Un pago sale de una caja o de un banco: primero tiene que existir la cuenta.");
+    try{$("dlg").showModal();}catch(e){} return;
+  }
+  if (!CHEQUERAS.length){ try{ await cargarCheques(); }catch(e){} }
+  PAG = {proveedor_id:(provId||null), fecha:hoy(), moneda:"ARS", obs:"", medios:[], facturas:[], cartera:[]};
   pintarPago(); try{ $("dlg").showModal(); }catch(e){}
-  /* 12/8: si se entra desde la factura o desde el proveedor, ya viene elegido y
-     se cargan sus facturas pendientes sin tener que buscarlo de nuevo. */
+  /* si se entra desde la factura o desde el proveedor, ya viene elegido */
   if (provId && $("pa_prov")){ $("pa_prov").value = String(provId); await pagoProveedor(); }
 }
+
 function pintarPago(){
-  const cs = CTAS.filter(c=>c.activo);
   $("dbody").innerHTML = '<div id="pagmsg"></div>'+
    '<div class="grid">'+
      '<div class="f"><label>Proveedor *</label><select id="pa_prov" onchange="pagoProveedor()">'+selProv(PAG.proveedor_id)+'</select></div>'+
      '<div class="f"><label>Fecha</label><input type="date" id="pa_fecha" value="'+PAG.fecha+'"></div>'+
-     '<div class="f"><label>Moneda de la deuda</label><select id="pa_moneda" onchange="pagoCalc()"><option value="ARS" '+(PAG.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(PAG.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
-     '<div class="f"><label>¿De qué cuenta sale?</label><select id="pa_cuenta" onchange="pagoCalc()">'+optCtas(cs)+'</select></div>'+
-     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="pa_importe" oninput="pagoCalc()"></div>'+
-     '<div class="f" id="pa_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="pa_tc" oninput="pagoCalc()" placeholder="pesos por dólar"></div>'+
+     '<div class="f"><label>Moneda de la deuda</label><select id="pa_moneda" onchange="pagoMoneda()">'+
+       '<option value="ARS" '+(PAG.moneda==="ARS"?"selected":"")+'>ARS</option>'+
+       '<option value="USD" '+(PAG.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
    '</div>'+
-   '<div class="muted" id="pa_nota" style="margin-bottom:8px"></div>'+
-   '<div class="sec">Imputar a facturas</div>'+
-   '<div class="muted" style="margin-bottom:8px">Elegí a qué facturas se aplica este pago. Si dejás todo en cero, el pago igual baja la deuda general del proveedor.</div>'+
+   '<div class="sec">Cómo se paga</div>'+
+   '<div class="muted" style="margin-bottom:8px">Se pueden combinar varias formas de pago en la misma orden: parte en efectivo, parte con cheques. '+
+   'De cada una sale su importe de la cuenta que corresponde. Los <b>fondos de inversión, los plazos fijos y las tarjetas</b> no aparecen: de ahí no se le paga a un proveedor.</div>'+
+   '<div class="acciones" style="margin-bottom:8px">'+
+     '<button class="btn2 btn-sm" onclick="medioAgregar()">+ Efectivo o banco</button>'+
+     '<button class="btn2 btn-sm" onclick="abrirCartera()">+ Cheque de terceros</button>'+
+     '<button class="btn2 btn-sm" onclick="abrirChequePropio()">+ Cheque propio</button>'+
+   '</div>'+
+   '<div id="pa_medios"></div>'+
+   '<div class="sec">Qué se paga</div>'+
+   '<div class="muted" style="margin-bottom:8px">A qué comprobantes se aplica esta orden. Lo que no imputes baja igual la deuda general del proveedor.</div>'+
    '<div id="pa_facturas"><div class="muted">Elegí el proveedor.</div></div>'+
-   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="pa_obs"></div>'+
-   '<div class="acciones"><button class="btn" id="pa_guardar" onclick="guardarPago()">Registrar pago</button>'+
+   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="pa_obs" value="'+esc(PAG.obs)+'"></div>'+
+   '<div id="pa_tot" style="margin-top:8px"></div>'+
+   '<div class="acciones"><button class="btn" id="pa_guardar" onclick="guardarPago()">Registrar la orden de pago</button>'+
    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
-  pagoCalc();
+  pintarMedios();
 }
+
+/* Lee lo que hay escrito en pantalla sin redibujar nada: el mismo criterio que
+   en la grilla de impuestos, para que no se pierda el cursor al escribir. */
+function pagSincro(){
+  ["fecha","obs"].forEach(function(c){ const el=$("pa_"+c); if (el) PAG[c]=el.value; });
+  const mo = $("pa_moneda"); if (mo) PAG.moneda = mo.value;
+  const pr = $("pa_prov"); if (pr) PAG.proveedor_id = pr.value||null;
+  PAG.medios.forEach(function(x,k){
+    const c=$("pm_"+k+"_cuenta"), i=$("pm_"+k+"_importe"), t=$("pm_"+k+"_tc"), d=$("pm_"+k+"_detalle");
+    if (c) x.cuenta_id = c.value||null;
+    if (i) x.importe = i.value===""?0:Number(i.value);
+    if (t) x.cotizacion = t.value===""?null:Number(t.value);
+    if (d) x.detalle = d.value;
+  });
+}
+function medioAgregar(){
+  pagSincro();
+  const cs = ctasDePago();
+  PAG.medios.push({tipo:"cuenta", cuenta_id:(cs[0]?String(cs[0].id):null), importe:0, cotizacion:null, detalle:""});
+  pintarMedios();
+}
+function medioQuitar(k){ pagSincro(); PAG.medios.splice(k,1); pintarMedios(); }
+function pagoMoneda(){ pagSincro(); pintarMedios(); }
+
+function rotuloMedio(x){
+  if (x.tipo === "cheque_tercero"){
+    const c = x.chq||{};
+    return '<b>Cheque de terceros</b> N° '+esc(c.numero||"")+
+      (c.librador?' · '+esc(c.librador):'')+
+      (c.vencimiento?' · vence '+fmtF(c.vencimiento):'');
+  }
+  if (x.tipo === "cheque_propio"){
+    const c = x.cheque||{};
+    const q = (CHEQUERAS||[]).find(y=>String(y.id)===String(c.chequera_id));
+    return '<b>Cheque propio</b> N° '+esc(c.numero||"")+
+      (q?' · '+esc(q.nombre):'')+
+      (c.vencimiento?' · vence '+fmtF(c.vencimiento):'');
+  }
+  return "";
+}
+function pintarMedios(){
+  const el = $("pa_medios"); if (!el) return;
+  const m = PAG.moneda||"ARS";
+  const cs = ctasDePago();
+  el.innerHTML = !PAG.medios.length
+    ? '<div class="muted">Todavía no cargaste ninguna forma de pago.</div>'
+    : '<div class="tablewrap"><table><thead><tr><th style="min-width:230px">Forma de pago</th><th>Sale de</th><th>Importe</th><th>T. de cambio</th><th>Detalle</th><th></th></tr></thead><tbody>'+
+      PAG.medios.map(function(x,k){
+        const esCta = x.tipo === "cuenta";
+        const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
+        const mcta = cta?cta.moneda:m;
+        const distinta = mcta !== m;
+        return '<tr><td style="white-space:normal">'+(esCta
+            ? '<span class="muted">Efectivo o banco</span>'
+            : rotuloMedio(x))+'</td>'+
+          '<td>'+(esCta
+            ? '<select id="pm_'+k+'_cuenta" style="min-width:170px" onchange="pintarMedios()">'+
+              cs.map(c=>'<option value="'+c.id+'" '+(String(x.cuenta_id)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select>'
+            : esc(cta?cta.nombre:"—")+' <span class="muted">('+mcta+')</span>')+'</td>'+
+          '<td>'+(esCta
+            ? '<input type="number" step="0.01" style="width:130px" id="pm_'+k+'_importe" value="'+(x.importe||"")+'" oninput="pagTotales()">'
+            : '<b>'+fmtM(x.importe,m)+'</b>')+'</td>'+
+          '<td>'+(distinta
+            ? '<input type="number" step="0.01" style="width:100px" id="pm_'+k+'_tc" value="'+(x.cotizacion==null?"":x.cotizacion)+'" oninput="pagTotales()" title="Pesos por dólar: la deuda está en '+m+' y la cuenta en '+mcta+'">'
+            : '<span class="muted">—</span>')+'</td>'+
+          '<td><input id="pm_'+k+'_detalle" value="'+esc(x.detalle||"")+'" placeholder="opcional" style="min-width:120px"></td>'+
+          '<td><button class="btn2 btn-sm" onclick="medioQuitar('+k+')">Quitar</button></td></tr>';
+      }).join("")+'</tbody></table></div>';
+  pagTotales();
+}
+
+/* El total de la orden, lo imputado y lo que resta imputar. Se recalcula con
+   cada tecla, pero no redibuja nada: por eso no se traba al escribir. */
+function pagTotales(){
+  pagSincro();
+  const m = PAG.moneda||"ARS";
+  const total = PAG.medios.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  let imput = 0;
+  PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); if (el) imput += Number(el.value||0); });
+  const resta = total - imput;
+  const el = $("pa_tot");
+  if (el) el.innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr><td>Total de la orden de pago</td><td style="text-align:right"><b>'+(fmtM(total,m)||"—")+'</b></td></tr>'+
+    '<tr><td>Imputado a comprobantes</td><td style="text-align:right">'+(fmtM(imput,m)||"—")+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>Resta imputar</b></td><td style="text-align:right;font-size:16px"><b style="color:'+
+      (resta < -0.009 ? '#7a2415' : '#1b2426')+'">'+(fmtM0(resta,m))+'</b></td></tr>'+
+    '</tbody></table></div>'+
+    (resta < -0.009 ? '<div class="msg err" style="margin-top:6px">Estás imputando más de lo que sale: no se puede.</div>' : '')+
+    (Math.abs(resta) <= 0.009 && total > 0 ? '<div class="muted" style="margin-top:6px">La orden queda imputada por completo.</div>' : '')+
+    (resta > 0.009 ? '<div class="muted" style="margin-top:6px">Lo que resta imputar baja la deuda general del proveedor, sin quedar pegado a ningún comprobante.</div>' : '');
+  const rel = $("pa_imputado");
+  if (rel) rel.innerHTML = 'Imputado: <b>'+fmtM(imput,m)+'</b> · resta imputar <b>'+fmtM0(resta,m)+'</b>';
+  const b = $("pa_guardar");
+  if (b) b.textContent = total>0 ? ("Registrar la orden de pago por "+fmtM(total,m)) : "Registrar la orden de pago";
+}
+
 async function pagoProveedor(){
   PAG.proveedor_id = $("pa_prov").value||null;
   if (!PAG.proveedor_id){ $("pa_facturas").innerHTML='<div class="muted">Elegí el proveedor.</div>'; return; }
   const [f, pi, pg] = await Promise.all([
     sb.from("facturas_compra").select("*").eq("proveedor_id",Number(PAG.proveedor_id)).eq("anulado",false).order("fecha"),
     sb.from("pago_imputaciones").select("factura_id,importe,pago_id"),
-    /* Sin esto, la plata de un pago ANULADO seguía descontando de la factura para
-       siempre. Lo reportó Gilda el 7/8/2026: anulaba un pago, volvía a pagar la
-       factura y el saldo seguía bajo. La imputación no se borra —nada se borra—,
-       se ignora la del pago que ya no vale. */
+    /* la plata de un pago ANULADO no cancela nada: la imputación no se borra
+       —nada se borra—, se ignora la del pago que ya no vale. */
     sb.from("pagos_compra").select("id,anulado")
   ]);
   const pagoAnulado = {};
@@ -7316,80 +7483,165 @@ async function pagoProveedor(){
     if (pagoAnulado[x.pago_id]) return;
     pagados[x.factura_id] = (pagados[x.factura_id]||0) + Number(x.importe||0);
   });
-  PAG.facturas = (f.data||[]).map(x=>({id:x.id, rot:(x.punto_venta||"")+"-"+(x.nro_comprobante||""), fecha:x.fecha, moneda:x.moneda,
+  PAG.facturas = (f.data||[]).map(x=>({id:x.id, rot:nroComp(x), fecha:x.fecha, moneda:x.moneda,
     total:Number(x.total||0), saldo:Number(x.total||0)-(pagados[x.id]||0)})).filter(x=>x.saldo>0.009);
-  $("pa_facturas").innerHTML = !PAG.facturas.length ? '<div class="muted">Este proveedor no tiene facturas pendientes.</div>' :
-   '<div class="tablewrap"><table><thead><tr><th>Factura</th><th>Fecha</th><th>Moneda</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th></tr></thead><tbody>'+
+  $("pa_facturas").innerHTML = !PAG.facturas.length ? '<div class="muted">Este proveedor no tiene comprobantes pendientes.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th>Comprobante</th><th>Fecha</th><th>Moneda</th><th>Total</th><th>Saldo</th><th>A imputar</th><th></th></tr></thead><tbody>'+
    PAG.facturas.map((x,k)=>'<tr><td><b>'+esc(x.rot)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+esc(x.moneda)+'</td>'+
      '<td>'+fmtM(x.total,x.moneda)+'</td><td><b>'+fmtM(x.saldo,x.moneda)+'</b></td>'+
-     '<td><input type="number" step="0.01" style="width:130px" id="pf_'+k+'" oninput="pagoImputar()"></td></tr>').join("")+
+     '<td><input type="number" step="0.01" style="width:130px" id="pf_'+k+'" oninput="pagTotales()"></td>'+
+     '<td><button class="btn2 btn-sm" onclick="imputarSaldo('+k+')">Todo</button></td></tr>').join("")+
    '</tbody></table></div><div class="muted" id="pa_imputado" style="margin-top:6px"></div>';
+  pagTotales();
 }
-function pagoImputar(){
-  let s = 0;
-  PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); if(el) s += Number(el.value||0); });
-  const el = $("pa_imputado");
-  const imp = Number(($("pa_importe")||{}).value||0);
-  if (el) el.innerHTML = 'Imputado: <b>'+fmtM(s,PAG.moneda||"ARS")+'</b>'+(imp>0 && Math.abs(s-imp)>0.009 ? ' — <span style="color:#7a2415">no coincide con el importe del pago</span>' : '');
+/* «Todo» pone el saldo de esa factura, pero nunca más de lo que resta imputar */
+function imputarSaldo(k){
+  pagSincro();
+  const total = PAG.medios.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  let otros = 0;
+  PAG.facturas.forEach(function(x,i){ if (i===k) return; const el=$("pf_"+i); if (el) otros += Number(el.value||0); });
+  const disponible = Math.max(total - otros, 0);
+  const el = $("pf_"+k);
+  if (el) el.value = Math.min(Number(PAG.facturas[k].saldo||0), disponible) || "";
+  pagTotales();
 }
-function pagoCalc(){
-  const cta = $("pa_cuenta"), mo = $("pa_moneda");
-  PAG.moneda = mo?mo.value:"ARS";
-  PAG.cuenta_id = cta?cta.value:null;
-  const mcta = monedaCta(PAG.cuenta_id);
-  const distinta = PAG.moneda !== mcta;
-  const box = $("pa_box_tc"); if (box) box.style.display = distinta ? "" : "none";
-  const imp = Number(($("pa_importe")||{}).value||0);
-  const tc = Number(($("pa_tc")||{}).value||0);
-  const nota = $("pa_nota");
-  if (nota){
-    if (distinta && imp>0 && tc>0) nota.innerHTML = 'La deuda está en '+PAG.moneda+' y la cuenta es en '+mcta+'. Se le descuentan <b>'+fmtM(imp,PAG.moneda)+'</b> de la deuda y salen <b>'+fmtM(imp*tc,mcta)+'</b> de la cuenta.';
-    else if (distinta) nota.innerHTML = 'La deuda y la cuenta son de distinta moneda: cargá el tipo de cambio.';
-    else nota.innerHTML = 'El pago baja la deuda con el proveedor y baja el saldo de la cuenta, en una sola operación.';
-  }
-  pagoImputar();
-  const b = $("pa_guardar"); if (b) b.textContent = imp>0 ? ("Registrar pago por "+fmtM(imp,PAG.moneda)) : "Registrar pago";
+
+/* ── La cartera de cheques de terceros ── */
+async function abrirCartera(){
+  pagSincro();
+  const q = await sb.from("cheques").select("*").eq("tipo","Terceros").eq("estado","Disponible")
+              .eq("anulado",false).order("vencimiento");
+  if (q.error) return alert(q.error.message);
+  const usados = PAG.medios.filter(x=>x.tipo==="cheque_tercero").map(x=>String(x.cheque_id));
+  PAG.cartera = (q.data||[]).filter(x=>usados.indexOf(String(x.id))<0);
+  const d = dlg2();
+  $("d2tit").textContent = "Cheques de terceros en cartera";
+  $("d2body").innerHTML = !PAG.cartera.length
+    ? '<div class="muted">No hay cheques de terceros disponibles en la cartera. Entran cuando un cliente paga con cheque, o cargándolos a mano en <b>Cheques</b>.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="cerrarDlg2()">Cerrar</button></div>'
+    : '<div class="muted" style="margin-bottom:8px">Un cheque se entrega entero. Tildá los que le vas a dar al proveedor: se suman a la orden de pago.</div>'+
+      '<div class="tablewrap" style="max-height:50dvh;overflow:auto"><table><thead><tr><th></th><th>Número</th><th>Librador</th><th>Banco</th><th>Vence</th><th>Importe</th><th>Está en</th></tr></thead><tbody>'+
+      PAG.cartera.map(function(c,k){
+        const cta = (CTAS||[]).find(y=>String(y.id)===String(c.cuenta_id));
+        return '<tr><td><input type="checkbox" id="cc_'+k+'" onchange="carteraTotal()"></td>'+
+          '<td><b>'+esc(c.numero)+'</b></td><td style="white-space:normal">'+esc(c.librador)+'</td>'+
+          '<td>'+esc(nom(BANCOS,c.banco_id))+'</td><td>'+fmtF(c.vencimiento)+'</td>'+
+          '<td><b>'+fmtM(c.importe,c.moneda||"ARS")+'</b></td>'+
+          '<td>'+esc(cta?cta.nombre:"—")+'</td></tr>';
+      }).join("")+'</tbody></table></div>'+
+      '<div id="cc_tot" style="margin-top:8px" class="muted"></div>'+
+      '<div class="acciones"><button class="btn" onclick="carteraAgregar()">Agregar los tildados</button>'+
+      '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ d.showModal(); }catch(e){}
+  carteraTotal();
 }
+function carteraTotal(){
+  let s = 0, n = 0;
+  PAG.cartera.forEach(function(c,k){ const el=$("cc_"+k); if (el && el.checked){ s += Number(c.importe||0); n++; } });
+  const el = $("cc_tot");
+  if (el) el.innerHTML = n ? 'Tildados: <b>'+n+'</b> cheque(s) por <b>'+fmtM(s,"ARS")+'</b>' : 'Todavía no tildaste ninguno.';
+}
+function carteraAgregar(){
+  let n = 0;
+  PAG.cartera.forEach(function(c,k){
+    const el=$("cc_"+k); if (!el || !el.checked) return;
+    PAG.medios.push({tipo:"cheque_tercero", cheque_id:c.id, chq:c, cuenta_id:c.cuenta_id,
+                     importe:Number(c.importe||0), cotizacion:null, detalle:"Cheque "+(c.numero||"")});
+    n++;
+  });
+  cerrarDlg2();
+  if (n) pintarMedios();
+}
+
+/* ── El cheque propio: se emite acá, queda asociado al proveedor y al pago ── */
+function abrirChequePropio(){
+  pagSincro();
+  const qs = (CHEQUERAS||[]).filter(x=>x.activo);
+  $("d2tit").textContent = "Cheque propio";
+  $("d2body").innerHTML = !qs.length
+    ? '<div class="msg err" style="line-height:1.5"><b>Todavía no hay ninguna chequera cargada.</b><br>'+
+      'Un cheque propio sale de una chequera. Andá a <b>Cheques → Chequeras</b>, cargá la tuya, y volvé.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="cerrarDlg2()">Cerrar</button></div>'
+    : '<div id="cpmsg"></div>'+
+      '<div class="muted" style="margin-bottom:8px">El cheque que emitimos nosotros. Queda registrado como <b>cheque emitido</b>, a nombre de este proveedor y colgado de esta orden de pago. '+
+      'La plata sale de la cuenta de la chequera.</div>'+
+      '<div class="grid">'+
+        '<div class="f"><label>Chequera *</label><select id="cp_chequera">'+
+          qs.map(q=>'<option value="'+q.id+'">'+esc(q.nombre)+'</option>').join("")+'</select></div>'+
+        '<div class="f"><label>Número *</label><input id="cp_numero"></div>'+
+        '<div class="f"><label>Importe *</label><input type="number" step="0.01" id="cp_importe"></div>'+
+        '<div class="f"><label>Fecha de emisión</label><input type="date" id="cp_fecha" value="'+hoy()+'"></div>'+
+        '<div class="f"><label>Fecha de cobro *</label><input type="date" id="cp_venc"></div>'+
+      '</div>'+
+      '<div class="f"><label>Comentarios</label><input id="cp_obs"></div>'+
+      '<div class="acciones"><button class="btn" onclick="chequePropioAgregar()">Agregar a la orden</button>'+
+      '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+function chequePropioAgregar(){
+  const err = t => { const e=$("cpmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const nro = ($("cp_numero")||{}).value||"";
+  if (!nro.trim()) return err("Falta el número del cheque.");
+  const imp = Number(($("cp_importe")||{}).value||0);
+  if (!(imp>0)) return err("El importe tiene que ser mayor a cero.");
+  const venc = ($("cp_venc")||{}).value||"";
+  if (!venc) return err("Falta la fecha de cobro del cheque.");
+  const qid = ($("cp_chequera")||{}).value||null;
+  const q = (CHEQUERAS||[]).find(x=>String(x.id)===String(qid)) || {};
+  PAG.medios.push({tipo:"cheque_propio", cuenta_id:q.cuenta_id||null, importe:imp, cotizacion:null,
+    detalle:"Cheque propio "+nro.trim(),
+    cheque:{chequera_id:qid, numero:nro.trim(), importe:imp, fecha:($("cp_fecha")||{}).value||hoy(),
+            vencimiento:venc, banco_id:q.banco_id||null, sucursal_id:q.sucursal_id||null,
+            nro_cta_cte:q.nro_cuenta||null, comentarios:($("cp_obs")||{}).value||null}});
+  cerrarDlg2();
+  pintarMedios();
+}
+
 async function guardarPago(){
   const err = t => { $("pagmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
-  const prov = $("pa_prov").value; if (!prov) return err("Elegí el proveedor.");
-  const imp = Number($("pa_importe").value||0); if (!(imp>0)) return err("El importe tiene que ser mayor a cero.");
-  const cta = $("pa_cuenta").value; if (!cta) return err("Elegí de qué cuenta sale la plata.");
-  const tc = Number(($("pa_tc")||{}).value||0);
+  pagSincro();
+  const prov = PAG.proveedor_id; if (!prov) return err("Elegí el proveedor.");
+  if (!PAG.medios.length) return err("Cargá al menos una forma de pago.");
+  const m = PAG.moneda||"ARS";
+  let mal = null;
+  PAG.medios.forEach(function(x,k){
+    if (mal) return;
+    if (!(Number(x.importe)>0)) mal = "La forma de pago N° "+(k+1)+" no tiene importe.";
+    else if (!x.cuenta_id) mal = "La forma de pago N° "+(k+1)+" no tiene cuenta.";
+    else {
+      const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
+      if (cta && cta.moneda !== m && !(Number(x.cotizacion)>0))
+        mal = "La deuda está en "+m+" y «"+cta.nombre+"» es en "+cta.moneda+": cargá el tipo de cambio.";
+    }
+  });
+  if (mal) return err(mal);
+  const total = PAG.medios.reduce(function(a,x){ return a+Number(x.importe||0); },0);
   const imputaciones = [];
   PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0; if (v>0) imputaciones.push({factura_id:x.id, importe:v}); });
-  /* 10/8: mismo candado que en la cobranza — ni más que el saldo de cada
-     factura, ni más que el importe del pago. La base también lo frena (v52). */
-  let malImp = null;
   PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0;
-    if (x.saldo!=null && v > Number(x.saldo)+0.009) malImp = 'A la factura '+esc(x.nro_comprobante||x.nro||('#'+x.id))+' no le podés imputar más que su saldo ('+fmtM(x.saldo,PAG.moneda)+').'; });
-  const sumaImp = imputaciones.reduce(function(a,x){ return a+Number(x.importe||0); },0);
-  if (!malImp && sumaImp > imp+0.009) malImp = 'Estás imputando '+fmtM(sumaImp,PAG.moneda)+' y el pago es de '+fmtM(imp,PAG.moneda)+': no se puede imputar más de lo que sale.';
-  if (malImp) return err(malImp);
+    if (!mal && x.saldo!=null && v > Number(x.saldo)+0.009)
+      mal = 'Al comprobante '+esc(x.rot)+' no le podés imputar más que su saldo ('+fmtM(x.saldo,m)+').'; });
+  const suma = imputaciones.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  if (!mal && suma > total+0.009) mal = 'Estás imputando '+fmtM(suma,m)+' y la orden es de '+fmtM(total,m)+': no se puede imputar más de lo que sale.';
+  if (mal) return err(mal);
+
+  const medios = PAG.medios.map(function(x){
+    const o = {tipo:x.tipo, cuenta_id:x.cuenta_id?Number(x.cuenta_id):null, importe:Number(x.importe),
+               cotizacion:(x.cotizacion==null||x.cotizacion==="")?null:Number(x.cotizacion), detalle:x.detalle||null};
+    if (x.tipo === "cheque_tercero") o.cheque_id = Number(x.cheque_id);
+    if (x.tipo === "cheque_propio")  o.cheque = x.cheque;
+    return o;
+  });
   $("pa_guardar").disabled = true;
-  const nroCh = ($("pa_ch_numero")||{}).value || "";
-  let error;
-  if (nroCh.trim()){
-    const chq = CHEQUERAS.find(x=>String(x.id)===String($("pa_ch_chequera").value));
-    const cheque = {chequera_id:$("pa_ch_chequera").value||null, banco_id:chq?chq.banco_id:null,
-      sucursal_id:chq?chq.sucursal_id:null, nro_cta_cte:chq?chq.nro_cuenta:null,
-      numero:nroCh.trim(), importe:imp, moneda:$("pa_moneda").value,
-      fecha:$("pa_ch_fecha").value||hoy(), vencimiento:$("pa_ch_venc").value||null,
-      comentarios:$("pa_ch_obs").value||null};
-    const r = await sb.rpc("registrar_pago_compra_cheque",{p_proveedor:Number(prov), p_fecha:$("pa_fecha").value||hoy(),
-      p_moneda:$("pa_moneda").value, p_cuenta:Number(cta), p_importe:imp, p_cotizacion:tc||null,
-      p_imputaciones:imputaciones, p_obs:$("pa_obs").value||null, p_cheque:cheque});
-    error = r.error;
-  } else {
-    const r = await sb.rpc("registrar_pago_compra",{p_proveedor:Number(prov), p_fecha:$("pa_fecha").value||hoy(),
-      p_moneda:$("pa_moneda").value, p_cuenta:Number(cta), p_importe:imp, p_cotizacion:tc||null,
-      p_imputaciones:imputaciones, p_obs:$("pa_obs").value||null});
-    error = r.error;
-  }
+  const r = await sb.rpc("registrar_pago_compra_multi",{p_proveedor:Number(prov), p_fecha:PAG.fecha||hoy(),
+    p_moneda:m, p_medios:medios, p_imputaciones:imputaciones, p_obs:PAG.obs||null});
   $("pa_guardar").disabled = false;
-  if (error) return err(error.message);
-  $("dlg").close(); await cargarProveedores(); await cargarFin(); VISTAS.compras();
+  if (r.error) return err(r.error.message);
+  $("dlg").close();
+  await cargarProveedores(); await cargarFin(); try{ await cargarCheques(); }catch(e){}
+  VISTAS.compras();
 }
+
 async function anularPago(id){
   const m = prompt("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta."); if (m===null) return;
   const {error} = await sb.rpc("anular_pago_compra",{p_id:id, p_motivo:m||"Sin motivo"});
