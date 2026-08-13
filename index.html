@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-107";
+const VERSION = "v2026.08.13-108";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -8091,7 +8091,9 @@ async function fichaCliente(id, pre){
   const v = k => c ? (c[k]==null?"":c[k]) : (pre && pre[k]!=null ? pre[k] : "");
   let seg = [], notas = [], tnotas = [], pres = [];
   if (c){
-    const r = await sb.from("cc_movimientos").select("*").eq("cliente_id",c.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(300);
+    /* 13/8: se trae todo el historial. El tope de lo que se MUESTRA lo pone el
+       selector de filas; el saldo acumulado necesita todos los movimientos. */
+    const r = await sb.from("cc_movimientos").select("*").eq("cliente_id",c.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(3000);
     seg = r.data||[];
     if (await db9()){
       const [n,t,p1,p2] = await Promise.all([
@@ -8155,6 +8157,7 @@ async function fichaCliente(id, pre){
    (c? seccionDocsCli(c, docsCli) : '');
   if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
   if (c) armarAccionesCC(c);
+  if (c && P("cliente-historial")) engancharCCCli(c.id);
   $("dlg").showModal();
 }
 /* Los archivos colgados de este cliente: contrato firmado, foto de la obra, plano que mandó. */
@@ -8264,39 +8267,160 @@ async function presupuestoDesdeCliente(cliId){
 }
 let _CCANUL = {ARS:false, USD:false};   /* «ver anulados» de la cuenta corriente */
 function ccToggleAnul(m, cliId, chk){ _CCANUL[m] = !!chk.checked; fichaCliente(cliId); }
+/* ══ Cuenta corriente del cliente (13/8) ══
+   El mismo tratamiento que se le dio a la del proveedor el 12/8: rango de fechas,
+   cantidad de filas, saldo acumulado por renglón e impresión del resumen.
+   Reglas que no se rompen: el SALDO ANTERIOR se calcula sobre todo el historial
+   previo —un saldo filtrado es un saldo falso— y si el tope de filas recorta, se
+   avisa; nada se corta en silencio. */
+let FCCC = {desde:"", hasta:"", filas:50};
+function engancharCCCli(cliId){
+  const b = $("ccc_btn"); if (b) b.onclick = function(){
+    FCCC.desde = $("ccc_desde").value || "";
+    FCCC.hasta = $("ccc_hasta").value || "";
+    FCCC.filas = Number($("ccc_filas").value || 50);
+    fichaCliente(cliId);
+  };
+}
+function cccCalcular(seg, m){
+  const vivos = seg.filter(x=>x.moneda===m && !x.anulado)
+                   .slice().sort(function(a,b){ return String(a.fecha).localeCompare(String(b.fecha)) || (a.id-b.id); });
+  const antes = FCCC.desde ? vivos.filter(x=>String(x.fecha) < FCCC.desde) : [];
+  const dentro = vivos.filter(function(x){
+    if (FCCC.desde && String(x.fecha) < FCCC.desde) return false;
+    if (FCCC.hasta && String(x.fecha) > FCCC.hasta) return false;
+    return true;
+  });
+  /* Del lado del cliente el DÉBITO es deuda (una venta) y el CRÉDITO la baja
+     (una cobranza): al revés que en el proveedor. */
+  const saldoAnterior = antes.reduce(function(a,x){ return a + Number(x.debito||0) - Number(x.credito||0); }, 0);
+  let acum = saldoAnterior;
+  const filas = dentro.map(function(x){
+    acum += Number(x.debito||0) - Number(x.credito||0);
+    return {mov:x, saldo:acum};
+  });
+  const anulados = seg.filter(function(x){
+    if (x.moneda !== m || !x.anulado) return false;
+    if (FCCC.desde && String(x.fecha) < FCCC.desde) return false;
+    if (FCCC.hasta && String(x.fecha) > FCCC.hasta) return false;
+    return true;
+  });
+  return {saldoAnterior:saldoAnterior, filas:filas, saldoFinal:acum, anulados:anulados};
+}
 function seccionCC(c, seg){
   const bloque = function(m){
-    /* 10/8: el saldo del título sale de v_saldos_cliente (todo el historial),
-       no de la suma de los movimientos traídos: acá llegan los últimos 300 y
-       con más que eso la suma mentía. La tabla sí muestra solo los últimos. */
-    const saldo = Number((typeof saldoCli === "function" ? saldoCli(c.id, m) : 0) || 0);
-    const filas = seg.filter(x=>x.moneda===m && (_CCANUL[m] || !x.anulado));
+    /* El saldo del título sale de v_saldos_cliente —todo el historial y lo que
+       calcula la base—, no de esta suma. Si el rango de fechas está puesto, se
+       muestran los dos: el del período y el total, y se dice cuál es cuál. */
+    const total = Number((typeof saldoCli === "function" ? saldoCli(c.id, m) : 0) || 0);
+    const cc = cccCalcular(seg, m);
+    const hayRango = !!(FCCC.desde || FCCC.hasta);
+    const orden = cc.filas.slice().reverse();
+    const tope = FCCC.filas > 0 ? FCCC.filas : orden.length;
+    const visibles = orden.slice(0, tope);
+    const recortadas = orden.length - visibles.length;
+    const anulVisibles = _CCANUL[m] ? cc.anulados : [];
+    if (!cc.filas.length && !cc.anulados.length && !total && !cc.saldoAnterior)
+      return '<div class="sec">Cuenta corriente '+m+'</div><div class="muted">Sin movimientos en '+m+'.</div>';
     return '<div class="sec">Cuenta corriente '+m+'</div>'+
-      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><b style="font-size:18px;color:'+(saldo>0?'#7a2415':'#1d5b2c')+'">'+
-      (saldo>0? 'Debe '+fmtM(saldo,m) : saldo<0? 'A favor '+fmtM(-saldo,m) : 'Sin saldo')+'</b>'+
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap"><b style="font-size:18px;color:'+(total>0?'#7a2415':'#1d5b2c')+'">'+
+      (total>0? 'Debe '+fmtM(total,m) : total<0? 'A favor '+fmtM(-total,m) : 'Sin saldo')+'</b>'+
+      (hayRango? '<span class="muted">· al cierre del período: <b>'+fmtM0(cc.saldoFinal,m)+'</b> · antes del rango: '+fmtM0(cc.saldoAnterior,m)+'</span>' : '')+
       '<label style="margin:0;text-transform:none"><input type="checkbox" id="cc_anul_'+m+'" '+(_CCANUL[m]?'checked':'')+' onchange="ccToggleAnul(\''+m+'\','+c.id+',this)" style="width:auto"> ver anulados</label>'+
-      (seg.length>=300?'<span class="muted" style="font-size:.85em">(se muestran los últimos 300 movimientos)</span>':'')+'</div>'+
-      (filas.length? '<div class="tablewrap" style="max-height:250px;overflow:auto"><table><thead><tr><th>Fecha</th><th>Detalle</th><th>Débito</th><th>Crédito</th>'+(P("finanzas-anular")?'<th></th>':'')+'</tr></thead><tbody>'+
-        filas.map(function(x){
-          return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
-            '<td style="white-space:normal;min-width:240px">'+esc(x.detalle)+'</td>'+
-            '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
-            /* Lo que nació de una venta se anula desde la venta. Lo que nació de
-               una cobranza, desde acá mismo (10/8): la función de la base existía
-               y ninguna pantalla la llamaba — un cobro mal cargado era
-               irreversible. Revierte plata, imputaciones y cheque, todo junto. */
-            (P("finanzas-anular")? '<td>'+(x.anulado?'<span class="pill no">Anulado</span>'
-              : (x.ref_id ? (String(x.origen||"").toLowerCase()==="cobranza"
-                  ? '<button class="btn2 btn-sm" onclick="anularCobranza('+x.ref_id+','+c.id+')">Anular cobranza</button>'
-                  : '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">se anula desde '+esc((x.origen||"el documento").toLowerCase())+'</span>')
-                          : '<button class="btn2 btn-sm" onclick="anularCC('+x.id+','+c.id+')">Anular</button>'))+'</td>':'')+
+      '</div>'+
+      '<div class="tablewrap" style="max-height:40dvh;overflow:auto"><table><thead><tr>'+
+        '<th>Fecha</th><th>Detalle</th><th>Debe</th><th>Pagó</th><th>Saldo</th>'+(P("finanzas-anular")?'<th></th>':'')+
+        '</tr></thead><tbody>'+
+      (FCCC.desde? '<tr style="background:#f6f3ee"><td>'+fmtF(FCCC.desde)+'</td><td><b>Saldo anterior</b></td>'+
+        '<td></td><td></td><td><b>'+fmtM0(cc.saldoAnterior,m)+'</b></td>'+(P("finanzas-anular")?'<td></td>':'')+'</tr>' : '')+
+      visibles.map(function(f){
+        const x = f.mov;
+        return '<tr><td>'+fmtF(x.fecha)+'</td>'+
+          '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+'</td>'+
+          '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
+          '<td><b>'+fmtM0(f.saldo,m)+'</b></td>'+
+          (P("finanzas-anular")? '<td>'+(x.ref_id
+            ? (String(x.origen||"").toLowerCase()==="cobranza"
+                ? '<button class="btn2 btn-sm" onclick="anularCobranza('+x.ref_id+','+c.id+')">Anular cobranza</button>'
+                : '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">desde '+esc((x.origen||"el documento").toLowerCase())+'</span>')
+            : '<button class="btn2 btn-sm" onclick="anularCC('+x.id+','+c.id+')">Anular</button>')+'</td>':'')+
           '</tr>';
-        }).join("")+'</tbody></table></div>' : '<div class="muted">Sin movimientos.</div>');
+      }).join("")+
+      anulVisibles.map(function(x){
+        return '<tr style="opacity:.45;text-decoration:line-through"><td>'+fmtF(x.fecha)+'</td>'+
+          '<td style="white-space:normal">'+esc(x.detalle)+'</td>'+
+          '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
+          '<td class="muted">no suma</td>'+(P("finanzas-anular")?'<td><span class="pill no">Anulado</span></td>':'')+'</tr>';
+      }).join("")+
+      '</tbody></table></div>'+
+      (recortadas>0 ? '<div class="msg" style="margin-top:6px">Se muestran los <b>'+visibles.length+'</b> movimientos más nuevos del período. '+
+        'Quedan <b>'+recortadas+'</b> sin mostrar — el saldo de arriba los cuenta igual. Subí la cantidad de filas o achicá el rango de fechas.</div>' : '')+
+      (!_CCANUL[m] && cc.anulados.length ? '<div class="muted" style="margin-top:4px">'+cc.anulados.length+' movimiento(s) anulado(s) en el período. Tildá «ver anulados» para verlos; no suman.</div>' : '');
   };
-  return bloque('ARS') + bloque('USD') +
+  return '<div class="sec">Cuenta corriente</div>'+
+   '<div class="muted" style="margin-bottom:8px">Una venta le suma deuda, una cobranza se la baja. El <b>saldo</b> de cada renglón es el acumulado hasta ese movimiento. Los anulados no suman.</div>'+
+   '<div class="filtros">'+
+     '<div><label>Desde</label><input type="date" id="ccc_desde" value="'+esc(FCCC.desde)+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="ccc_hasta" value="'+esc(FCCC.hasta)+'"></div>'+
+     '<div><label>Filas a mostrar</label><select id="ccc_filas">'+
+       [25,50,100,200,500].map(n=>'<option value="'+n+'" '+(FCCC.filas===n?"selected":"")+'>'+n+'</option>').join("")+
+       '<option value="0" '+(FCCC.filas===0?"selected":"")+'>Todas</option></select></div>'+
+     '<div style="min-width:auto"><button class="btn" id="ccc_btn">Aplicar</button></div>'+
+     '<div style="min-width:auto"><button class="btn2" onclick="imprimirCCCli('+c.id+')">Imprimir / PDF</button></div>'+
+   '</div>'+
+   bloque('ARS') + bloque('USD') +
     (P("venta-cobranza")? '<div class="acciones" style="margin-top:14px">'+
       '<button class="btn" onclick="formCobranza('+c.id+')">Registrar cobranza</button>'+
       '<button class="btn2" onclick="formCredDeb('+c.id+')">Registrar crédito / débito</button></div>' : '');
+}
+
+/* El resumen de cuenta del cliente: lo que se le manda cuando pregunta cuánto
+   debe, o lo que se archiva cuando se cierra una obra. */
+async function imprimirCCCli(cliId){
+  const m = await sb.from("cc_movimientos").select("*").eq("cliente_id",cliId).order("fecha").order("id");
+  if (m.error) return alert(m.error.message);
+  const seg = m.data||[];
+  const cli = CLIS.find(x=>String(x.id)===String(cliId)) || {};
+  const rango = (FCCC.desde || FCCC.hasta)
+    ? 'Del '+(FCCC.desde?fmtF(FCCC.desde):'inicio')+' al '+(FCCC.hasta?fmtF(FCCC.hasta):'hoy')
+    : 'Todos los movimientos';
+  const bloque = function(cur){
+    const c = cccCalcular(seg, cur);
+    if (!c.filas.length && !c.saldoAnterior) return '';
+    return '<h3 style="margin:18px 0 4px;font-size:14px">Cuenta corriente en '+cur+'</h3>'+
+      '<table><thead><tr><th>Fecha</th><th>Detalle</th><th class="r">Debe</th><th class="r">Pagó</th><th class="r">Saldo</th></tr></thead><tbody>'+
+      '<tr><td>'+(FCCC.desde?fmtF(FCCC.desde):'')+'</td><td><b>Saldo anterior</b></td><td></td><td></td><td class="r"><b>'+fmtM0(c.saldoAnterior,cur)+'</b></td></tr>'+
+      c.filas.map(function(f){ const x=f.mov;
+        return '<tr><td>'+fmtF(x.fecha)+'</td><td>'+esc(x.detalle)+'</td>'+
+          '<td class="r">'+(Number(x.debito)?fmtM(x.debito,cur):'')+'</td>'+
+          '<td class="r">'+(Number(x.credito)?fmtM(x.credito,cur):'')+'</td>'+
+          '<td class="r">'+fmtM0(f.saldo,cur)+'</td></tr>';
+      }).join("")+
+      '<tr class="tot"><td colspan="4" class="r"><b>SALDO AL CIERRE</b></td><td class="r"><b>'+fmtM0(c.saldoFinal,cur)+'</b></td></tr>'+
+      '</tbody></table>'+
+      (c.anulados.length? '<div class="nota">'+c.anulados.length+' movimiento(s) anulado(s) en el período. No se listan porque no suman.</div>' : '');
+  };
+  const cuerpo = bloque("ARS") + bloque("USD");
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Cuenta corriente '+esc(cli.nombre||"")+'</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:28px;max-width:820px}'+
+   'table{width:100%;border-collapse:collapse;margin:6px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border-top:2px solid #24393C;font-size:13px}'+
+   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:9px 11px;margin:12px 0;background:#faf8f4}'+
+   '.nota{font-size:10px;color:#6b7679;margin-top:4px}'+
+   '.pie{margin-top:22px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '</style></head><body>'+
+   membrete('Resumen de cuenta · '+esc(cli.nombre||"")+' · '+rango)+
+   '<div class="caja"><b>'+esc(cli.nombre||"")+'</b>'+(cli.dni_cuit?' · '+esc(cli.dni_cuit):'')+
+     (cli.celular||cli.telefono?'<br>'+esc(cli.celular||cli.telefono):'')+
+     (cli.direccion?'<br>'+esc(cli.direccion):'')+'</div>'+
+   (cuerpo || '<div>Sin movimientos en el período.</div>')+
+   '<div class="pie">Emitido el '+fmtF(hoy())+'. Un saldo positivo significa que el cliente nos debe.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
 }
 function armarAccionesCC(){}
 /* ── Cargar un cliente sin salir de la venta (9/8/2026) ──
