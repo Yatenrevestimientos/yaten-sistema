@@ -206,7 +206,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-111";
+const VERSION = "v2026.08.13-112";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -7566,8 +7566,10 @@ function abrirChequePropio(){
       '<div class="muted" style="margin-bottom:8px">El cheque que emitimos nosotros. Queda registrado como <b>cheque emitido</b>, a nombre de este proveedor y colgado de esta orden de pago. '+
       'La plata sale de la cuenta de la chequera.</div>'+
       '<div class="grid">'+
-        '<div class="f"><label>Chequera *</label><select id="cp_chequera">'+
+        '<div class="f"><label>Chequera *</label><select id="cp_chequera" onchange="chequeraCuenta()">'+
           qs.map(q=>'<option value="'+q.id+'">'+esc(q.nombre)+'</option>').join("")+'</select></div>'+
+        '<div class="f"><label>Sale de la cuenta *</label><select id="cp_cuenta">'+
+          ctasDePago().map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></div>'+
         '<div class="f"><label>Número *</label><input id="cp_numero"></div>'+
         '<div class="f"><label>Importe *</label><input type="number" step="0.01" id="cp_importe"></div>'+
         '<div class="f"><label>Fecha de emisión</label><input type="date" id="cp_fecha" value="'+hoy()+'"></div>'+
@@ -7577,6 +7579,14 @@ function abrirChequePropio(){
       '<div class="acciones"><button class="btn" onclick="chequePropioAgregar()">Agregar a la orden</button>'+
       '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
   try{ dlg2().showModal(); }catch(e){}
+  chequeraCuenta();
+}
+/* si la chequera tiene una cuenta asignada, la cuenta se completa sola; si no,
+   Gilda elige de cual sale. Sin esto, una chequera sin cuenta frenaba el pago. */
+function chequeraCuenta(){
+  const q = (CHEQUERAS||[]).find(x=>String(x.id)===String(($("cp_chequera")||{}).value));
+  const el = $("cp_cuenta");
+  if (q && q.cuenta_id && el) el.value = String(q.cuenta_id);
 }
 function chequePropioAgregar(){
   const err = t => { const e=$("cpmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
@@ -7588,7 +7598,9 @@ function chequePropioAgregar(){
   if (!venc) return err("Falta la fecha de cobro del cheque.");
   const qid = ($("cp_chequera")||{}).value||null;
   const q = (CHEQUERAS||[]).find(x=>String(x.id)===String(qid)) || {};
-  PAG.medios.push({tipo:"cheque_propio", cuenta_id:q.cuenta_id||null, importe:imp, cotizacion:null,
+  const cta = ($("cp_cuenta")||{}).value || q.cuenta_id || null;
+  if (!cta) return err("Elegí de qué cuenta sale el cheque.");
+  PAG.medios.push({tipo:"cheque_propio", cuenta_id:cta, importe:imp, cotizacion:null,
     detalle:"Cheque propio "+nro.trim(),
     cheque:{chequera_id:qid, numero:nro.trim(), importe:imp, fecha:($("cp_fecha")||{}).value||hoy(),
             vencimiento:venc, banco_id:q.banco_id||null, sucursal_id:q.sucursal_id||null,
