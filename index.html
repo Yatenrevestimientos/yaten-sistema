@@ -85,7 +85,9 @@ thead th{position:sticky;top:0;background:#f4f1ea;z-index:2;font-size:12px;font-
    porque el color lo llevan las celdas y tapan al de la fila. */
 tbody tr:nth-child(even){background:var(--cebra)}
 tbody tr:hover{background:#eae4d9}
-tbody tr:hover td{background:transparent}
+/* el renglon de la planilla tiene color propio en cada celda: el resaltado va
+   por encima, como un velo, para no borrarle el color de la etapa */
+tbody tr:hover td{box-shadow:inset 0 0 0 999px rgba(36,57,60,.07)}
 .b-e{background:var(--entrada)}.b-v{background:var(--visita)}.b-s{background:var(--venta)}.b-u{background:var(--segui)}
 .grupo th{text-align:center;font-family:Georgia,serif;font-size:12px;letter-spacing:.08em;color:var(--petroleo);border-bottom:2px solid var(--linea)}
 /* Ordenar haciendo clic en el título de la columna. Pedido de Gilda, 7/8/2026. */
@@ -221,7 +223,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-114";
+const VERSION = "v2026.08.13-115";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
