@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-108";
+const VERSION = "v2026.08.13-109";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -213,7 +213,18 @@ const fmtM = (n,m) => (n==null||n===0||n==="")?"":(m==="USD"?"US$ ":"$ ")+Number
    dice algo, la casilla en blanco no dice nada. */
 const fmtM0 = (n,m) => (m==="USD"?"US$ ":"$ ")+Number(n||0).toLocaleString("es-AR",{maximumFractionDigits:0});
 /* Comprobante: si no hay punto de venta no se escribe el guión suelto */
-const nroComp = x => [x.punto_venta, x.nro_comprobante].filter(function(v){ return v!==null && v!==undefined && String(v)!==""; }).join("-") || "sin número";
+/* 13/8, Gilda: en la columna de comprobantes tiene que verse QUÉ comprobante es,
+   no solo el número. F factura · NC nota de crédito · ND nota de débito ·
+   OP orden de pago. Es como se los nombra en administración. */
+function letraComp(x){
+  const t = String(x.tipo||"").toLowerCase();
+  if (x.__op) return "OP";
+  if (t.indexOf("credito") >= 0 || t.indexOf("crédito") >= 0) return "NC";
+  if (t.indexOf("debito")  >= 0 || t.indexOf("débito")  >= 0) return "ND";
+  return "F";
+}
+const nroSolo = x => [x.punto_venta, x.nro_comprobante].filter(function(v){ return v!==null && v!==undefined && String(v)!==""; }).join("-") || "sin número";
+const nroComp = x => letraComp(x)+" "+nroSolo(x);
 const fmtF = d => d? String(d).slice(0,10).split("-").reverse().join("/") : "";
 const hoy  = () => new Date().toISOString().slice(0,10);
 const nom  = (arr,id) => { const x=(arr||[]).find(o=>o.id==id); return x?x.nombre:""; };
@@ -534,7 +545,7 @@ const SUBMENU = {
     {id:"", t:"Órdenes de Compra", perm:"compra-consultar|compra-orden"},
     {id:"facturas", t:"Facturas de Compras", perm:"compra-consultar"},
     {id:"notas", t:"Notas de crédito y débito", perm:"compra-consultar"},
-    {id:"pagos", t:"Pagos de Compras", perm:"compra-consultar"}
+    {id:"pagos", t:"Pago a proveedores", perm:"compra-consultar"}
   ],
   presup: [
     {id:"", t:"Abiertos"},
@@ -1973,7 +1984,7 @@ const MAESTRAS = [
      Pirka tiene CINCO listas de conceptos separadas, no una. Cada una alimenta
      un formulario distinto, por eso no se pueden mezclar. */
   {k:"cpa", extra:true, tabla:"conceptos_pago", titulo:"Concepto de Pago",
-   ayuda:"Con qué criterio le pagás al proveedor: pago a cuenta, cancelación de factura, anticipo, seña. Aparece en el formulario de pago de compras.",
+   ayuda:"Con qué criterio le pagás al proveedor: pago a cuenta, cancelación de factura, anticipo, seña. Aparece en el formulario de pago a proveedores.",
    cols:[]},
   {k:"cin", extra:true, tabla:"conceptos_ingreso", titulo:"Concepto de Ingresos",
    ayuda:"Plata que entra y no es cobranza de un cliente: aporte de socio, devolución, venta de un bien, intereses. Sin esta lista todo ingreso raro termina cargado como cobranza y ensucia la cuenta corriente.",
@@ -6055,7 +6066,7 @@ function seccionOCProv(p, ocs, facs){
         '<td><b>'+fmtM(x.total,x.moneda)+'</b></td>'+
         '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':esc(x.estado||""))+'</td>'+
         '<td>'+(f? '<span class="pill ok">'+esc(nroComp(f))+'</span>' : '<span class="muted">sin facturar</span>')+'</td>'+
-        '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="verOrdenCompra('+x.id+')">Ver</button>'+
+        '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="_VOLVER_PROV={id:'+p.id+',tab:\'ocs\'}; verOrdenCompra('+x.id+')">Ver</button>'+
           (!x.anulado && x.estado!=="Recibida" && P("stock-modificar")? ' <button class="btn2 btn-sm" onclick="formRecepcion('+x.id+')">Recibir</button>':'')+
         '</td></tr>';
      }).join("")+'</tbody></table></div>' : '');
@@ -6107,7 +6118,7 @@ async function verOrdenCompra(id){
      (!x.anulado && x.estado!=="Recibida" && P("stock-modificar")?'<button class="btn2" onclick="formRecepcion('+x.id+')">Recibir mercadería</button>':'')+
      '<button class="btn2" onclick="imprimirOC('+x.id+')">Imprimir / PDF</button>'+
      (!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularOC('+x.id+')">Anular</button>':'')+
-     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button>'+
+     '<button class="btn2" onclick="cerrarVolviendo()">Cerrar</button>'+
    '</div>';
   try{ $("dlg").showModal(); }catch(e){}
 }
@@ -6154,7 +6165,7 @@ function estadoFactura(f, pagado){
   const total = Number(f.total||0), pg = Number(pagado||0);
   if (pg <= 0.009) return {t:"Pendiente", c:"#7a2415"};
   if (pg >= total - 0.009) return {t:"Paga", c:"#1d5b2c"};
-  return {t:"Paga en parte", c:"#8a6d1f"};
+  return {t:"Pago parcial", c:"#8a6d1f"};
 }
 function seccionFactProv(p, facs, nots, imput){
   const vivas = facs.filter(x=>!x.anulado);
@@ -6172,19 +6183,20 @@ function seccionFactProv(p, facs, nots, imput){
         '<td>'+(pg?fmtM(pg,f.moneda):'<span class="muted">—</span>')+'</td>'+
         '<td>'+(f.anulado?'<span class="muted">—</span>':fmtM0(sal,f.moneda))+'</td>'+
         '<td><b style="color:'+e.c+'">'+e.t+'</b></td>'+
-        '<td><button class="btn2 btn-sm" onclick="verFactura('+f.id+')">Ver</button></td></tr>';
+        '<td><button class="btn2 btn-sm" onclick="_VOLVER_PROV={id:'+p.id+',tab:\'facturas\'}; verFactura('+f.id+')">Ver</button></td></tr>';
      }).join("")+'</tbody></table></div>' : '<div class="muted">Todavía no se cargó ninguna factura de este proveedor.</div>')+
    '<div class="sec">Notas de crédito y débito</div>'+
    (nots.length? '<div class="tablewrap" style="max-height:26dvh;overflow:auto"><table><thead><tr>'+
      ['Tipo','Comprobante','Fecha','Total',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      nots.map(function(n){
        return '<tr'+(n.anulado?' style="opacity:.45;text-decoration:line-through"':'')+'>'+
-        '<td><b>'+esc(n.tipo)+'</b></td><td>'+esc(nroComp(n))+'</td>'+
+        '<td><b>'+letraComp(n)+' · '+esc(n.tipo)+'</b></td><td>'+esc(nroComp(n))+'</td>'+
         '<td>'+fmtF(n.fecha)+'</td><td>'+fmtM(n.total,n.moneda)+'</td>'+
-        '<td>'+(n.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularNota('+n.id+')">Anular</button>':''))+'</td></tr>';
+        '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="_VOLVER_PROV={id:'+p.id+',tab:\'facturas\'}; verNota('+n.id+')">Ver</button> '+
+        (n.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>';
      }).join("")+'</tbody></table></div>' : '<div class="muted">Sin notas de crédito ni de débito.</div>')+
    (P("compra-modificar")?'<div class="acciones"><button class="btn2" onclick="formFacturaCompra()">+ Factura de compra</button>'+
-     '<button class="btn2" onclick="formPagoCompra('+p.id+')">+ Pago a este proveedor</button></div>':'');
+     '<button class="btn2" onclick="formPagoCompra('+p.id+')">+ Pago a proveedor</button></div>':'');
 }
 
 function seccionPreciosProv(p, precios){
@@ -6242,6 +6254,22 @@ function ccCalcular(mov, m){
   });
   return {saldoAnterior:saldoAnterior, filas:filas, saldoFinal:acum, anulados:anulados, total:dentro.length};
 }
+/* Desde un renglón de la cuenta corriente, abrir el comprobante que lo generó:
+   la orden de pago, la factura o la nota. Al cerrar vuelve al proveedor. */
+function verMovProv(tipo, ref, provId){
+  _VOLVER_PROV = {id:provId, tab:"cc"};
+  if (tipo === "pago") return verPagoCompra(ref);
+  if (tipo === "factura") return verFactura(ref);
+  if (tipo === "nota") return verNota(ref);
+}
+function btnVerMov(x, provId){
+  if (!x.ref_id) return "";
+  const o = String(x.origen||"").toLowerCase();
+  const t = o.indexOf("pago") >= 0 ? "pago" : o.indexOf("factura") >= 0 ? "factura" : o.indexOf("nota") >= 0 ? "nota" : "";
+  if (!t) return "";
+  const rot = t === "pago" ? "Ver OP" : "Ver";
+  return ' <button class="btn2 btn-sm" onclick="verMovProv(\''+t+'\','+x.ref_id+','+provId+')">'+rot+'</button>';
+}
 function seccionCCProv(p, mov){
   const puede = P("compra-modificar");
   const bloque = function(m){
@@ -6268,7 +6296,7 @@ function seccionCCProv(p, mov){
       visibles.map(function(f){
         const x = f.mov;
         return '<tr><td>'+fmtF(x.fecha)+'</td>'+
-          '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+'</td>'+
+          '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+btnVerMov(x,p.id)+'</td>'+
           '<td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td><td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td>'+
           '<td><b>'+fmtM0(f.saldo,m)+'</b></td>'+
           (P("finanzas-anular")?'<td>'+(x.ref_id
@@ -6424,7 +6452,7 @@ VISTAS.compras = async function(){
   /* Sin barra de solapas: se navega solo desde el menú lateral. El título dice
      en qué pantalla estás, que antes lo decía la solapa marcada. */
   const rotC = {ordenes:"Órdenes de Compra", facturas:"Facturas de Compras",
-                notas:"Notas de crédito y débito", pagos:"Pagos de Compras"}[COM.tab] || "Compras";
+                notas:"Notas de crédito y débito", pagos:"Pago a proveedores · Órdenes de Pago"}[COM.tab] || "Compras";
   $("main").innerHTML = '<h2 style="margin:0 0 14px;font-size:19px">'+esc(rotC)+'</h2>'+
     '<div id="cbody"><div class="muted">Cargando…</div></div>';
   ({ordenes:comOrdenes, facturas:comFacturas, notas:comNotas, pagos:comPagos}[COM.tab]||comOrdenes)();
@@ -6475,7 +6503,7 @@ async function comFacturas(){
   const {data} = await sb.from("facturas_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
   const rows = (data||[]).filter(x=>aplicaFiltro(x, (x.punto_venta||"")+" "+(x.nro_comprobante||"")));
   const tot = {}; rows.filter(x=>!x.anulado).forEach(x=>{ const m=x.moneda; tot[m]=tot[m]||{n:0,i:0,t:0}; tot[m].n+=Number(x.neto||0); tot[m].i+=Number(x.impuestos||0); tot[m].t+=Number(x.total||0); });
-  $("cbody").innerHTML = '<div class="desc">Cada factura de compra le suma deuda al proveedor. <b>Por ahora los impuestos se cargan en una sola casilla</b>: el detalle por impuesto —IVA, percepciones, ingresos brutos, derechos de aduana— está pendiente de construir.</div>'+
+  $("cbody").innerHTML = '<div class="desc">Cada factura de compra le suma deuda al proveedor. Los impuestos se cargan uno por uno —IVA, percepciones, ingresos brutos, derechos de aduana—, cada uno con su base y su alícuota. Hacé clic en cualquier renglón para ver la factura.</div>'+
    filtrosCompra("fc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formFacturaCompra()">+ Factura de compra</button></div>':'')+'</div>'+
    (Object.keys(tot).length? '<div class="kpis">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m].t,m)+'</div><div class="muted">neto '+fmtM(tot[m].n,m)+' · impuestos '+fmtM(tot[m].i,m)+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
@@ -6496,10 +6524,11 @@ async function comNotas(){
    filtrosCompra("np")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formNotaProv()">+ Nota</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
      ['Tipo','Punto vta.','Número','Proveedor','Fecha','Neto','Impuestos','Total','Moneda',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.tipo)+'</b></td><td>'+esc(x.punto_venta)+'</td><td>'+esc(x.nro_comprobante)+'</td>'+
+     rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+letraComp(x)+' · '+esc(x.tipo)+'</b></td><td>'+esc(x.punto_venta)+'</td><td>'+esc(x.nro_comprobante)+'</td>'+
        '<td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
        '<td>'+fmtM(x.neto,x.moneda)+'</td><td>'+fmtM(x.impuestos,x.moneda)+'</td><td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td>'+
-       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularNota('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
+       '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="verNota('+x.id+')">Ver</button> '+
+       (x.anulado?'<span class="pill no">Anulada</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularNota('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">No hay notas con esos filtros.</div>');
   engancharFiltros("np");
 }
@@ -6508,13 +6537,15 @@ async function comPagos(){
   const {data} = await sb.from("pagos_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
   const rows = (data||[]).filter(x=>aplicaFiltro(x, x.codigo));
   $("cbody").innerHTML = '<div class="desc">La plata que le sale al negocio para pagarle al proveedor. Baja la deuda con él y baja el saldo de la cuenta de donde sale, en una sola operación.</div>'+
-   filtrosCompra("pg")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formPagoCompra()">+ Pago</button></div>':'')+'</div>'+
+   filtrosCompra("pg")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formPagoCompra()">+ Pago a proveedor</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Proveedor','Fecha','Importe','Moneda','Sale de','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
        '<td><b>'+fmtM(x.importe,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(nom(CTAS,x.cuenta_id))+'</td>'+
        '<td style="white-space:normal">'+esc(x.observaciones)+'</td>'+
-       '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularPago('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
+       '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="verPagoCompra('+x.id+')">Ver</button> '+
+       '<button class="btn2 btn-sm" onclick="imprimirPagoCompra('+x.id+')">Imprimir</button> '+
+       (x.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularPago('+x.id+')">Anular</button>':''))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">No hay pagos con esos filtros.</div>');
   engancharFiltros("pg");
 }
@@ -6680,11 +6711,29 @@ function facImpTipo(k){
   facRecalcular(k);
   pintarFacImp();
 }
-/* base × porcentaje = importe */
+/* base × porcentaje = importe
+   ══ Bug que reportó Gilda el 13/8 ══
+   «Con dos impuestos de distinta base no deja editar varios dígitos de corrido,
+   se traba.» Era esto: cada tecla llamaba a pintarFacImp(), que redibuja TODA la
+   tabla — el casillero que estabas usando se destruía y se volvía a crear, así
+   que el cursor se perdía y solo entraba un dígito por vez.
+   Ahora mientras se escribe NO se redibuja nada: se recalcula y se actualizan
+   solo los casilleros que no están en uso, más el total. */
 function facCalcImporte(k){
   facSincro();
   facRecalcular(k);
-  pintarFacImp();
+  facRefrescarFila(k);
+  pintarFacTot();
+}
+/* Escribe los valores calculados sin tocar el casillero donde está el cursor */
+function facRefrescarFila(k){
+  const x = FAC.imp[k]; if (!x) return;
+  [["_importe","importe"],["_base","base"],["_pct","porcentaje"]].forEach(function(par){
+    const el = $("fi_"+k+par[0]);
+    if (!el || el === document.activeElement) return;
+    const v = x[par[1]];
+    el.value = (v==null || v==="") ? "" : v;
+  });
 }
 function facRecalcular(k){
   const x = FAC.imp[k];
@@ -6698,7 +6747,8 @@ function facImporteAMano(k){
   const x = FAC.imp[k];
   if (x.base == null) x.base = Number(FAC.neto||0) || null;
   if (x.base) x.porcentaje = dos(Number(x.importe||0) * 100 / Number(x.base));
-  pintarFacImp();
+  facRefrescarFila(k);
+  pintarFacTot();
 }
 function facImpAgregar(){
   facSincro();
@@ -6772,6 +6822,13 @@ async function guardarFactura(){
   }
   $("dlg").close(); await cargarProveedores(); VISTAS.compras();
 }
+/* 13/8, Gilda: «al cerrar la consulta VER, que no salga del proveedor». Se
+   recuerda de dónde se entró y el botón Cerrar vuelve ahí, no al vacío. */
+let _VOLVER_PROV = null;
+function cerrarVolviendo(){
+  if (_VOLVER_PROV){ const p = _VOLVER_PROV; _VOLVER_PROV = null; fichaProveedor(p.id, p.tab); return; }
+  document.getElementById("dlg").close();
+}
 async function verFactura(id){
   const [f,i,im] = await Promise.all([
     sb.from("facturas_compra").select("*").eq("id",id).single(),
@@ -6842,9 +6899,163 @@ async function verFactura(id){
    (!x.anulado && saldoFac > 0.009 && P("compra-modificar")?'<button class="btn" onclick="formPagoCompra('+x.proveedor_id+')">Pagar esta factura</button>':'')+
    '<button class="btn2" onclick="imprimirFacturaCompra('+x.id+')">Imprimir / PDF</button>'+
    (!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularFactura('+x.id+')">Anular factura</button>':'')+
-   '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
+   '<button class="btn2" onclick="cerrarVolviendo()">Cerrar</button></div>';
   try{ $("dlg").showModal(); }catch(e){}
 }
+/* ══ La Orden de Pago (13/8, Gilda) ══
+   El comprobante que documenta un pago a proveedor: a quién se le paga, qué
+   comprobantes cancela y con qué se paga. Se consulta desde la cuenta corriente
+   y desde el listado, igual que una factura. */
+async function verPagoCompra(id){
+  const [p, im] = await Promise.all([
+    sb.from("pagos_compra").select("*").eq("id",id).single(),
+    sb.from("pago_imputaciones").select("*").eq("pago_id",id)
+  ]);
+  if (p.error) return alert(p.error.message);
+  const x = p.data, imps = im.data||[];
+  if (!PROVS.length) await cargarProveedores();
+  if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
+  let facs = [];
+  if (imps.length){
+    const f = await sb.from("facturas_compra").select("*").in("id", imps.map(y=>y.factura_id));
+    facs = f.data||[];
+  }
+  const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
+  const imputado = imps.reduce(function(a,y){ return a+Number(y.importe||0); },0);
+  const sinImputar = Number(x.importe||0) - imputado;
+  $("dtit").textContent = "Orden de Pago "+esc(x.codigo||("#"+x.id))+" · "+nomProv(x.proveedor_id);
+  $("dbody").innerHTML =
+   (x.anulado?'<div class="msg err">Orden de pago <b>anulada</b>. Motivo: '+esc(x.motivo_anulacion||"sin motivo")+'</div>':'')+
+   '<div class="sec">Datos del comprobante</div><div class="grid">'+
+     '<div class="f"><label>Número</label><div><b>'+esc(x.codigo||("#"+x.id))+'</b></div></div>'+
+     '<div class="f"><label>Proveedor</label><div>'+esc(nomProv(x.proveedor_id))+'</div></div>'+
+     '<div class="f"><label>Fecha</label><div>'+fmtF(x.fecha)+'</div></div>'+
+     '<div class="f"><label>Importe</label><div><b>'+fmtM0(x.importe,x.moneda)+'</b></div></div>'+
+   '</div>'+
+   '<div class="sec">Comprobantes que cancela</div>'+
+   (imps.length? '<div class="tablewrap"><table><thead><tr><th>Comprobante</th><th>Fecha</th><th>Total</th><th style="text-align:right">Imputado</th><th></th></tr></thead><tbody>'+
+     imps.map(function(y){
+       const f = facs.find(z=>String(z.id)===String(y.factura_id)) || {};
+       return '<tr><td><b>'+esc(f.id?nroComp(f):("factura #"+y.factura_id))+'</b></td>'+
+         '<td>'+fmtF(f.fecha)+'</td><td>'+fmtM0(f.total,x.moneda)+'</td>'+
+         '<td style="text-align:right"><b>'+fmtM0(y.importe,x.moneda)+'</b></td>'+
+         '<td>'+(f.id?'<button class="btn2 btn-sm" onclick="verFactura('+f.id+')">Ver</button>':'')+'</td></tr>';
+     }).join("")+
+     '<tr style="background:#f6f3ee"><td colspan="3"><b>Imputado</b></td><td style="text-align:right"><b>'+fmtM0(imputado,x.moneda)+'</b></td><td></td></tr>'+
+     (Math.abs(sinImputar) > 0.009 ? '<tr><td colspan="3" class="muted">Sin imputar a ningún comprobante</td><td style="text-align:right">'+fmtM0(sinImputar,x.moneda)+'</td><td></td></tr>' : '')+
+     '</tbody></table></div>'
+    : '<div class="muted">Este pago no se imputó a ningún comprobante: bajó la deuda general del proveedor.</div>')+
+   '<div class="sec">Forma de pago</div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Sale de</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
+     '<tr><td>'+esc(cta?cta.nombre:"—")+'</td><td style="text-align:right"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
+   '</tbody></table></div>'+
+   (x.observaciones?'<div class="muted" style="margin-top:8px">'+esc(x.observaciones)+'</div>':'')+
+   selloAuditoria(x)+
+   '<div class="acciones">'+
+     '<button class="btn2" onclick="imprimirPagoCompra('+x.id+')">Imprimir / PDF</button>'+
+     (!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularPago('+x.id+')">Anular</button>':'')+
+     '<button class="btn2" onclick="cerrarVolviendo()">Cerrar</button>'+
+   '</div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+
+/* El comprobante impreso, en las tres partes que pidió Gilda: encabezado con el
+   número y el proveedor · qué cancela · con qué se paga. */
+async function imprimirPagoCompra(id){
+  const [p, im] = await Promise.all([
+    sb.from("pagos_compra").select("*").eq("id",id).single(),
+    sb.from("pago_imputaciones").select("*").eq("pago_id",id)
+  ]);
+  if (p.error) return alert(p.error.message);
+  const x = p.data, imps = im.data||[];
+  if (!PROVS.length) await cargarProveedores();
+  if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
+  let facs = [];
+  if (imps.length){
+    const f = await sb.from("facturas_compra").select("*").in("id", imps.map(y=>y.factura_id));
+    facs = f.data||[];
+  }
+  const pv = PROVS.find(y=>y.id===x.proveedor_id) || {};
+  const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
+  const imputado = imps.reduce(function(a,y){ return a+Number(y.importe||0); },0);
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Orden de Pago '+esc(x.codigo||"")+'</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:30px;max-width:780px}'+
+   'table{width:100%;border-collapse:collapse;margin:6px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border-top:2px solid #24393C;font-size:13px}'+
+   'h3{margin:16px 0 4px;font-size:13px;color:#24393C}'+
+   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:9px 11px;margin:12px 0;background:#faf8f4}'+
+   '.firma{margin-top:46px;display:flex;gap:60px}.firma div{border-top:1px solid #999;padding-top:6px;flex:1;text-align:center;font-size:10px}'+
+   '.pie{margin-top:20px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '</style></head><body>'+
+   membrete('ORDEN DE PAGO '+esc(x.codigo||("#"+x.id))+' · '+fmtF(x.fecha))+
+   (x.anulado?'<div class="caja"><b>ORDEN DE PAGO ANULADA</b> — '+esc(x.motivo_anulacion||"")+'</div>':'')+
+   '<div class="caja"><b>'+esc(pv.nombre||"")+'</b>'+(pv.dni_cuit?' · CUIT '+esc(pv.dni_cuit):'')+
+     (pv.cat_iva?' · '+esc(pv.cat_iva):'')+(pv.direccion?'<br>'+esc(pv.direccion):'')+'</div>'+
+   '<h3>Comprobantes que cancela</h3>'+
+   (imps.length? '<table><thead><tr><th>Comprobante</th><th>Fecha</th><th class="r">Total</th><th class="r">Imputado</th></tr></thead><tbody>'+
+     imps.map(function(y){
+       const f = facs.find(z=>String(z.id)===String(y.factura_id)) || {};
+       return '<tr><td>'+esc(f.id?nroComp(f):("factura #"+y.factura_id))+'</td><td>'+fmtF(f.fecha)+'</td>'+
+         '<td class="r">'+fmtM0(f.total,x.moneda)+'</td><td class="r">'+fmtM0(y.importe,x.moneda)+'</td></tr>';
+     }).join("")+
+     '<tr class="tot"><td colspan="3" class="r"><b>IMPUTADO</b></td><td class="r"><b>'+fmtM0(imputado,x.moneda)+'</b></td></tr>'+
+     '</tbody></table>'
+    : '<div>Sin imputar a comprobantes: baja la deuda general del proveedor.</div>')+
+   '<h3>Forma de pago</h3>'+
+   '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
+     '<tr><td>'+esc(cta?cta.nombre:"—")+'</td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>'+
+     '<tr class="tot"><td class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
+   '</tbody></table>'+
+   (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
+   '<div class="firma"><div>Firma y aclaración de quien paga</div><div>Recibí conforme</div></div>'+
+   '<div class="pie">Emitida por '+esc(quienEs(x.creado_por))+(x.creado_en?' el '+fmtF(x.creado_en):'')+'.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
+
+/* La nota de crédito o débito, para consultarla como una factura */
+async function verNota(id){
+  const [n, i] = await Promise.all([
+    sb.from("notas_proveedor").select("*").eq("id",id).single(),
+    sb.from("nota_impuestos").select("*").eq("nota_id",id).order("id")
+  ]);
+  if (n.error) return alert(n.error.message);
+  const x = n.data, imps = i.data||[];
+  if (!PROVS.length) await cargarProveedores();
+  if (!TIMP.length){ const t = await sb.from("tipos_impuesto").select("*").order("id"); TIMP = t.data||[]; }
+  const esCred = String(x.tipo||"").toLowerCase().indexOf("cred") >= 0;
+  $("dtit").textContent = (esCred?"Nota de Crédito ":"Nota de Débito ")+nroSolo(x)+" · "+nomProv(x.proveedor_id);
+  $("dbody").innerHTML =
+   (x.anulado?'<div class="msg err">Nota <b>anulada</b>. Motivo: '+esc(x.motivo_anulacion||"sin motivo")+'</div>':'')+
+   '<div class="grid">'+
+     '<div class="f"><label>Tipo</label><div><b>'+(esCred?"Nota de Crédito":"Nota de Débito")+'</b></div></div>'+
+     '<div class="f"><label>Proveedor</label><div>'+esc(nomProv(x.proveedor_id))+'</div></div>'+
+     '<div class="f"><label>Comprobante</label><div>'+esc(nroSolo(x))+'</div></div>'+
+     '<div class="f"><label>Fecha</label><div>'+fmtF(x.fecha)+'</div></div>'+
+     '<div class="f"><label>Neto</label><div>'+fmtM0(x.neto,x.moneda)+'</div></div>'+
+     '<div class="f"><label>Total</label><div><b>'+fmtM0(x.total,x.moneda)+'</b></div></div>'+
+   '</div>'+
+   '<div class="sec">Impuestos del comprobante</div>'+
+   (imps.length? '<div class="tablewrap"><table><thead><tr><th>Impuesto</th><th>Detalle</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
+     imps.map(t=>'<tr><td>'+esc(nom(TIMP,t.tipo_impuesto_id)||"Sin especificar")+'</td>'+
+       '<td>'+esc(t.detalle)+'</td><td style="text-align:right">'+fmtM0(t.importe,x.moneda)+'</td></tr>').join("")+
+     '</tbody></table></div>'
+    : '<div class="muted">Esta nota no tiene el detalle de impuestos cargado.</div>')+
+   '<div class="muted" style="margin-top:8px">'+(esCred
+     ? 'Una nota de crédito <b>baja</b> lo que le debemos al proveedor.'
+     : 'Una nota de débito <b>sube</b> lo que le debemos al proveedor.')+'</div>'+
+   selloAuditoria(x)+
+   '<div class="acciones">'+
+     (!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularNota('+x.id+')">Anular</button>':'')+
+     '<button class="btn2" onclick="cerrarVolviendo()">Cerrar</button>'+
+   '</div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+
 /* La factura de compra, impresa. Es el comprobante que Gilda archiva y el que se
    adjunta cuando hay que discutir un saldo con el proveedor. */
 async function imprimirFacturaCompra(id){
@@ -6910,35 +7121,140 @@ async function anularFactura(id){
 
 /* ─── Nota de crédito / débito ─── */
 let NOT = null;
+/* 13/8, Gilda: «la nota de crédito/débito no detalla qué impuesto ni la
+   alícuota». Ahora la nota carga los impuestos uno por uno igual que la
+   factura: impuesto, base, porcentaje e importe. La base y el porcentaje se
+   dejan escritos en el detalle, para que se lean en la consulta. */
 function formNotaProv(){
   $("dtit").textContent = "Nota de crédito o débito";
   if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
   NOT = {proveedor_id:null, tipo:"Credito", punto_venta:"", nro:"", fecha:hoy(), moneda:"ARS", neto:0, obs:"", imp:[]};
+  pintarNot(); try{ $("dlg").showModal(); }catch(e){}
+}
+function pintarNot(){
   $("dbody").innerHTML = '<div id="notmsg"></div>'+
    '<div class="grid">'+
-     '<div class="f"><label>Proveedor *</label><select id="nt_prov">'+selProv(null)+'</select></div>'+
-     '<div class="f"><label>Tipo *</label><select id="nt_tipo"><option value="Credito">Crédito — le debemos menos</option><option value="Debito">Débito — le debemos más</option></select></div>'+
-     '<div class="f"><label>Punto de venta</label><input id="nt_pv"></div>'+
-     '<div class="f"><label>Número</label><input id="nt_nro"></div>'+
-     '<div class="f"><label>Fecha</label><input type="date" id="nt_fecha" value="'+hoy()+'"></div>'+
-     '<div class="f"><label>Moneda</label><select id="nt_moneda"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>'+
-     '<div class="f"><label>Neto *</label><input type="number" step="0.01" id="nt_neto"></div>'+
-     '<div class="f"><label>IVA u otros impuestos</label><input type="number" step="0.01" id="nt_imp" placeholder="0"></div>'+
+     '<div class="f"><label>Proveedor *</label><select id="nt_prov">'+selProv(NOT.proveedor_id)+'</select></div>'+
+     '<div class="f"><label>Tipo *</label><select id="nt_tipo"><option value="Credito" '+(NOT.tipo==="Credito"?"selected":"")+'>Nota de Crédito — le debemos menos</option><option value="Debito" '+(NOT.tipo==="Debito"?"selected":"")+'>Nota de Débito — le debemos más</option></select></div>'+
+     '<div class="f"><label>Punto de venta</label><input id="nt_pv" value="'+esc(NOT.punto_venta)+'" placeholder="0001"></div>'+
+     '<div class="f"><label>Número</label><input id="nt_nro" value="'+esc(NOT.nro)+'" placeholder="00001234"></div>'+
+     '<div class="f"><label>Fecha</label><input type="date" id="nt_fecha" value="'+NOT.fecha+'"></div>'+
+     '<div class="f"><label>Moneda</label><select id="nt_moneda"><option value="ARS" '+(NOT.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(NOT.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
+     '<div class="f"><label>Neto *</label><input type="number" step="0.01" id="nt_neto" value="'+(NOT.neto||"")+'" oninput="notSincro()"></div>'+
    '</div>'+
-   '<div class="f"><label>Observaciones</label><input id="nt_obs" placeholder="Por qué se emite"></div>'+
-   '<div class="acciones"><button class="btn" onclick="guardarNota()">Registrar nota</button>'+
+   '<div class="sec">Impuestos del comprobante</div>'+
+   '<div class="muted" style="margin-bottom:8px">Cargá cada impuesto por separado, como viene en la nota. Elegís el impuesto y <b>el importe se calcula solo</b> sobre la base. Si en el papel viene otro número, pisalo y el porcentaje se recalcula solo.</div>'+
+   '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="notImpAgregar()">+ Impuesto</button></div>'+
+   '<div id="nt_imps"></div>'+
+   '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="nt_obs" value="'+esc(NOT.obs)+'" placeholder="Por qué se emite"></div>'+
+   '<div id="nt_tot" style="margin-top:8px"></div>'+
+   '<div class="acciones"><button class="btn" id="nt_guardar" onclick="guardarNota()">Registrar nota</button>'+
    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
-  try{ $("dlg").showModal(); }catch(e){}
+  pintarNotImp();
+}
+function notSincro(){
+  NOT.imp.forEach(function(x,k){
+    const t=$("ni_"+k+"_tipo"), d=$("ni_"+k+"_detalle"), i=$("ni_"+k+"_importe"),
+          b=$("ni_"+k+"_base"), pc=$("ni_"+k+"_pct");
+    if (t) x.tipo_impuesto_id = t.value||null;
+    if (d) x.detalle = d.value;
+    if (b) x.base = b.value===""?null:Number(b.value);
+    if (pc) x.porcentaje = pc.value===""?null:Number(pc.value);
+    if (i) x.importe = i.value===""?0:Number(i.value);
+  });
+  ["prov","tipo","pv","nro","fecha","moneda","neto","obs"].forEach(function(c){
+    const el=$("nt_"+c); if(!el) return;
+    if (c==="prov") NOT.proveedor_id=el.value||null;
+    else if (c==="pv") NOT.punto_venta=el.value;
+    else if (c==="neto") NOT.neto=el.value===""?0:Number(el.value);
+    else NOT[c]=el.value;
+  });
+  pintarNotTot();
+}
+function notRecalcular(k){
+  const x = NOT.imp[k];
+  if (x.base == null) x.base = Number(NOT.neto||0) || null;
+  if (x.base != null && x.porcentaje != null) x.importe = dos(Number(x.base) * Number(x.porcentaje) / 100);
+}
+/* mismo criterio que en la factura: mientras se escribe no se redibuja la tabla,
+   así no se pierde el cursor entre dígito y dígito */
+function notRefrescarFila(k){
+  const x = NOT.imp[k]; if (!x) return;
+  [["_importe","importe"],["_base","base"],["_pct","porcentaje"]].forEach(function(par){
+    const el = $("ni_"+k+par[0]);
+    if (!el || el === document.activeElement) return;
+    const v = x[par[1]];
+    el.value = (v==null || v==="") ? "" : v;
+  });
+}
+function notCalcImporte(k){ notSincro(); notRecalcular(k); notRefrescarFila(k); pintarNotTot(); }
+function notImporteAMano(k){
+  notSincro();
+  const x = NOT.imp[k];
+  if (x.base == null) x.base = Number(NOT.neto||0) || null;
+  if (x.base) x.porcentaje = dos(Number(x.importe||0) * 100 / Number(x.base));
+  notRefrescarFila(k); pintarNotTot();
+}
+function notImpTipo(k){
+  notSincro();
+  const x = NOT.imp[k];
+  const t = TIMP.find(y=>String(y.id)===String(x.tipo_impuesto_id));
+  if (t && t.porcentaje != null) x.porcentaje = Number(t.porcentaje);
+  if (x.base == null) x.base = Number(NOT.neto||0) || null;
+  notRecalcular(k); pintarNotImp();
+}
+function notImpAgregar(){
+  notSincro();
+  NOT.imp.push({tipo_impuesto_id:null, detalle:"", importe:0, base:Number(NOT.neto||0)||null, porcentaje:null});
+  pintarNotImp();
+}
+function notImpQuitar(k){ notSincro(); NOT.imp.splice(k,1); pintarNotImp(); }
+function pintarNotImp(){
+  const el = $("nt_imps"); if (!el) return;
+  el.innerHTML = !NOT.imp.length ? '<div class="muted">Sin impuestos. Si la nota es solo por el neto, dejalo así.</div>' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Impuesto</th><th>Base</th><th>%</th><th>Importe</th><th style="min-width:140px">Detalle</th><th></th></tr></thead><tbody>'+
+   NOT.imp.map(function(x,k){
+     return '<tr><td><select style="width:100%" id="ni_'+k+'_tipo" onchange="notImpTipo('+k+')">'+selOpts(TIMP,x.tipo_impuesto_id)+'</select></td>'+
+     '<td><input type="number" step="0.01" style="width:120px" id="ni_'+k+'_base" value="'+(x.base==null?"":x.base)+'" oninput="notCalcImporte('+k+')" title="Sobre qué monto se calcula. Arranca en el neto de la nota."></td>'+
+     '<td><input type="number" step="0.01" style="width:80px" id="ni_'+k+'_pct" value="'+(x.porcentaje==null?"":x.porcentaje)+'" oninput="notCalcImporte('+k+')"></td>'+
+     '<td><input type="number" step="0.01" style="width:130px" id="ni_'+k+'_importe" value="'+(x.importe||"")+'" oninput="notImporteAMano('+k+')" title="Se calcula solo. Si lo pisás a mano, el porcentaje se recalcula."></td>'+
+     '<td><input id="ni_'+k+'_detalle" value="'+esc(x.detalle)+'" oninput="notSincro()" placeholder="opcional"></td>'+
+     '<td><button class="btn2 btn-sm" onclick="notImpQuitar('+k+')">Quitar</button></td></tr>';
+   }).join("")+'</tbody></table></div>';
+  pintarNotTot();
+}
+function pintarNotTot(){
+  const m = NOT.moneda||"ARS";
+  const imp = NOT.imp.reduce((a,x)=>a+Number(x.importe||0),0);
+  const tot = Number(NOT.neto||0)+imp;
+  const el = $("nt_tot"); if (!el) return;
+  const esCred = String(NOT.tipo||"").toLowerCase().indexOf("cred") >= 0;
+  el.innerHTML = '<div class="tablewrap"><table><tbody>'+
+   '<tr><td>Neto</td><td style="text-align:right">'+(fmtM(NOT.neto,m)||"—")+'</td></tr>'+
+   '<tr><td>Impuestos</td><td style="text-align:right">'+(fmtM(imp,m)||"—")+'</td></tr>'+
+   '<tr style="background:#f6f3ee"><td><b>TOTAL de la nota</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(tot,m)||"—")+'</b></td></tr>'+
+   '</tbody></table></div>'+
+   '<div class="muted" style="margin-top:4px">'+(esCred?'Le vamos a deber <b>'+fmtM(tot,m)+' menos</b>.':'Le vamos a deber <b>'+fmtM(tot,m)+' más</b>.')+'</div>';
+  const b = $("nt_guardar"); if (b) b.textContent = tot>0 ? ("Registrar nota por "+fmtM(tot,m)) : "Registrar nota";
 }
 async function guardarNota(){
+  notSincro();
   const err = t => { $("notmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
-  const prov = $("nt_prov").value; if (!prov) return err("Elegí el proveedor.");
-  const neto = Number($("nt_neto").value||0); if (!(neto>0)) return err("El neto tiene que ser mayor a cero.");
-  const imp = Number($("nt_imp").value||0);
-  const {error} = await sb.rpc("registrar_nota_proveedor",{p_proveedor:Number(prov), p_tipo:$("nt_tipo").value,
-    p_punto_venta:$("nt_pv").value||null, p_nro:$("nt_nro").value||null, p_fecha:$("nt_fecha").value||hoy(),
-    p_moneda:$("nt_moneda").value, p_neto:neto,
-    p_impuestos: imp>0 ? [{tipo_impuesto_id:null, detalle:"Impuestos", importe:imp}] : [], p_obs:$("nt_obs").value||null});
+  if (!NOT.proveedor_id) return err("Elegí el proveedor.");
+  const neto = Number(NOT.neto||0); if (!(neto>0)) return err("El neto tiene que ser mayor a cero.");
+  /* la alícuota y la base quedan escritas en el detalle: la tabla de impuestos
+     de la nota no tiene columnas propias para eso */
+  const filas = NOT.imp.filter(x=>Number(x.importe)>0).map(function(x){
+    const partes = [];
+    if (x.detalle) partes.push(x.detalle);
+    if (x.porcentaje != null) partes.push(x.porcentaje+" %");
+    if (x.base != null) partes.push("sobre "+fmtM0(x.base, NOT.moneda));
+    return {tipo_impuesto_id: x.tipo_impuesto_id?Number(x.tipo_impuesto_id):null,
+            detalle: partes.join(" · ") || "Impuesto", importe: Number(x.importe)};
+  });
+  const {error} = await sb.rpc("registrar_nota_proveedor",{p_proveedor:Number(NOT.proveedor_id), p_tipo:NOT.tipo,
+    p_punto_venta:NOT.punto_venta||null, p_nro:NOT.nro||null, p_fecha:NOT.fecha||hoy(),
+    p_moneda:NOT.moneda, p_neto:neto, p_impuestos:filas, p_obs:NOT.obs||null});
   if (error) return err(error.message);
   $("dlg").close(); await cargarProveedores(); VISTAS.compras();
 }
@@ -6952,7 +7268,7 @@ async function anularNota(id){
 /* ─── Pago a proveedor ─── */
 let PAG = null;
 async function formPagoCompra(provId){
-  $("dtit").textContent = "Pago a proveedor";
+  $("dtit").textContent = "Orden de Pago · pago a proveedor";
   if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
   if (!CTAS.filter(c=>c.activo).length){ $("dbody").innerHTML = avisoSinCuentas("Un pago sale de una cuenta: primero tiene que existir la cuenta."); try{$("dlg").showModal();}catch(e){} return; }
   PAG = {proveedor_id:(provId||null), fecha:hoy(), moneda:"ARS", cuenta_id:null, importe:0, cotizacion:null, obs:"", facturas:[]};
