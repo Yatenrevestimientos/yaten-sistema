@@ -223,7 +223,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-115";
+const VERSION = "v2026.08.13-116";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -639,17 +639,26 @@ const SUBMENU = {
     {id:"horarios", t:"Horarios", perm:"maestra-modificar"},
     {id:"generales", t:"Configuraciones generales", perm:"maestra-modificar"},
     {id:"impresion", t:"Datos de impresión", perm:"maestra-modificar"},
-    {id:"copia", t:"Copia de seguridad", perm:"rol-modificar"},
+    {id:"copia", t:"Copia de seguridad", perm:"__dueno"},
     /* 11/8, después del bug de la venta que decía «Guardado» sin guardar: una
        pantalla que lo prueba sola, tabla por tabla, en un minuto. */
-    {id:"diag", t:"Autodiagnóstico", perm:"rol-modificar"}
+    {id:"diag", t:"Autodiagnóstico", perm:"__dueno"}
   ]
 };
 let SUBVISTA = "";
 /* El menú lateral: cada sección con opciones internas se despliega al tocarla,
    como en Pirka. Solo queda abierta la sección donde estás parado. */
 function pintarNav(){
-  const html = MENU.filter(m=>!m.perm||tieneAlguno(m.perm)).map(function(m){
+  /* 13/8: una sección que por adentro no tiene NINGUNA opción permitida no se
+     ofrece. A Rocío le seguía apareciendo «Configuración» y todo lo de adentro
+     pedía un permiso que ya no tiene: el único resultado posible era el cartel
+     de «no tenés permiso». Lo que no se puede ver, no se ofrece. */
+  const html = MENU.filter(function(m){
+    if (m.perm && !tieneAlguno(m.perm)) return false;
+    const todas = SUBMENU[m.id];
+    if (!todas || !todas.length) return true;
+    return todas.some(function(x){ return !x.perm || tieneAlguno(x.perm); });
+  }).map(function(m){
     const subs = (SUBMENU[m.id]||[]).filter(x=>!x.perm||tieneAlguno(x.perm));
     const acaEstoy = m.id===VISTA;
     if (!subs.length){
@@ -697,8 +706,18 @@ function pintarNav(){
 /* Un permiso puede escribirse «a|b»: alcanza con tener cualquiera de los dos.
    Sirve para pantallas que le corresponden a más de un rol por motivos
    distintos —Información la mira quien ve reportes y quien ve finanzas—. */
+/* 13/8: hay dos pantallas que no son «un permiso más», son del dueño y punto —
+   el autodiagnóstico y la copia de seguridad—. Estaban colgadas de
+   «rol-modificar», que en realidad quiere decir «puede repartir permisos». Eran
+   dos cosas distintas atadas al mismo cordón: al sacarle rol-modificar a VL y a
+   ADMIN por seguridad, se les cayó también el autodiagnóstico, sin que nadie lo
+   hubiera decidido. Ahora se escribe lo que se quiere decir: DUENO. */
 function tieneAlguno(perm){
-  return String(perm||"").split("|").some(function(p){ return P(p.trim()); });
+  return String(perm||"").split("|").some(function(p){
+    const c = p.trim();
+    if (c === "__dueno") return esDueno();
+    return P(c);
+  });
 }
 function permisoQueFalta(v, sub){
   const s = (SUBMENU[v]||[]).find(function(x){ return x.id === (sub||""); });
