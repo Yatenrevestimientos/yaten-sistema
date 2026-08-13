@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-106";
+const VERSION = "v2026.08.13-107";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2277,6 +2277,39 @@ async function correrDiagnostico(){
     else
       filas.push({t:fn.f+"()", q:"escribir por función", r:"ojo", d:"contestó algo distinto de lo esperado: "+(msg||"sin error")});
   }
+
+  /* ── 1 ter. Los permisos que abren la puerta grande (13/8) ──
+     Apareció así: Rocío corrió este diagnóstico con su usuario y pudo entrar,
+     porque el rol VL tenía «rol-modificar» —el permiso que abre la matriz de
+     permisos—. Con eso, cualquiera de las dos podía darse a sí misma lo que
+     quisiera y el reparto de permisos dejaba de valer.
+     Estos permisos son del dueño y de nadie más. */
+  const SOLO_DUENO = [
+    {p:"rol-modificar",     q:"cambiar los permisos de cualquier rol"},
+    {p:"rol-consultar",     q:"ver la matriz de permisos"},
+    {p:"usuario-agregar",   q:"dar de alta usuarios"},
+    {p:"usuario-modificar", q:"cambiarle el rol a una persona"},
+    {p:"finanzas-anular",   q:"anular pagos y cobranzas"},
+    {p:"venta-anular",      q:"anular ventas"}
+  ];
+  try{
+    const rr = await sb.from("roles").select("id,nombre");
+    const rpp = await sb.from("rol_permisos").select("rol_id,permiso");
+    if (!rr.error && !rpp.error){
+      const rid = {}; (rr.data||[]).forEach(function(x){ rid[x.id] = x.nombre; });
+      SOLO_DUENO.forEach(function(sd){
+        const otros = (rpp.data||[]).filter(function(x){ return x.permiso === sd.p; })
+          .map(function(x){ return rid[x.rol_id]; })
+          .filter(function(n){ return n && n.toUpperCase() !== "DUENO"; });
+        filas.push({t:sd.p, q:"solo el dueño", r: otros.length?"mal":"bien",
+          d: otros.length
+            ? "Lo tiene también "+otros.join(", ")+". Ese permiso deja "+sd.q+": quien lo tiene puede darse a sí mismo cualquier otro y el reparto de permisos deja de valer."
+            : "solo el dueño puede "+sd.q});
+      });
+    } else {
+      filas.push({t:"permisos por rol", q:"solo el dueño", r:"nose", d:"tu rol no puede leer la matriz de permisos, así que este control no se pudo hacer"});
+    }
+  }catch(e){ filas.push({t:"permisos por rol", q:"solo el dueño", r:"nose", d:"no se pudo leer: "+e.message}); }
 
   /* ── 2. ¿Se leen las vistas que alimentan las pantallas? ── */
   for (const v of DIAG_VISTAS){
