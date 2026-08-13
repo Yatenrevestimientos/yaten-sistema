@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.12-105";
+const VERSION = "v2026.08.13-106";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2212,12 +2212,28 @@ const DIAG_PREF = ["observaciones","descripcion","nombre","concepto","texto","ti
    hay una pantalla que va a aparecer vacía sin decir por qué. */
 const DIAG_VISTAS = ["v_stock","v_saldos_cliente","v_saldos_proveedor","v_saldos_cuenta","equipo_visible"];
 
+/* ══ Quién lo corre cambia el resultado (13/8) ══
+   Rocío lo corrió con su usuario y le salieron tres rojos. No eran errores del
+   sistema: la prueba INTENTA ESCRIBIR en cada tabla, y una tabla que tu rol no
+   puede tocar contesta que no, con toda la razón. El diagnóstico solo dice la
+   verdad sobre el sistema si lo corre el DUEÑO, que puede escribir en todo.
+   Un rojo falso es peor que no tener el control: la gente deja de mirarlo. */
+function esDueno(){ return PERFIL && String(PERFIL.rol||"").toUpperCase() === "DUENO"; }
 VISTAS.diag = function(){
+  const dueno = esDueno();
   $("main").innerHTML = '<div class="panel"><h2>Autodiagnóstico del sistema</h2>'+
    '<div class="desc">Prueba que <b>lo que la aplicación dice que guarda, se guarde de verdad</b>. '+
    'A cada tabla le pide grabar el mismo valor que ya tiene y mira si la base la devuelve: '+
    'si no vuelve, esa pantalla está diciendo «Guardado» sin guardar. <b>No cambia ningún dato.</b><br>'+
    'Conviene correrlo <b>después de cada publicación</b> y antes de dar un área por aprobada.</div>'+
+   '<div class="'+(dueno?"msg":"msg err")+'" style="line-height:1.5">'+
+     'Vas a correrlo como <b>'+esc(PERFIL?PERFIL.nombre:"")+'</b> · rol <b>'+esc(PERFIL?PERFIL.rol:"")+'</b>.'+
+     (dueno
+       ? ' Es el rol correcto: el dueño puede escribir en todo, así que un rojo acá es un problema de verdad.'
+       : '<br><b>Este diagnóstico lo tiene que correr el dueño.</b> La prueba intenta escribir en todas las tablas, '+
+         'y las que tu rol no puede tocar van a dar rojo <b>por permiso, no por error</b>. '+
+         'Si lo corrés igual, leé los rojos como «mi rol no puede escribir acá», no como «el sistema está roto».')+
+   '</div>'+
    '<div class="acciones"><button class="btn" id="dg_run">Correr el diagnóstico</button></div>'+
    '<div id="dg_out"><div class="muted">Todavía no se corrió.</div></div></div>';
   $("dg_run").onclick = correrDiagnostico;
@@ -2241,7 +2257,10 @@ async function correrDiagnostico(){
     const o = {}; o[col] = fila[col];
     const u = await sb.from(t).update(o).eq("id", fila.id).select("id");
     if (u.error)               filas.push({t:t, q:"escribir", r:"mal", d:"error: "+u.error.message});
-    else if (!u.data.length)   filas.push({t:t, q:"escribir", r:"mal", d:"NO ESCRIBE: devuelve cero filas y ningún error. La pantalla que grabe acá va a decir «Guardado» sin guardar."});
+    else if (!u.data.length)   filas.push({t:t, q:"escribir", r: esDueno()?"mal":"ojo",
+      d: esDueno()
+        ? "NO ESCRIBE: devuelve cero filas y ningún error. La pantalla que grabe acá va a decir «Guardado» sin guardar."
+        : "Tu rol no puede escribir en esta tabla. Con el usuario del DUEÑO habría que volver a probarla: recién ahí un rojo significa que el sistema falla."});
     else                       filas.push({t:t, q:"escribir", r:"bien", d:"probado con la columna «"+col+"»"});
   }
 
@@ -2282,11 +2301,16 @@ async function correrDiagnostico(){
   const icono = {bien:"✔", mal:"✘", ojo:"!", nose:"?"};
   const color = {bien:"#1f6b3a", mal:"#7a2415", ojo:"#8a6d1f", nose:"#6b7679"};
   const mal = filas.filter(f=>f.r==="mal"), ojo = filas.filter(f=>f.r==="ojo"), nose = filas.filter(f=>f.r==="nose");
+  const d = new Date();
+  const cuando = String(d.getDate()).padStart(2,"0")+"/"+String(d.getMonth()+1).padStart(2,"0")+"/"+d.getFullYear()+
+                 " a las "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
   out.innerHTML =
+   '<div class="muted" style="margin-bottom:6px">Corrido por <b>'+esc(PERFIL?PERFIL.nombre:"")+'</b> · rol <b>'+esc(PERFIL?PERFIL.rol:"")+'</b> · '+cuando+'</div>'+
    '<div class="msg '+(mal.length?"err":"ok")+'" style="line-height:1.5;font-size:15px"><b>'+
      (mal.length ? mal.length+" problema"+(mal.length===1?"":"s")+" que hay que resolver antes de habilitar"
-                 : "Ninguna tabla miente: todo lo que la aplicación graba, se graba.")+'</b>'+
-     (ojo.length? '<br>'+ojo.length+' aviso(s) de volumen.' : '')+
+                 : (esDueno() ? "Ninguna tabla miente: todo lo que la aplicación graba, se graba."
+                              : "Sin problemas con tu rol. Para el diagnóstico que vale, corrélo con el usuario del dueño."))+'</b>'+
+     (ojo.length? '<br>'+ojo.length+' aviso(s) para mirar'+(esDueno()?' (volumen).':' — la mayoría van a ser permisos de tu rol, no errores.') : '')+
      (nose.length? '<br>'+nose.length+' no se pudieron probar (sin datos o sin lectura).' : '')+
    '</div>'+
    '<div class="tablewrap"><table><thead><tr><th></th><th>Tabla o vista</th><th>Qué se probó</th><th>Resultado</th></tr></thead><tbody>'+
