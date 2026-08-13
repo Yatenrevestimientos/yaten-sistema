@@ -199,7 +199,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-109";
+const VERSION = "v2026.08.13-110";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6306,7 +6306,7 @@ function seccionCCProv(p, mov){
       }).join("")+
       c.anulados.map(function(x){
         return '<tr style="opacity:.45;text-decoration:line-through"><td>'+fmtF(x.fecha)+'</td>'+
-          '<td style="white-space:normal">'+esc(x.detalle)+'</td>'+
+          '<td style="white-space:normal">'+esc(x.detalle)+btnVerMov(x,p.id)+'</td>'+
           '<td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td><td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td>'+
           '<td class="muted">no suma</td>'+(P("finanzas-anular")?'<td><span class="pill no">Anulado</span></td>':'')+'</tr>';
       }).join("")+
@@ -6539,7 +6539,7 @@ async function comPagos(){
   $("cbody").innerHTML = '<div class="desc">La plata que le sale al negocio para pagarle al proveedor. Baja la deuda con él y baja el saldo de la cuenta de donde sale, en una sola operación.</div>'+
    filtrosCompra("pg")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formPagoCompra()">+ Pago a proveedor</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
-     ['Código','Proveedor','Fecha','Importe','Moneda','Sale de','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     ['Orden de Pago','Proveedor','Fecha','Importe','Moneda','Sale de','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
        '<td><b>'+fmtM(x.importe,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(nom(CTAS,x.cuenta_id))+'</td>'+
        '<td style="white-space:normal">'+esc(x.observaciones)+'</td>'+
