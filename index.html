@@ -237,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-119";
+const VERSION = "v2026.08.14-120";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1243,6 +1243,9 @@ async function descartarConfirmar(id){
   const mot = ($("ds_motivo")||{}).value;
   if (!mot) return err("Elegí el motivo: sin eso el descarte no dice nada.");
   const obs = ($("ds_obs")||{}).value || "";
+  const act = await sb.from("prospectos").select("resultado").eq("id",id).single();
+  if (!act.error && contradiccionProspecto({estado:"DESCARTADO", resultado:act.data.resultado}))
+    return err("Este prospecto figura como vendido: no se puede descartar. Si la venta se cayó, primero anulá la venta.");
   const r = await sb.from("prospectos").update({estado:"DESCARTADO", motivo_descarte_id:Number(mot)}).eq("id",id).select("id");
   if (r.error) return err(r.error.message);
   if (!r.data || !r.data.length) return err("La base no guardó el descarte.");
@@ -1351,6 +1354,15 @@ function estadoSegunEtapa(o){
   if (o.estado === "DESCARTADO") return "DESCARTADO";
   if (o.derivacion) return (o.estado === "DERIVADO") ? "DERIVADO" : "CONSULTA";
   return (o.estado === "CONTACTO") ? "CONTACTO" : "DATO";
+}
+/* Dos cosas que no pueden ser ciertas a la vez. Salió probando el 14/8: un
+   prospecto tenía estado DESCARTADO y resultado Vendido al mismo tiempo, y el
+   sistema lo dejaba. Un vendido descartado no existe. */
+function contradiccionProspecto(o){
+  const vendido = o.resultado === "Vendido" || o.resultado === "Senado";
+  if (o.estado === "DESCARTADO" && vendido)
+    return "Un prospecto <b>vendido</b> no puede quedar <b>descartado</b>. Si la venta se cayó, primero anulá la venta.";
+  return null;
 }
 /* El color del renglón dice en qué está la oportunidad sin leer una columna. */
 function colorProspecto(p){
@@ -1779,6 +1791,8 @@ VISTAS.nuevo = function(){
   $("nguardar").onclick = async function(){
     const o = leerForm();
     o.estado = estadoSegunEtapa(o);
+    const ctr = contradiccionProspecto(o);
+    if (ctr){ $("nmsg").innerHTML = '<div class="msg err">'+ctr+'</div>'; return; }
     const f = faltan(reglasProspecto(o));
     if (f.length){ avisoFaltan("nmsg", f, "el prospecto"); return; }
     $("nguardar").disabled = true;
@@ -1835,6 +1849,8 @@ async function abrir(id){
   if (puedeEditar) $("dguardar").onclick = async function(){
     const o = leerForm();
     o.estado = estadoSegunEtapa(o);
+    const ctr = contradiccionProspecto(o);
+    if (ctr){ $("dmsg").innerHTML = '<div class="msg err">'+ctr+'</div>'; return; }
     const fv = faltan(reglasProspecto(o));
     if (fv.length){ avisoFaltan("dmsg", fv, "el prospecto"); return; }
     $("dguardar").disabled = true;
