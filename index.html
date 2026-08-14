@@ -237,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-120";
+const VERSION = "v2026.08.14-121";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5996,6 +5996,35 @@ VISTAS.gastos = async function(){
 };
 
 /* ═══════════ CHEQUES ═══════════ */
+/* 14/8, Gilda: el cheque tiene TRES fechas y las estábamos mezclando en dos.
+   · Emisión — cuándo se libró. Es el campo `fecha`.
+   · Fecha de cobro — a partir de cuándo se puede depositar. Es el campo que
+     hasta hoy se llamaba «vencimiento», mal nombrado: no vencía nada ahí.
+   · Vencimiento real — 30 días después de la fecha de cobro. Ahí el cheque ya
+     no se puede cobrar.
+   El «vencido» NO se guarda: se calcula contra el día de hoy. Un estado
+   guardado habría que actualizarlo todas las noches, y el día que no corriera,
+   el cheque mentiría. */
+const DIAS_VENCE_CHEQUE = 30;
+function fechaMas(f, dias){
+  if (!f) return null;
+  const d = new Date(String(f).slice(0,10)+"T00:00:00");
+  d.setDate(d.getDate() + dias);
+  return d.toISOString().slice(0,10);
+}
+const vencimientoCheque = f => fechaMas(f, DIAS_VENCE_CHEQUE);
+/* En qué está el cheque hoy. Solo tiene sentido para los que siguen en cartera:
+   uno entregado o cobrado ya salió y no vence. */
+function situacionCheque(x){
+  if (x.anulado) return {cl:"", t:"Anulado", d:""};
+  if (x.estado !== "Disponible") return {cl:"", t:x.estado, d:""};
+  const h = hoy(), vr = vencimientoCheque(x.vencimiento);
+  if (vr && vr < h) return {cl:"p-desc", t:"VENCIDO",
+    d:"Pasaron "+DIAS_VENCE_CHEQUE+" días de la fecha de cobro: ya no se puede cobrar."};
+  if (x.vencimiento && x.vencimiento <= h) return {cl:"p-vend", t:"Al cobro",
+    d:"Ya llegó la fecha: se puede depositar."};
+  return {cl:"", t:"En cartera", d:"Todavía no llegó la fecha de cobro."};
+}
 let BANCOS = [], SUCS = [], CHEQUERAS = [], FCHQ = "";
 async function cargarCheques(){
   const [b,su,cq] = await Promise.all([
@@ -6037,27 +6066,79 @@ VISTAS.cheques = async function(){
   $("main").innerHTML = '<div class="panel"><h2>'+rot+'</h2><div class="desc">'+desc+'</div>'+
    '<div class="filtros"><div style="min-width:280px"><label>Buscar</label><input id="ch_txt" placeholder="librador, número, banco o comentario" value="'+esc(FCHQ)+'"></div>'+
    '<div style="min-width:auto"><button class="btn" id="ch_btn">Buscar</button></div>'+
-   (P("finanzas-modificar")?'<div style="min-width:auto;margin-left:auto">'+
-     '<button class="btn" onclick="formCheque(\'Terceros\')">+ Cheque de terceros</button> '+
+   '<div style="min-width:auto"><button class="btn2" onclick="imprimirCheques()">Imprimir</button></div>'+
+   /* 14/8, Gilda: el cheque de terceros entra por el recibo de cobranza y el
+      propio se emite en la orden de pago. El alta a mano queda SOLO para el
+      dueño, y solo para cargar de una vez la cartera que ya existe hoy: sin
+      eso, los cheques que están en el cajón no pueden entrar al sistema. */
+   (esDueno()?'<div style="min-width:auto"><button class="btn2" onclick="formCheque(\'Terceros\')">+ Cheque de terceros</button> '+
      '<button class="btn2" onclick="formCheque(\'Propios\')">+ Cheque propio</button></div>':'')+
    '</div>'+
+   (esDueno()?'<div class="muted" style="margin-bottom:8px">El alta a mano es para la <b>carga inicial de la cartera</b>. En el día a día el cheque de terceros entra por el <b>recibo de cobranza</b> y el propio se emite desde la <b>orden de pago</b>.</div>':'')+
    (Object.keys(tot).length? '<div class="kpis" style="margin-bottom:10px">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m],m)+'</div><div class="muted">'+rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length+' cheque'+(rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length===1?"":"s")+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
-     ['Librador','Número','Banco','Sucursal','Importe','Moneda','Fecha','Vencimiento','Cuenta','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     ['Librador','Número','Banco','Sucursal','Importe','Moneda','Emisión','Fecha de cobro','Vence','Cuenta','Estado','Situación',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(function(x){
-       const venc = x.vencimiento && x.vencimiento < hoyS && x.estado==="Disponible";
-       return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'">'+
+       const sit = situacionCheque(x);
+       return '<tr class="'+sit.cl+'" style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'">'+
         '<td><b>'+esc(x.librador)+'</b></td><td>'+esc(x.numero)+'</td><td>'+esc(nom(BANCOS,x.banco_id))+'</td>'+
-        '<td>'+esc(x.sucursal_id?nom(SUCS,x.sucursal_id):x.sucursal)+'</td>'+
+        '<td>'+esc(x.sucursal || (x.sucursal_id?nom(SUCS,x.sucursal_id):""))+'</td>'+
         '<td><b>'+fmtM(x.importe,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+fmtF(x.fecha)+'</td>'+
-        '<td style="'+(venc?'color:#7a2415;font-weight:600':'')+'">'+fmtF(x.vencimiento)+'</td>'+
+        '<td><b>'+fmtF(x.vencimiento)+'</b></td>'+
+        '<td class="muted">'+fmtF(vencimientoCheque(x.vencimiento))+'</td>'+
         '<td>'+esc(nom(CTAS,x.cuenta_id))+'</td><td>'+esc(x.estado)+'</td>'+
+        '<td'+(sit.d?' title="'+esc(sit.d)+'"':'')+'><b>'+esc(sit.t)+'</b></td>'+
         '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-modificar")?'<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>':''))+'</td></tr>';
      }).join("")+'</tbody></table></div>'
     : '<div class="muted">No hay cheques con esos filtros. Los cheques de terceros entran cuando registrás una cobranza pagada con cheque.</div>')+
    '</div>';
   $("ch_btn").onclick = function(){ FCHQ = $("ch_txt").value.trim(); VISTAS.cheques(); };
 };
+/* 14/8, Gilda: «que tenga un botón para imprimir la cartera» y otro para los
+   emitidos. Sale lo mismo que se está viendo en pantalla, con el filtro puesto. */
+async function imprimirCheques(){
+  const propios = SUBVISTA === "propios";
+  const hoyS = hoy();
+  let q = sb.from("cheques").select("*").eq("anulado",false).order("vencimiento");
+  if (propios) q = q.eq("tipo","Propios");
+  else { q = q.eq("tipo","Terceros"); if (SUBVISTA === "disponibles") q = q.eq("estado","Disponible"); }
+  const r = await q;
+  if (r.error) return alert(r.error.message);
+  const rows = r.data||[];
+  const tot = {};
+  rows.forEach(function(x){ const m=x.moneda||"ARS"; tot[m]=(tot[m]||0)+Number(x.importe||0); });
+  const titulo = propios ? "CHEQUES PROPIOS EMITIDOS"
+               : (SUBVISTA==="disponibles" ? "CARTERA DE CHEQUES DE TERCEROS" : "CHEQUES DE TERCEROS");
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+titulo+'</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:26px}'+
+   'table{width:100%;border-collapse:collapse;margin:8px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border-top:2px solid #24393C;font-size:13px}'+
+   '.pie{margin-top:18px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '</style></head><body>'+
+   membrete(titulo+' · al '+fmtF(hoyS))+
+   (rows.length? '<table><thead><tr><th>'+(propios?"Chequera":"Librador")+'</th><th>Número</th><th>Banco</th>'+
+     '<th>Emisión</th><th>Fecha de cobro</th><th>Vence</th><th>Estado</th><th class="r">Importe</th></tr></thead><tbody>'+
+     rows.map(function(x){
+       const sit = situacionCheque(x);
+       return '<tr><td>'+esc(propios ? (nom(CHEQUERAS,x.chequera_id)||x.librador||"") : (x.librador||""))+'</td>'+
+         '<td>'+esc(x.numero)+'</td><td>'+esc(nom(BANCOS,x.banco_id))+'</td>'+
+         '<td>'+fmtF(x.fecha)+'</td><td>'+fmtF(x.vencimiento)+'</td>'+
+         '<td>'+fmtF(vencimientoCheque(x.vencimiento))+'</td>'+
+         '<td>'+esc(x.estado)+(sit.t==="VENCIDO"?" · VENCIDO":"")+'</td>'+
+         '<td class="r">'+fmtM(x.importe,x.moneda)+'</td></tr>';
+     }).join("")+
+     Object.keys(tot).map(m=>'<tr class="tot"><td colspan="7" class="r"><b>TOTAL EN '+m+'</b></td><td class="r"><b>'+fmtM(tot[m],m)+'</b></td></tr>').join("")+
+     '</tbody></table>'
+    : '<div>No hay cheques para listar.</div>')+
+   '<div class="pie">'+rows.length+' cheque(s). Impreso por '+esc((PERFIL&&PERFIL.nombre)||"")+' el '+fmtF(hoyS)+'.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
+
 /* ─────────── ALTA MANUAL DE CHEQUES ─────────── */
 /* Hasta el 7/8/2026 los cheques solo entraban por una cobranza o salían por un
    pago. Faltaba poder cargar la cartera que ya existe. El de terceros ENTRA a
@@ -9177,6 +9258,15 @@ function cccCalcular(seg, m){
   });
   return {saldoAnterior:saldoAnterior, filas:filas, saldoFinal:acum, anulados:anulados};
 }
+/* 14/8, Gilda: «no veo dónde está el botón para ingresar COBRANZA, solo deja
+   registrarlo bajando la barra hasta abajo de todo». Ahora está arriba de la
+   cuenta corriente, que es donde se lo busca. */
+function accionesCC(c){
+  if (!P("venta-cobranza")) return "";
+  return '<div class="acciones" style="margin-bottom:10px">'+
+    '<button class="btn" onclick="formCobranza('+c.id+')">Registrar cobranza</button>'+
+    '<button class="btn2" onclick="formCredDeb('+c.id+')">Crédito / débito</button></div>';
+}
 function seccionCC(c, seg){
   const bloque = function(m){
     /* El saldo del título sale de v_saldos_cliente —todo el historial y lo que
@@ -9199,16 +9289,18 @@ function seccionCC(c, seg){
       '<label style="margin:0;text-transform:none"><input type="checkbox" id="cc_anul_'+m+'" '+(_CCANUL[m]?'checked':'')+' onchange="ccToggleAnul(\''+m+'\','+c.id+',this)" style="width:auto"> ver anulados</label>'+
       '</div>'+
       '<div class="tablewrap" style="max-height:40dvh;overflow:auto"><table><thead><tr>'+
-        '<th>Fecha</th><th>Detalle</th><th>Debe</th><th>Pagó</th><th>Saldo</th>'+(P("finanzas-anular")?'<th></th>':'')+
+        '<th>Fecha</th><th>Detalle</th><th>Debe</th><th>Pagó</th><th>Saldo</th><th></th>'+(P("finanzas-anular")?'<th></th>':'')+
         '</tr></thead><tbody>'+
       (FCCC.desde? '<tr style="background:#f6f3ee"><td>'+fmtF(FCCC.desde)+'</td><td><b>Saldo anterior</b></td>'+
-        '<td></td><td></td><td><b>'+fmtM0(cc.saldoAnterior,m)+'</b></td>'+(P("finanzas-anular")?'<td></td>':'')+'</tr>' : '')+
+        '<td></td><td></td><td><b>'+fmtM0(cc.saldoAnterior,m)+'</b></td><td></td>'+(P("finanzas-anular")?'<td></td>':'')+'</tr>' : '')+
       visibles.map(function(f){
         const x = f.mov;
         return '<tr><td>'+fmtF(x.fecha)+'</td>'+
           '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+'</td>'+
           '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
           '<td><b>'+fmtM0(f.saldo,m)+'</b></td>'+
+          '<td style="white-space:nowrap">'+(x.ref_id && String(x.origen||"").toLowerCase()==="cobranza"
+            ? '<button class="btn2 btn-sm" onclick="imprimirRecibo('+x.ref_id+')">Recibo</button>' : '')+'</td>'+
           (P("finanzas-anular")? '<td>'+(x.ref_id
             ? (String(x.origen||"").toLowerCase()==="cobranza"
                 ? '<button class="btn2 btn-sm" onclick="anularCobranza('+x.ref_id+','+c.id+')">Anular cobranza</button>'
@@ -9220,7 +9312,7 @@ function seccionCC(c, seg){
         return '<tr style="opacity:.45;text-decoration:line-through"><td>'+fmtF(x.fecha)+'</td>'+
           '<td style="white-space:normal">'+esc(x.detalle)+'</td>'+
           '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
-          '<td class="muted">no suma</td>'+(P("finanzas-anular")?'<td><span class="pill no">Anulado</span></td>':'')+'</tr>';
+          '<td class="muted">no suma</td><td></td>'+(P("finanzas-anular")?'<td><span class="pill no">Anulado</span></td>':'')+'</tr>';
       }).join("")+
       '</tbody></table></div>'+
       (recortadas>0 ? '<div class="msg" style="margin-top:6px">Se muestran los <b>'+visibles.length+'</b> movimientos más nuevos del período. '+
@@ -9238,10 +9330,72 @@ function seccionCC(c, seg){
      '<div style="min-width:auto"><button class="btn" id="ccc_btn">Aplicar</button></div>'+
      '<div style="min-width:auto"><button class="btn2" onclick="imprimirCCCli('+c.id+')">Imprimir / PDF</button></div>'+
    '</div>'+
-   bloque('ARS') + bloque('USD') +
-    (P("venta-cobranza")? '<div class="acciones" style="margin-top:14px">'+
-      '<button class="btn" onclick="formCobranza('+c.id+')">Registrar cobranza</button>'+
-      '<button class="btn2" onclick="formCredDeb('+c.id+')">Registrar crédito / débito</button></div>' : '');
+   accionesCC(c)+
+   bloque('ARS') + bloque('USD');
+}
+
+/* 14/8, Gilda: «colocar botón imprimir recibo». Es el papel que se le entrega
+   al cliente cuando paga: qué se cobró, con qué, y a qué ventas se aplicó. */
+async function imprimirRecibo(cobId){
+  const [k, im] = await Promise.all([
+    sb.from("cobranzas").select("*").eq("id",cobId).single(),
+    sb.from("cobranza_imputaciones").select("*").eq("cobranza_id",cobId)
+  ]);
+  if (k.error) return alert(k.error.message);
+  const x = k.data, imps = im.data||[];
+  if (!CLIS.length) await cargarClientes();
+  if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
+  let vtas = [];
+  if (imps.length){
+    const v = await sb.from("ventas").select("id,codigo,fecha,total,moneda").in("id", imps.map(y=>y.venta_id));
+    vtas = v.data||[];
+  }
+  const cli = CLIS.find(y=>String(y.id)===String(x.cliente_id)) || {};
+  const cta = (CTAS||[]).find(y=>String(y.id)===String(x.cuenta_id));
+  const mon = x.moneda_cc || x.moneda_pago || "ARS";
+  const imputado = imps.reduce(function(a,y){ return a+Number(y.monto||0); },0);
+  const sinImputar = Number(x.importe||0) - imputado;
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Recibo '+esc(x.codigo||("#"+x.id))+'</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:30px;max-width:760px}'+
+   'table{width:100%;border-collapse:collapse;margin:6px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border-top:2px solid #24393C;font-size:13px}'+
+   'h3{margin:16px 0 4px;font-size:13px;color:#24393C}'+
+   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:9px 11px;margin:12px 0;background:#faf8f4}'+
+   '.grande{font-size:20px;font-family:Georgia,serif}'+
+   '.firma{margin-top:46px;display:flex;gap:60px}.firma div{border-top:1px solid #999;padding-top:6px;flex:1;text-align:center;font-size:10px}'+
+   '.pie{margin-top:20px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '</style></head><body>'+
+   membrete('RECIBO '+esc(x.codigo||("#"+x.id))+' \u00b7 '+fmtF(x.fecha))+
+   (x.anulado?'<div class="caja"><b>RECIBO ANULADO</b> \u2014 '+esc(x.motivo_anulacion||"")+'</div>':'')+
+   '<div class="caja"><b>'+esc(cli.nombre||"")+'</b>'+
+     (cli.nro_doc?' \u00b7 '+esc(cli.tipo_doc||"Doc")+' '+esc(cli.nro_doc):'')+
+     (cli.direccion?'<br>'+esc(cli.direccion):'')+'</div>'+
+   '<div class="caja">Recibimos la suma de<br><b class="grande">'+fmtM0(x.importe,mon)+'</b></div>'+
+   '<h3>Con qu\u00e9 se pag\u00f3</h3>'+
+   '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
+     '<tr><td>'+esc(cta?cta.nombre:"\u2014")+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>'+
+   '</tbody></table>'+
+   '<h3>Se aplic\u00f3 a</h3>'+
+   (imps.length? '<table><thead><tr><th>Venta</th><th>Fecha</th><th class="r">Total</th><th class="r">Imputado</th></tr></thead><tbody>'+
+     imps.map(function(y){
+       const v = vtas.find(z=>String(z.id)===String(y.venta_id)) || {};
+       return '<tr><td>'+esc(v.codigo||("venta #"+y.venta_id))+'</td><td>'+fmtF(v.fecha)+'</td>'+
+         '<td class="r">'+fmtM0(v.total,mon)+'</td><td class="r">'+fmtM0(y.monto,mon)+'</td></tr>';
+     }).join("")+
+     '<tr class="tot"><td colspan="3" class="r"><b>IMPUTADO</b></td><td class="r"><b>'+fmtM0(imputado,mon)+'</b></td></tr>'+
+     (Math.abs(sinImputar) > 0.009
+       ? '<tr><td colspan="3" class="r">A cuenta, sin imputar</td><td class="r">'+fmtM0(sinImputar,mon)+'</td></tr>' : '')+
+     '</tbody></table>'
+    : '<div>A cuenta: baja la deuda general del cliente, sin aplicarse a una venta puntual.</div>')+
+   (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
+   '<div class="firma"><div>Firma y sello</div><div>Recib\u00ed conforme</div></div>'+
+   '<div class="pie">Emitido por '+esc(quienEs(x.creado_por))+(x.creado_en?' el '+fmtF(x.creado_en):'')+'.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloque\u00f3 la ventana. Permit\u00ed las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
 }
 
 /* El resumen de cuenta del cliente: lo que se le manda cuando pregunta cuánto
@@ -9484,19 +9638,41 @@ async function pintarVentasCobranza(cliId){
   const pend = (r.data||[]).filter(x=>Number(x.saldo) > 0.009);
   window._VTAS_COB = pend;
   el.innerHTML = !pend.length ? '<div class="muted">Este cliente no tiene ventas pendientes en '+mon+'.</div>' :
-   '<div class="tablewrap"><table><thead><tr><th># Venta</th><th>Fecha</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th></tr></thead><tbody>'+
+   '<div class="tablewrap"><table><thead><tr><th># Venta</th><th>Fecha</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th><th></th></tr></thead><tbody>'+
    pend.map((x,k)=>'<tr><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+fmtM(x.total,x.moneda)+'</td>'+
      '<td><b>'+fmtM(x.saldo,x.moneda)+'</b></td>'+
-     '<td><input type="number" step="0.01" min="0" max="'+Number(x.saldo)+'" style="width:130px" id="kv_'+k+'" oninput="calcImputadoCob()"></td></tr>').join("")+
-   '</tbody></table></div><div class="muted" id="k_imputado" style="margin-top:6px"></div>';
+     '<td><input type="number" step="0.01" min="0" max="'+Number(x.saldo)+'" style="width:130px" id="kv_'+k+'" oninput="calcImputadoCob()"></td>'+
+     '<td><button class="btn2 btn-sm" onclick="imputarTodoCob('+k+')">Todo</button></td></tr>').join("")+
+   '</tbody></table></div><div id="k_imputado" style="margin-top:6px"></div>';
+}
+/* 14/8, Gilda: «que permita, al igual que en las órdenes de pago, imputar los
+   montos con el botón TODO, y que abajo figure el resto junto al monto
+   imputado». Nunca pone más de lo que entra. */
+function imputarTodoCob(k){
+  const v = (window._VTAS_COB||[])[k]; if (!v) return;
+  const imp = Number(($("k_importe")||{}).value||0);
+  let otros = 0;
+  (window._VTAS_COB||[]).forEach(function(x,i){ if (i===k) return; const el=$("kv_"+i); if (el) otros += Number(el.value||0); });
+  const el = $("kv_"+k);
+  if (el) el.value = Math.min(Number(v.saldo||0), Math.max(imp - otros, 0)) || "";
+  calcImputadoCob();
 }
 function calcImputadoCob(){
   let s = 0;
   (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); if(el) s += Number(el.value||0); });
+  const m = ($("k_moneda")||{}).value||"ARS";
   const imp = Number(($("k_importe")||{}).value||0);
-  const el = $("k_imputado");
-  if (el) el.innerHTML = 'Imputado: <b>'+fmtM(s, ($("k_moneda")||{}).value||"ARS")+'</b>'+
-    (imp>0 && Math.abs(s-imp)>0.009 ? ' — <span style="color:#7a2415">no coincide con el importe del cobro</span>' : '');
+  const resta = imp - s;
+  const el = $("k_imputado"); if (!el) return;
+  el.innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr><td>Cobro</td><td style="text-align:right"><b>'+(fmtM(imp,m)||"—")+'</b></td></tr>'+
+    '<tr><td>Imputado a ventas</td><td style="text-align:right">'+(fmtM(s,m)||"—")+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>Resta imputar</b></td><td style="text-align:right;font-size:16px"><b style="color:'+
+      (resta < -0.009 ? '#7a2415' : '#1b2426')+'">'+fmtM0(resta,m)+'</b></td></tr>'+
+    '</tbody></table></div>'+
+    (resta < -0.009 ? '<div class="msg err" style="margin-top:6px">Estás imputando más de lo que entra: no se puede.</div>'
+     : resta > 0.009 ? '<div class="muted" style="margin-top:6px">Lo que resta imputar baja la deuda general del cliente, sin quedar pegado a ninguna venta.</div>'
+     : imp>0 ? '<div class="muted" style="margin-top:6px">El cobro queda imputado por completo.</div>' : '');
 }
 /* el tipo de cuenta acota el desplegable, como en Pirka: primero Efectivo/Banco/Cheques y despues la cuenta */
 function filtrarCtasCobranza(){
@@ -9946,17 +10122,58 @@ async function finGastos(){
      '<td>'+fmtF(g.fecha)+'</td>'+
      '<td'+((g.fecha_imputacion && g.fecha_imputacion !== g.fecha)?' style="font-weight:600"':'')+'>'+fmtF(g.fecha_imputacion||g.fecha)+'</td>'+
      '<td>'+esc(nom(CTAS,g.cuenta_id))+'</td><td>'+esc(nom(CGASTOS,g.concepto_id))+'</td>'+
-     (M.agt?'<td>'+((P("finanzas-modificar") && !g.anulado)
-        ? '<button class="btn2 btn-sm" style="font-weight:normal" onclick="formAreaGasto('+g.id+')">'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">+ clasificar</span>')+'</button>'
-        : (g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">— sin área —</span>'))+'</td>':'')+
+     /* 14/8, Gilda: «las áreas del listado que no sean botones que permiten
+        editar». El listado se lee; para clasificar se entra al gasto. */
+     (M.agt?'<td>'+(g.area_id? esc(nom(M.agt,g.area_id)) : '<span class="muted">— sin área —</span>')+'</td>':'')+
      (M.per?'<td>'+(g.persona_id? esc(nom(M.per,g.persona_id)) : '<span class="muted">—</span>')+'</td>':'')+
      (M.veh?'<td>'+(g.vehiculo_id? esc(nom(M.veh,g.vehiculo_id)) : '<span class="muted">—</span>')+'</td>':'')+
      '<td>'+esc(g.proveedor)+'</td><td>'+esc(g.nro_comprobante)+'</td>'+
      '<td>'+fmtM(g.neto,g.moneda)+'</td><td>'+fmtM(g.iva,g.moneda)+'</td><td><b>'+fmtM(g.importe,g.moneda)+'</b></td>'+
      celdaSaldo(SALG, g.mov_id, g.moneda, g.anulado)+
      '<td style="white-space:normal;min-width:160px">'+esc(g.detalle_extra)+'</td>'+
-     '<td>'+(g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
+     '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="verGasto('+g.id+')">Ver</button> '+
+       (g.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularGasto('+g.id+')">Anular</button>':''))+'</td></tr>';
    }).join("")+'</tbody></table></div>';
+}
+/* 14/8, Gilda: «que los gastos se puedan VER». Hasta ahora el gasto solo
+   existía como renglón del listado: no había dónde mirarlo entero, ni
+   clasificarlo, porque el botón de clasificar se sacó de la tabla. */
+async function verGasto(id){
+  const g = await sb.from("gastos").select("*").eq("id",id).single();
+  if (g.error) return alert(g.error.message);
+  const x = g.data;
+  const puede = P("finanzas-modificar") && !x.anulado;
+  $("dtit").textContent = "Gasto del "+fmtF(x.fecha)+" · "+(nom(CGASTOS,x.concepto_id)||"sin concepto");
+  $("dbody").innerHTML =
+   (x.anulado?'<div class="msg err">Gasto <b>anulado</b>. Motivo: '+esc(x.motivo_anulacion||"sin motivo")+'</div>':'')+
+   '<div class="sec">El gasto</div><div class="grid">'+
+     '<div class="f"><label>Fecha de pago</label><div><b>'+fmtF(x.fecha)+'</b></div></div>'+
+     '<div class="f"><label>Corresponde a</label><div>'+fmtF(x.fecha_imputacion||x.fecha)+'</div></div>'+
+     '<div class="f"><label>Concepto</label><div>'+esc(nom(CGASTOS,x.concepto_id)||"—")+'</div></div>'+
+     '<div class="f"><label>Sale de</label><div>'+esc(nom(CTAS,x.cuenta_id)||"—")+'</div></div>'+
+   '</div><div class="grid">'+
+     '<div class="f"><label>Neto</label><div>'+fmtM0(x.neto,x.moneda)+'</div></div>'+
+     '<div class="f"><label>IVA</label><div>'+fmtM0(x.iva,x.moneda)+'</div></div>'+
+     '<div class="f"><label>Importe</label><div><b style="font-size:17px">'+fmtM0(x.importe,x.moneda)+'</b></div></div>'+
+   '</div>'+
+   '<div class="sec">Clasificación</div><div class="grid">'+
+     '<div class="f"><label>Área</label><div>'+esc(nom(M.agt,x.area_id)||"— sin área —")+'</div></div>'+
+     '<div class="f"><label>Persona</label><div>'+esc(nom(M.per,x.persona_id)||"—")+'</div></div>'+
+     '<div class="f"><label>Vehículo</label><div>'+esc(nom(M.veh,x.vehiculo_id)||"—")+'</div></div>'+
+   '</div>'+
+   '<div class="sec">Comprobante</div><div class="grid">'+
+     '<div class="f"><label>Proveedor</label><div>'+esc(x.proveedor||"—")+'</div></div>'+
+     '<div class="f"><label>N° de comprobante</label><div>'+esc(x.nro_comprobante||"—")+'</div></div>'+
+     '<div class="f"><label>CUIT</label><div>'+esc(x.cuit||"—")+'</div></div>'+
+   '</div>'+
+   (x.detalle_extra?'<div class="f"><label>Detalle</label><div style="white-space:normal">'+esc(x.detalle_extra)+'</div></div>':'')+
+   selloAuditoria(x)+
+   '<div class="acciones">'+
+     (puede?'<button class="btn2" onclick="formAreaGasto('+x.id+')">Clasificar</button>':'')+
+     (!x.anulado && P("finanzas-anular")?'<button class="btn2" onclick="anularGasto('+x.id+')">Anular</button>':'')+
+     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button>'+
+   '</div>';
+  try{ $("dlg").showModal(); }catch(e){}
 }
 /* Si la imputación venía igual a la fecha de pago, la sigue. Si Gilda ya la
    cambió a mano, se respeta lo que puso. */
@@ -10044,7 +10261,10 @@ function formGasto(){
              p_persona: pe?Number(pe):null, p_vehiculo: ve?Number(ve):null}); }
       catch(e){ try{ if (ar) await sb.rpc("set_area_gasto",{p_gasto:Number(r.data), p_area:Number(ar)}); }catch(e2){} }
     }
-    await cargarFin(); $("dlg").close(); VISTAS.finanzas();
+    /* 14/8, Gilda: «cuando termino de cargar un gasto me lleva al estado de
+       resultado, tendría que ir al listado de gastos». Iba a Finanzas sin
+       decirle a qué solapa, y Finanzas abre en Estado financiero. */
+    await cargarFin(); $("dlg").close(); SUBVISTA = "gastos"; VISTAS.finanzas();
   };
   $("dlg").showModal();
 }
