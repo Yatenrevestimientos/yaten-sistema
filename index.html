@@ -237,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-121";
+const VERSION = "v2026.08.14-122";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -10723,6 +10723,9 @@ function calcCobranza(){
   const distinta = mcc !== mcta;
   $("k_box_tc").style.display = distinta ? "" : "none";
   $("k_box_pago").style.display = distinta ? "" : "none";
+  /* el cuadro de «resta imputar» también se recalcula al cambiar el importe:
+     si no, se queda vacío hasta que toques una imputación */
+  try{ calcImputadoCob(); }catch(e){}
   if (!distinta){ $("k_nota").innerHTML = "El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación."; return; }
   const imp = Number($("k_importe").value||0), tc = Number($("k_tc").value||0);
   if (imp>0 && tc>0){
