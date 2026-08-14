@@ -60,13 +60,9 @@ nav .subs button{display:block;width:100%;background:transparent;color:#c2cdcf;b
 nav .subs button:hover{color:#fff;background:rgba(255,255,255,.05)}
 nav .subs button.on{color:#fff;font-weight:600;border-left-color:var(--ocre);background:rgba(255,255,255,.08)}
 #tapa{display:none}
-#subnav{display:none}
 nav button{background:transparent;color:#c9d2d3;border:0;border-radius:0;padding:11px 14px;white-space:nowrap;font-size:14px;border-bottom:3px solid transparent}
 nav button.on{color:#fff;border-bottom-color:var(--ocre);background:rgba(255,255,255,.05)}
 
-#subnav:empty{display:none}
-#subnav button{background:transparent;border:0;border-radius:0;padding:8px 13px;white-space:nowrap;font-size:13.5px;color:#3d4a4c;border-bottom:3px solid transparent}
-#subnav button.on{color:var(--petroleo);font-weight:600;border-bottom-color:var(--ocre);background:#fff}
 main{padding:16px;flex:1;max-width:1600px;width:100%;margin:0 auto}
 .panel{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:16px;margin-bottom:16px}
 .panel>h2{font-size:17px;margin-bottom:2px}
@@ -237,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-124";
+const VERSION = "v2026.08.14-125";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -701,7 +697,7 @@ function pintarNav(){
       document.body.classList.remove("menu-abierto");
     };
   });
-  $("subnav") && ($("subnav").innerHTML = "");
+  /* la barra #subnav se sacó hace versiones; el 14/8 (capa 1) se limpió lo que quedaba de ella */
 }
 /* ══════════════════════════════════════════════════════════════
    PUERTA ÚNICA DE PERMISOS — pedido de Gustavo, 11/8/2026
@@ -733,13 +729,8 @@ function tieneAlguno(perm){
     return P(c);
   });
 }
-function permisoQueFalta(v, sub){
-  const s = (SUBMENU[v]||[]).find(function(x){ return x.id === (sub||""); });
-  if (s && s.perm && !tieneAlguno(s.perm)) return s.perm;
-  const m = MENU.find(function(x){ return x.id === v; });
-  if (m && m.perm && !tieneAlguno(m.perm)) return m.perm;
-  return null;
-}
+/* permisoQueFalta se sacó el 14/8 (revisión capa 1): estaba definida y nadie
+   la llamaba — ir() calcula el permiso por su cuenta. Código muerto confunde. */
 function pantallaSinPermiso(v, sub, permiso){
   const m = MENU.find(function(x){ return x.id === v; });
   const s = (SUBMENU[v]||[]).find(function(x){ return x.id === (sub||""); });
@@ -10535,6 +10526,20 @@ function calcGasto(){
     (GMED.filter(x=>Number(x.importe)>0).length>1
       ? '<div class="muted" style="margin-top:6px">'+GMED.filter(x=>Number(x.importe)>0).length+' formas de pago. Cada una descuenta de su cuenta por separado; el gasto queda uno solo.</div>'
       : '');
+}
+/* 14/8, revisión profunda capa 1: esta función se invocaba desde el selector
+   de persona del gasto y NUNCA estuvo escrita — el cartel prometía «si la
+   persona tiene área, se completa sola» y elegir una persona tiraba un error
+   silencioso. La clase de bug del formulario del gasto, otra vez: escribir el
+   formulario no es escribir las funciones que lo mueven. */
+function gastoPersonaElegida(){
+  const p = $("g_persona"), a = $("g_area");
+  if (!p || !a) return;
+  const op = p.options[p.selectedIndex];
+  const area = op ? op.getAttribute("data-area") : "";
+  /* completa el área solo si la persona la tiene y el área está vacía:
+     lo elegido a mano no se pisa */
+  if (area && !a.value) a.value = area;
 }
 async function concGastoAgregar(){
   const n = $("g_conc_nuevo").value.trim(); if(!n) return;
