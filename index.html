@@ -237,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-122";
+const VERSION = "v2026.08.14-123";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6071,10 +6071,14 @@ VISTAS.cheques = async function(){
       propio se emite en la orden de pago. El alta a mano queda SOLO para el
       dueño, y solo para cargar de una vez la cartera que ya existe hoy: sin
       eso, los cheques que están en el cajón no pueden entrar al sistema. */
-   (esDueno()?'<div style="min-width:auto"><button class="btn2" onclick="formCheque(\'Terceros\')">+ Cheque de terceros</button> '+
+   /* En «Cheques propios» no va ningún alta: Gilda pidió que esa pantalla sea
+      solo el listado de los emitidos. El propio nace en la orden de pago. */
+   (esDueno() && SUBVISTA !== "propios"
+     ?'<div style="min-width:auto"><button class="btn2" onclick="formCheque(\'Terceros\')">+ Cheque de terceros</button> '+
      '<button class="btn2" onclick="formCheque(\'Propios\')">+ Cheque propio</button></div>':'')+
    '</div>'+
-   (esDueno()?'<div class="muted" style="margin-bottom:8px">El alta a mano es para la <b>carga inicial de la cartera</b>. En el día a día el cheque de terceros entra por el <b>recibo de cobranza</b> y el propio se emite desde la <b>orden de pago</b>.</div>':'')+
+   (esDueno() && SUBVISTA !== "propios"?'<div class="muted" style="margin-bottom:8px">El alta a mano es para la <b>carga inicial de la cartera</b>. En el día a día el cheque de terceros entra por el <b>recibo de cobranza</b> y el propio se emite desde la <b>orden de pago</b>.</div>':'')+
+   (SUBVISTA === "propios"?'<div class="muted" style="margin-bottom:8px">Los cheques propios se emiten desde la <b>orden de pago</b>, a nombre del proveedor al que se le entregan. Acá solo se listan.</div>':'')+
    (Object.keys(tot).length? '<div class="kpis" style="margin-bottom:10px">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m],m)+'</div><div class="muted">'+rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length+' cheque'+(rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length===1?"":"s")+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
      ['Librador','Número','Banco','Sucursal','Importe','Moneda','Emisión','Fecha de cobro','Vence','Cuenta','Estado','Situación',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
@@ -6088,12 +6092,74 @@ VISTAS.cheques = async function(){
         '<td class="muted">'+fmtF(vencimientoCheque(x.vencimiento))+'</td>'+
         '<td>'+esc(nom(CTAS,x.cuenta_id))+'</td><td>'+esc(x.estado)+'</td>'+
         '<td'+(sit.d?' title="'+esc(sit.d)+'"':'')+'><b>'+esc(sit.t)+'</b></td>'+
-        '<td>'+(x.anulado?'<span class="pill no">Anulado</span>':(P("finanzas-modificar")?'<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>':''))+'</td></tr>';
+        '<td>'+accionCheque(x)+'</td></tr>';
      }).join("")+'</tbody></table></div>'
     : '<div class="muted">No hay cheques con esos filtros. Los cheques de terceros entran cuando registrás una cobranza pagada con cheque.</div>')+
    '</div>';
   $("ch_btn").onclick = function(){ FCHQ = $("ch_txt").value.trim(); VISTAS.cheques(); };
 };
+/* 14/8, Gilda: «en CHEQUES/DISPONIBLES sacar el botón de cambiar estado» y
+   «CHEQUES PROPIOS: solo listado de emitidos, sin agregar ni cambiar estado».
+   El estado del cheque deja de escribirse a mano: lo mueven las operaciones.
+   Un cheque de terceros en cartera se DEPOSITA —y eso sí es una operación, con
+   sus dos movimientos de cuenta—; entregado a un proveedor sale por la orden de
+   pago. El propio no tiene botón: se emite en la orden de pago y punto.
+   Queda «Cambiar estado» solo para el dueño y solo para los casos que ninguna
+   operación cubre: un cheque rechazado por el banco. */
+function accionCheque(x){
+  if (x.anulado) return '<span class="pill no">Anulado</span>';
+  if (x.tipo === "Terceros" && x.estado === "Disponible" && P("finanzas-modificar"))
+    return '<button class="btn btn-sm" onclick="formDepositar('+x.id+')">Depositar</button>'+
+           (esDueno()? ' <button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Rechazado</button>' : '');
+  if (esDueno() && x.estado !== "Cobrado")
+    return '<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>';
+  return '';
+}
+/* Depositar el cheque: sale de la cuenta «Cheques de terceros» y entra al banco.
+   Es la operación que faltaba —Gustavo, 14/8: «si revisás el sistema de Pirka y
+   entrás a cheques disponibles te aparecen los cheques y la opción de
+   depositarlos, o los usás para pagar una cuenta»—. */
+async function formDepositar(id){
+  const q = await sb.from("cheques").select("*").eq("id",id).single();
+  if (q.error) return alert(q.error.message);
+  const c = q.data;
+  if (!CTAS.length) await cargarFin();
+  /* No se deposita en la misma cuenta de cheques de donde sale, ni en una de
+     otra moneda: la base lo rechaza, así que acá directamente no se ofrecen. */
+  const tipoChq = (TCTAS||[]).filter(t=>/cheques de terceros/i.test(t.nombre||"")).map(t=>t.id);
+  const destinos = (CTAS||[]).filter(y=>y.activo && String(y.id)!==String(c.cuenta_id) &&
+                    y.moneda === (c.moneda||"ARS") && tipoChq.indexOf(y.tipo_cuenta_id)<0);
+  $("d2tit").textContent = "Depositar cheque";
+  $("d2body").innerHTML = !destinos.length
+    ? '<div class="msg err" style="line-height:1.5"><b>No hay ninguna cuenta donde depositarlo.</b><br>'+
+      'Hace falta una cuenta de banco en '+esc(c.moneda||"ARS")+'. Creala en <b>Finanzas → Cuentas</b> y volvé.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="cerrarDlg2()">Cerrar</button></div>'
+    : '<div id="dpmsg"></div>'+
+      '<div class="muted" style="margin-bottom:8px">Cheque N° <b>'+esc(c.numero||"")+'</b> de <b>'+esc(c.librador||"")+'</b> por <b>'+fmtM(c.importe,c.moneda)+'</b>. '+
+      'Sale de <b>'+esc(nom(CTAS,c.cuenta_id))+'</b> y entra al banco que elijas. El cheque queda como <b>Depositado</b>.</div>'+
+      '<div class="grid">'+
+        '<div class="f"><label>Se deposita en *</label><select id="dp_cuenta">'+optCtas(destinos)+'</select></div>'+
+        '<div class="f"><label>Fecha del depósito</label><input type="date" id="dp_fecha" value="'+hoy()+'"></div>'+
+      '</div>'+
+      (c.vencimiento && c.vencimiento > hoy()
+        ? '<div class="msg" style="background:#faecbb;margin-top:8px">La fecha de cobro es el '+fmtF(c.vencimiento)+': todavía no llegó. Si lo depositás antes, el banco puede rechazarlo.</div>'
+        : '')+
+      '<div class="acciones"><button class="btn" id="dp_ok" onclick="depositarConfirmar('+id+')">Depositar</button>'+
+      '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+async function depositarConfirmar(id){
+  const err = t => { const e=$("dpmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const cta = ($("dp_cuenta")||{}).value;
+  if (!cta) return err("Elegí la cuenta donde se deposita.");
+  const b = $("dp_ok"); if (b) b.disabled = true;
+  const {error} = await sb.rpc("depositar_cheque",{p_cheque:id, p_cuenta:Number(cta), p_fecha:($("dp_fecha")||{}).value||hoy()});
+  if (b) b.disabled = false;
+  if (error) return err(error.message);
+  cerrarDlg2();
+  await cargarFin();
+  VISTAS.cheques();
+}
 /* 14/8, Gilda: «que tenga un botón para imprimir la cartera» y otro para los
    emitidos. Sale lo mismo que se está viendo en pantalla, con el filtro puesto. */
 async function imprimirCheques(){
@@ -6175,13 +6241,19 @@ function pintarFormCheque(){
        ? '<div class="f"><label>Chequera *</label><select id="ch_chequera">'+selOpts((CHEQUERAS||[]).filter(x=>x.activo),null)+'</select></div>'
        : '<div class="f"><label>Librador *</label><input id="ch_librador" placeholder="Quién firma el cheque"></div>')+
      '<div class="f"><label>Banco</label><select id="ch_banco">'+selOpts(BANCOS,null)+'</select></div>'+
-     '<div class="f"><label>Sucursal</label><select id="ch_suc">'+selOpts(SUCS,null)+'</select></div>'+
+     /* 14/8, Gilda: «que se pueda cargar la sucursal del cheque». Texto libre:
+        el cheque dice la sucursal impresa y no hay por qué darla de alta como
+        maestra antes de poder cargarlo. */
+     '<div class="f"><label>Sucursal</label><input id="ch_suc" placeholder="la que dice el cheque"></div>'+
      '<div class="f"><label>Número *</label><input id="ch_numero"></div>'+
      '<div class="f"><label>N° de cuenta corriente</label><input id="ch_cta_cte"></div>'+
      '<div class="f"><label>Importe *</label><input type="number" step="0.01" id="ch_importe"></div>'+
      '<div class="f"><label>Moneda</label><select id="ch_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
-     '<div class="f"><label>Fecha *</label><input type="date" id="ch_fecha" value="'+hoy()+'"></div>'+
-     '<div class="f"><label>Vencimiento *</label><input type="date" id="ch_venc"></div>'+
+     /* Los dos nombres que pidió Gilda: la fecha del cheque es la de emisión, y
+        lo que se llamaba «vencimiento» es en realidad la fecha de cobro. */
+     '<div class="f"><label>Fecha de emisión *</label><input type="date" id="ch_fecha" value="'+hoy()+'"></div>'+
+     '<div class="f"><label>Fecha de cobro *</label><input type="date" id="ch_venc">'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">Desde cuándo se puede depositar. A los '+DIAS_VENCE_CHEQUE+' días de esa fecha el cheque queda vencido.</div></div>'+
      (esProp ? '' : '<div class="f"><label>Entra a la cuenta *</label><select id="ch_cuenta">'+optCtas(ctas)+'</select></div>')+
    '</div>'+
    '<div class="f"><label>Comentarios</label><input id="ch_coment"></div>'+
@@ -6194,7 +6266,7 @@ async function guardarCheque(){
   const esProp = CHQ.tipo === "Propios";
   if (!v("ch_numero")) return err("Falta el número del cheque.");
   if (!(Number(v("ch_importe"))>0)) return err("El importe tiene que ser mayor a cero.");
-  if (!v("ch_venc")) return err("Falta la fecha de vencimiento.");
+  if (!v("ch_venc")) return err("Falta la fecha de cobro del cheque.");
   if (!esProp && !v("ch_cuenta")) return err("Elegí la cuenta donde entra el cheque.");
   if (!esProp && !v("ch_librador")) return err("Falta el librador, que es quién firma el cheque.");
   $("ch_guardar").disabled = true;
@@ -6202,7 +6274,7 @@ async function guardarCheque(){
     p_tipo: CHQ.tipo,
     p_librador: esProp ? (cfg("razon_social","") || "Yaten Revestimientos") : v("ch_librador"),
     p_banco_id: v("ch_banco") ? Number(v("ch_banco")) : null,
-    p_sucursal_id: v("ch_suc") ? Number(v("ch_suc")) : null,
+    p_sucursal_id: null,
     p_numero: v("ch_numero"),
     p_nro_cta_cte: v("ch_cta_cte") || null,
     p_importe: Number(v("ch_importe")),
@@ -6215,6 +6287,11 @@ async function guardarCheque(){
   });
   $("ch_guardar").disabled = false;
   if (r.error) return err(r.error.message);
+  /* La sucursal va en un segundo paso, por la misma razón que el área del
+     gasto: no se toca la función que mueve la plata. */
+  if (r.data && v("ch_suc")){
+    try{ await sb.rpc("set_sucursal_cheque",{p_id:Number(r.data), p_sucursal:v("ch_suc")}); }catch(e){}
+  }
   $("dlg").close();
   await cargarCheques(); await cargarFin();
   VISTAS.cheques();
@@ -9337,12 +9414,13 @@ function seccionCC(c, seg){
 /* 14/8, Gilda: «colocar botón imprimir recibo». Es el papel que se le entrega
    al cliente cuando paga: qué se cobró, con qué, y a qué ventas se aplicó. */
 async function imprimirRecibo(cobId){
-  const [k, im] = await Promise.all([
+  const [k, im, me] = await Promise.all([
     sb.from("cobranzas").select("*").eq("id",cobId).single(),
-    sb.from("cobranza_imputaciones").select("*").eq("cobranza_id",cobId)
+    sb.from("cobranza_imputaciones").select("*").eq("cobranza_id",cobId),
+    sb.from("cobranza_medios").select("*").eq("cobranza_id",cobId).order("id")
   ]);
   if (k.error) return alert(k.error.message);
-  const x = k.data, imps = im.data||[];
+  const x = k.data, imps = im.data||[], medios = me.data||[];
   if (!CLIS.length) await cargarClientes();
   if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
   let vtas = [];
@@ -9372,9 +9450,18 @@ async function imprimirRecibo(cobId){
      (cli.nro_doc?' \u00b7 '+esc(cli.tipo_doc||"Doc")+' '+esc(cli.nro_doc):'')+
      (cli.direccion?'<br>'+esc(cli.direccion):'')+'</div>'+
    '<div class="caja">Recibimos la suma de<br><b class="grande">'+fmtM0(x.importe,mon)+'</b></div>'+
+   /* 14/8: un recibo puede tener varias formas de pago. Si las tiene, se
+      listan una por una; los recibos viejos, que tienen una sola cuenta,
+      siguen saliendo igual que siempre. */
    '<h3>Con qu\u00e9 se pag\u00f3</h3>'+
    '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
-     '<tr><td>'+esc(cta?cta.nombre:"\u2014")+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>'+
+     (medios.length
+       ? medios.map(function(y){
+           const c2 = (CTAS||[]).find(z=>String(z.id)===String(y.cuenta_id));
+           return '<tr><td>'+esc(c2?c2.nombre:"\u2014")+(y.detalle?' \u00b7 '+esc(y.detalle):'')+'</td>'+
+             '<td class="r">'+fmtM0(y.importe,mon)+'</td></tr>';
+         }).join("")
+       : '<tr><td>'+esc(cta?cta.nombre:"\u2014")+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>')+
    '</tbody></table>'+
    '<h3>Se aplic\u00f3 a</h3>'+
    (imps.length? '<table><thead><tr><th>Venta</th><th>Fecha</th><th class="r">Total</th><th class="r">Imputado</th></tr></thead><tbody>'+
@@ -9555,43 +9642,52 @@ async function formCobranza(cliId){
    '<div class="sec">Registrar cobranza</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><input type="date" id="k_fecha" value="'+hoy()+'"></div>'+
      '<div class="f"><label>Cuenta corriente</label><select id="k_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
-     '<div class="f"><label>Tipo de cuenta</label><select id="k_tipo_cta" onchange="filtrarCtasCobranza()"><option value="">Todas</option>'+TCTAS.filter(t=>t.activo).map(t=>'<option value="'+t.id+'">'+esc(t.nombre)+'</option>').join("")+'</select></div>'+
-     '<div class="f"><label>¿En qué cuenta entra la plata?</label><select id="k_cuenta">'+optCtas(cuentas)+'</select></div>'+
-     '<div class="f"><label>Importe en la cuenta corriente</label><input type="number" step="0.01" id="k_importe" oninput="calcCobranza()"></div>'+
-     '<div class="f" id="k_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="k_tc" oninput="calcCobranza()" placeholder="pesos por dólar"></div>'+
-     '<div class="f" id="k_box_pago" style="display:none"><label>Importe que entra en la cuenta</label><input type="number" step="0.01" id="k_pago" oninput="calcCobranzaDesdePago()"></div>'+
      '<div class="f"><label>Concepto</label><select id="k_concepto">'+selOpts(cc.data||[],null)+'</select></div>'+
      '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="k_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concCobAgregar('+cliId+')">Agregar</button></div></div>'+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="k_obs" rows="2"></textarea></div>'+
-   '<div class="sec">¿Paga con cheque?</div>'+
-   '<div class="muted" style="margin-bottom:8px">Si el cliente paga con un cheque de terceros, cargalo acá y entra a la cartera en la misma operación. Si paga en efectivo o por transferencia, dejalo vacío.</div>'+
-   '<div class="grid">'+
-     '<div class="f"><label>Librador</label><input id="k_ch_librador" placeholder="a nombre de quién está el cheque"></div>'+
-     '<div class="f"><label>Banco</label><select id="k_ch_banco">'+selOpts(BANCOS,null)+'</select></div>'+
-     '<div class="f"><label>Sucursal</label><select id="k_ch_suc">'+selOpts(SUCS,null)+'</select></div>'+
-     '<div class="f"><label>Número</label><input id="k_ch_numero"></div>'+
-     '<div class="f"><label>N° de cuenta corriente</label><input id="k_ch_cta"></div>'+
-     '<div class="f"><label>Fecha del cheque</label><input type="date" id="k_ch_fecha" value="'+hoy()+'"></div>'+
-     '<div class="f"><label>Fecha de vencimiento</label><input type="date" id="k_ch_venc"></div>'+
-   '</div>'+
-   '<div class="f"><label>Comentarios del cheque</label><input id="k_ch_obs"></div>'+
+   /* 14/8, Gilda: «pueden venir a pagar una parte con tarjeta de crédito, otra
+      parte efectivo y otra transferencia al banco, y se va imputando todo a la
+      cuenta corriente del cliente». Un solo recibo, varias formas de pago.
+      El cheque de terceros es una forma de pago más, y entra a la cartera en
+      la misma operación: es la única puerta de entrada que pidió Gilda. */
+   '<div class="sec">Cómo cobra</div>'+
+   '<div class="muted" style="margin-bottom:8px">Se puede combinar más de una: por ejemplo una parte con tarjeta, otra en efectivo y otra por transferencia. El total del recibo es la suma de todas.</div>'+
+   '<div class="acciones" style="margin-bottom:8px">'+
+     '<button class="btn2 btn-sm" onclick="medioCobAgregar()">+ Forma de pago</button> '+
+     '<button class="btn2 btn-sm" onclick="abrirChequeCobranza()">+ Cheque de terceros</button></div>'+
+   '<div id="k_medios"></div>'+
+   '<div id="k_total" style="margin-top:8px"></div>'+
    '<div class="sec">Imputar a ventas</div>'+
    '<div class="muted" style="margin-bottom:8px">A qué ventas se aplica este cobro. Si dejás todo en cero, el cobro igual baja la deuda general del cliente.</div>'+
    '<div id="k_ventas"><div class="muted">Cargando ventas…</div></div>'+
    '<div class="muted" id="k_nota" style="margin-top:8px">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
    '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
   window._CTAS_COB = cuentas;
+  KMED = [];
+  medioCobAgregar();
   $("k_moneda").onchange = function(){ calcCobranza(); pintarVentasCobranza(cliId); };
-  $("k_cuenta").onchange = calcCobranza;
   calcCobranza();
   pintarVentasCobranza(cliId);
   $("k_guardar").onclick = async function(){
-    const imp = Number($("k_importe").value||0);
-    if (!(imp>0)){ $("cbmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
-    const distinta = $("k_moneda").value !== monedaCta($("k_cuenta").value);
-    const tc = Number(($("k_tc")||{}).value||0);
-    if (distinta && !(tc>0)){ $("cbmsg").innerHTML='<div class="msg err">La cuenta corriente y la cuenta de pago son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
+    cobSincro();
+    const medios = KMED.filter(x=>Number(x.importe)>0);
+    if (!medios.length){ $("cbmsg").innerHTML='<div class="msg err">Cargá al menos una forma de pago con importe.</div>'; return; }
+    const mon = $("k_moneda").value;
+    const imp = medios.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+    /* La función de la base exige que todas las cuentas sean de la misma moneda
+       que la cuenta corriente. Se avisa acá, con el nombre de la cuenta, en vez
+       de dejar que la base tire un error genérico. */
+    let mal = null;
+    medios.forEach(function(x,k){
+      if (mal) return;
+      if (!x.cuenta_id) mal = "La forma de pago N° "+(k+1)+" no tiene cuenta.";
+      else {
+        const c = (CTAS||[]).find(y=>String(y.id)===String(x.cuenta_id));
+        if (c && c.moneda !== mon) mal = "La cuenta corriente es en "+mon+" y «"+c.nombre+"» es en "+c.moneda+": todas las formas de pago tienen que ser en "+mon+".";
+      }
+    });
+    if (mal){ $("cbmsg").innerHTML='<div class="msg err">'+esc(mal)+'</div>'; return; }
     $("k_guardar").disabled = true;
     const imputa = [];
     (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0; if (v>0) imputa.push({venta_id:x.venta_id, importe:v}); });
@@ -9604,30 +9700,119 @@ async function formCobranza(cliId){
     const sumaImp = imputa.reduce(function(a,x){ return a+Number(x.importe||0); },0);
     if (!malImp && sumaImp > imp+0.009) malImp = 'Estás imputando '+fmtM(sumaImp,$("k_moneda").value)+' y el cobro es de '+fmtM(imp,$("k_moneda").value)+': no se puede imputar más de lo que entra.';
     if (malImp){ $("k_guardar").disabled = false; $("cbmsg").innerHTML='<div class="msg err">'+malImp+'</div>'; return; }
-    const nroCh = ($("k_ch_numero")||{}).value || "";
-    let error;
-    if (nroCh.trim()){
-      const cheque = {librador:$("k_ch_librador").value||null, banco_id:$("k_ch_banco").value||null,
-        sucursal_id:$("k_ch_suc").value||null, numero:nroCh.trim(), nro_cta_cte:$("k_ch_cta").value||null,
-        importe:imp, moneda:$("k_moneda").value, fecha:$("k_ch_fecha").value||hoy(),
-        vencimiento:$("k_ch_venc").value||null, comentarios:$("k_ch_obs").value||null};
-      const r = await sb.rpc("registrar_cobranza_cheque", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(),
-        p_moneda_cc:$("k_moneda").value, p_cuenta:Number($("k_cuenta").value), p_importe:imp,
-        p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
-        p_imputaciones:imputa, p_cotizacion:tc||null, p_cheque:cheque});
-      error = r.error;
-    } else {
-      const r = await sb.rpc("registrar_cobranza", {p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:$("k_moneda").value,
-        p_cuenta:Number($("k_cuenta").value), p_importe:imp, p_concepto:$("k_concepto").value?Number($("k_concepto").value):null, p_obs:$("k_obs").value||null,
-        p_imputaciones:imputa,
-        p_importe_pago:Number(($("k_pago")||{}).value||0)||null, p_cotizacion:tc||null});
-      error = r.error;
-    }
+    const r = await sb.rpc("registrar_cobranza_multi", {
+      p_cliente:cliId, p_fecha:$("k_fecha").value||hoy(), p_moneda_cc:mon,
+      p_medios: medios.map(function(x){
+        const m = {cuenta_id:Number(x.cuenta_id), importe:Number(x.importe), detalle:x.detalle||null};
+        if (x.tipo === "cheque" && x.cheque) m.cheque = x.cheque;
+        return m;
+      }),
+      p_concepto:$("k_concepto").value?Number($("k_concepto").value):null,
+      p_obs:$("k_obs").value||null, p_imputaciones:imputa});
     $("k_guardar").disabled = false;
-    if (error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    if (r.error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
     await cargarClientes();
+    try{ if (typeof cargarCheques === "function") await cargarCheques(); }catch(e){}
     fichaCliente(cliId);
   };
+}
+
+/* ─────────── FORMAS DE PAGO DE LA COBRANZA ───────────
+   Mismo molde que la orden de pago: se lee la pantalla sin redibujar, para no
+   perder el cursor mientras se escribe. Un medio es una cuenta —efectivo,
+   banco, tarjeta— o un cheque de terceros, que además se da de alta en la
+   cartera dentro de la misma operación. */
+let KMED = [];
+function cobSincro(){
+  KMED.forEach(function(x,k){
+    const c=$("km_"+k+"_cuenta"), i=$("km_"+k+"_importe"), d=$("km_"+k+"_detalle");
+    if (c && x.tipo !== "cheque") x.cuenta_id = c.value||null;
+    if (i && x.tipo !== "cheque") x.importe = i.value===""?0:Number(i.value);
+    if (d) x.detalle = d.value;
+  });
+}
+function medioCobAgregar(){
+  cobSincro();
+  const cs = window._CTAS_COB||[];
+  KMED.push({tipo:"cuenta", cuenta_id:(cs[0]?String(cs[0].id):null), importe:0, detalle:""});
+  pintarMediosCob();
+}
+function medioCobQuitar(k){ cobSincro(); KMED.splice(k,1); pintarMediosCob(); }
+/* Anotar el cambio ANTES de redibujar, o la tabla se rearma con la cuenta
+   vieja y el cambio se pierde sin decir nada. */
+function medioCobCuenta(k){ cobSincro(); pintarMediosCob(); }
+function pintarMediosCob(){
+  const el = $("k_medios"); if (!el) return;
+  const cs = window._CTAS_COB||[];
+  el.innerHTML = !KMED.length
+    ? '<div class="muted">Todavía no cargaste ninguna forma de pago.</div>'
+    : '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Forma de pago</th><th>Entra a</th><th>Importe</th><th>Detalle</th><th></th></tr></thead><tbody>'+
+      KMED.map(function(x,k){
+        const esChq = x.tipo === "cheque";
+        const cta = (CTAS||[]).find(c=>String(c.id)===String(x.cuenta_id));
+        const c = x.cheque||{};
+        return '<tr><td style="white-space:normal">'+(esChq
+            ? '<b>Cheque de terceros</b> N° '+esc(c.numero||"")+(c.librador?' · '+esc(c.librador):'')+
+              (c.vencimiento?'<br><span class="muted">se cobra el '+fmtF(c.vencimiento)+'</span>':'')
+            : '<span class="muted">Efectivo, banco o tarjeta</span>')+'</td>'+
+          '<td>'+(esChq
+            ? esc(cta?cta.nombre:"—")
+            : '<select id="km_'+k+'_cuenta" style="min-width:180px" onchange="medioCobCuenta('+k+')">'+
+              cs.map(c2=>'<option value="'+c2.id+'" '+(String(x.cuenta_id)===String(c2.id)?"selected":"")+'>'+esc(c2.nombre)+' ('+c2.moneda+')</option>').join("")+'</select>')+'</td>'+
+          '<td>'+(esChq
+            ? '<b>'+fmtM(x.importe,($("k_moneda")||{}).value||"ARS")+'</b>'
+            : '<input type="number" step="0.01" style="width:130px" id="km_'+k+'_importe" value="'+(x.importe||"")+'" oninput="calcCobranza()">')+'</td>'+
+          '<td><input id="km_'+k+'_detalle" value="'+esc(x.detalle||"")+'" placeholder="opcional" style="min-width:130px"></td>'+
+          '<td><button class="btn2 btn-sm" onclick="medioCobQuitar('+k+')">Quitar</button></td></tr>';
+      }).join("")+'</tbody></table></div>';
+  calcCobranza();
+}
+/* El cheque del cliente. La sucursal es texto libre: la que dice el cheque, sin
+   tener que darla de alta antes de poder cobrar. Pedido de Gilda, 14/8. */
+function abrirChequeCobranza(){
+  cobSincro();
+  const ctas = ctasDeCheques();
+  $("d2tit").textContent = "Cheque de terceros";
+  $("d2body").innerHTML = !ctas.length
+    ? '<div class="msg err" style="line-height:1.5"><b>No hay ninguna cuenta de tipo «Cheques de terceros».</b><br>'+
+      'El cheque tiene que entrar a algún lado. Andá a <b>Finanzas → Cuentas</b>, creá una cuenta con ese tipo, y volvé.</div>'+
+      '<div class="acciones"><button class="btn2" onclick="cerrarDlg2()">Cerrar</button></div>'
+    : '<div id="kcmsg"></div>'+
+      '<div class="muted" style="margin-bottom:8px">El cheque baja la deuda del cliente y queda <b>en cartera</b>, disponible para depositarlo o para pagarle a un proveedor.</div>'+
+      '<div class="grid">'+
+        '<div class="f"><label>Librador *</label><input id="kc_librador" placeholder="a nombre de quién está el cheque"></div>'+
+        '<div class="f"><label>Banco</label><select id="kc_banco">'+selOpts(BANCOS,null)+'</select></div>'+
+        '<div class="f"><label>Sucursal</label><input id="kc_suc" placeholder="la que dice el cheque"></div>'+
+        '<div class="f"><label>Número *</label><input id="kc_numero"></div>'+
+        '<div class="f"><label>N° de cuenta corriente</label><input id="kc_cta"></div>'+
+        '<div class="f"><label>Importe *</label><input type="number" step="0.01" id="kc_importe"></div>'+
+        '<div class="f"><label>Fecha de emisión</label><input type="date" id="kc_fecha" value="'+hoy()+'"></div>'+
+        '<div class="f"><label>Fecha de cobro *</label><input type="date" id="kc_venc">'+
+          '<div class="muted" style="font-size:.85em;margin-top:4px">Desde cuándo se puede depositar. A los '+DIAS_VENCE_CHEQUE+' días de esa fecha el cheque queda vencido.</div></div>'+
+        '<div class="f"><label>Entra a la cuenta *</label><select id="kc_cuenta">'+optCtas(ctas)+'</select></div>'+
+      '</div>'+
+      '<div class="f"><label>Comentarios</label><input id="kc_obs"></div>'+
+      '<div class="acciones"><button class="btn" onclick="chequeCobAgregar()">Agregar al recibo</button>'+
+      '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+function chequeCobAgregar(){
+  const err = t => { const e=$("kcmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const v = id => { const e=$(id); return e ? e.value : ""; };
+  const nro = (v("kc_numero")||"").trim();
+  if (!nro) return err("Falta el número del cheque.");
+  if (!(v("kc_librador")||"").trim()) return err("Falta el librador, que es quién firma el cheque.");
+  const imp = Number(v("kc_importe")||0);
+  if (!(imp>0)) return err("El importe tiene que ser mayor a cero.");
+  if (!v("kc_venc")) return err("Falta la fecha de cobro del cheque.");
+  const cta = v("kc_cuenta");
+  if (!cta) return err("Elegí a qué cuenta entra el cheque.");
+  KMED.push({tipo:"cheque", cuenta_id:cta, importe:imp, detalle:"Cheque "+nro,
+    cheque:{librador:v("kc_librador").trim(), banco_id:v("kc_banco")||null, sucursal:v("kc_suc")||null,
+            numero:nro, nro_cta_cte:v("kc_cta")||null, fecha:v("kc_fecha")||hoy(),
+            vencimiento:v("kc_venc"), comentarios:v("kc_obs")||null}});
+  cerrarDlg2();
+  pintarMediosCob();
 }
 /* tabla de imputacion a ventas, igual a la del pago a proveedores */
 async function pintarVentasCobranza(cliId){
@@ -9650,7 +9835,7 @@ async function pintarVentasCobranza(cliId){
    imputado». Nunca pone más de lo que entra. */
 function imputarTodoCob(k){
   const v = (window._VTAS_COB||[])[k]; if (!v) return;
-  const imp = Number(($("k_importe")||{}).value||0);
+  const imp = totalCobranza();
   let otros = 0;
   (window._VTAS_COB||[]).forEach(function(x,i){ if (i===k) return; const el=$("kv_"+i); if (el) otros += Number(el.value||0); });
   const el = $("kv_"+k);
@@ -9661,7 +9846,7 @@ function calcImputadoCob(){
   let s = 0;
   (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); if(el) s += Number(el.value||0); });
   const m = ($("k_moneda")||{}).value||"ARS";
-  const imp = Number(($("k_importe")||{}).value||0);
+  const imp = KMED.reduce(function(a,x){ return a+Number(x.importe||0); },0);
   const resta = imp - s;
   const el = $("k_imputado"); if (!el) return;
   el.innerHTML = '<div class="tablewrap"><table><tbody>'+
@@ -9674,17 +9859,8 @@ function calcImputadoCob(){
      : resta > 0.009 ? '<div class="muted" style="margin-top:6px">Lo que resta imputar baja la deuda general del cliente, sin quedar pegado a ninguna venta.</div>'
      : imp>0 ? '<div class="muted" style="margin-top:6px">El cobro queda imputado por completo.</div>' : '');
 }
-/* el tipo de cuenta acota el desplegable, como en Pirka: primero Efectivo/Banco/Cheques y despues la cuenta */
-function filtrarCtasCobranza(){
-  const t = $("k_tipo_cta").value;
-  const lista = (window._CTAS_COB||[]).filter(c => !t || String(c.tipo_cuenta_id)===String(t));
-  const sel = $("k_cuenta");
-  const antes = sel.value;
-  sel.innerHTML = optCtas(lista);
-  if (lista.some(c=>String(c.id)===String(antes))) sel.value = antes;
-  if (!lista.length) sel.innerHTML = '<option value="">— no hay cuentas de ese tipo —</option>';
-  calcCobranza();
-}
+/* filtrarCtasCobranza se sacó el 14/8: la cuenta única del cobro la reemplazó
+   la grilla de formas de pago, y la función quedaba sin nadie que la llamara. */
 async function concCobAgregar(cliId){
   const n = $("k_conc_nuevo").value.trim(); if (!n) return;
   const {error} = await sb.from("conceptos_cobranza").insert({nombre:n, activo:true});
@@ -10205,11 +10381,6 @@ function formGasto(){
     /* Igual que en Pirka y que en la cobranza: primero el tipo —efectivo, banco,
        tarjeta— y después la cuenta. Con trece cuentas, buscar la correcta en una
        lista sola es incómodo. Pedido de Gustavo, 9/8/2026. */
-    '<div class="f"><label>Tipo de cuenta</label><select id="g_tipo_cta" onchange="filtrarCtasGasto()"><option value="">Todas</option>'+
-      TCTAS.filter(function(t){ return t.activo; }).map(function(t){ return '<option value="'+t.id+'">'+esc(t.nombre)+'</option>'; }).join("")+
-    '</select></div>'+
-    '<div class="f"><label>Cuenta de donde sale</label><select id="g_cuenta">'+optCtas(cuentas)+'</select></div>'+
-    '<div class="f"><label>Importe total</label><input type="number" step="0.01" id="g_importe" oninput="calcGasto()"></div>'+
     '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
     '<div class="f"><label>Concepto</label><select id="g_concepto">'+selOpts(CGASTOS,null)+'</select></div>'+
     '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="g_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concGastoAgregar()">Agregar</button></div></div>'+
@@ -10237,17 +10408,37 @@ function formGasto(){
     '<div class="f"><label>Proveedor</label><input id="g_proveedor" placeholder="opcional"></div>'+
     '<div class="f"><label>N° de comprobante</label><input id="g_comprobante" placeholder="opcional"></div>'+
     '<div class="f"><label>CUIT del proveedor</label><input id="g_cuit" placeholder="opcional"></div>'+
-   '</div><div id="g_calc" class="muted"></div>'+
-   '<div class="muted" style="margin-top:4px">Proveedor, comprobante y CUIT son opcionales, pero si los cargás ahora el día de mañana se puede sacar el crédito fiscal sin volver a abrir cada gasto.</div>'+
-   '<div class="f"><label>Detalle</label><input id="g_extra" placeholder="A qué corresponde"></div>'+
+   '</div>'+
+   '<div class="muted" style="margin-bottom:8px">Proveedor, comprobante y CUIT son opcionales, pero si los cargás ahora el día de mañana se puede sacar el crédito fiscal sin volver a abrir cada gasto.</div>'+
+   /* 14/8, Gilda: «que al ingresar uno nuevo se pueda combinar formas de pago.
+      Ej: cuando se hace adelanto de sueldo, que una parte vaya por banco y otra
+      en efectivo». Mismo molde que la orden de pago. */
+   '<div class="sec">Cómo se paga</div>'+
+   '<div class="muted" style="margin-bottom:8px">Se puede combinar más de una: por ejemplo mitad por banco y mitad en efectivo. El total del gasto es la suma de todas.</div>'+
+   '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="medioGastoAgregar()">+ Forma de pago</button></div>'+
+   '<div id="g_medios"></div>'+
+   '<div class="f" style="margin-top:10px"><label>Detalle</label><input id="g_extra" placeholder="A qué corresponde"></div>'+
+   '<div id="g_calc" style="margin-top:8px"></div>'+
    '<div class="acciones"><button class="btn" id="g_guardar">Registrar gasto</button></div>';
   _gFechaPrev = hoy();
   window._CTAS_GASTO = cuentas;
-  calcGasto();
+  GMED = [];
+  medioGastoAgregar();
   $("g_guardar").onclick = async function(){
-    const imp = Number($("g_importe").value||0);
-    if (!(imp>0)){ $("fgmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
-    const r = await sb.rpc("registrar_gasto",{p_fecha:$("g_fecha").value||hoy(), p_cuenta:Number($("g_cuenta").value), p_importe:imp,
+    gastoSincro();
+    const medios = GMED.filter(x=>Number(x.importe)>0);
+    if (!medios.length){ $("fgmsg").innerHTML='<div class="msg err">Cargá al menos una forma de pago con importe.</div>'; return; }
+    let mal = null;
+    medios.forEach(function(x,k){ if (!mal && !x.cuenta_id) mal = "La forma de pago N° "+(k+1)+" no tiene cuenta."; });
+    const m0 = (CTAS||[]).find(c=>String(c.id)===String(medios[0].cuenta_id));
+    medios.forEach(function(x){
+      const c = (CTAS||[]).find(y=>String(y.id)===String(x.cuenta_id));
+      if (!mal && c && m0 && c.moneda !== m0.moneda)
+        mal = "Todas las formas de pago del gasto tienen que ser en la misma moneda: «"+c.nombre+"» es en "+c.moneda+" y «"+m0.nombre+"» en "+m0.moneda+".";
+    });
+    if (mal){ $("fgmsg").innerHTML='<div class="msg err">'+esc(mal)+'</div>'; return; }
+    const r = await sb.rpc("registrar_gasto_multi",{p_fecha:$("g_fecha").value||hoy(),
+      p_medios: medios.map(x=>({cuenta_id:Number(x.cuenta_id), importe:Number(x.importe), detalle:x.detalle||null})),
       p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null,
       p_comprobante:$("g_comprobante").value||null, p_cuit:$("g_cuit").value||null, p_proveedor:$("g_proveedor").value||null});
     if (r.error){ $("fgmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
@@ -10269,19 +10460,69 @@ function formGasto(){
   $("dlg").showModal();
 }
 /* El tipo acota la lista de cuentas, sin perder la que ya estaba elegida. */
-function filtrarCtasGasto(){
-  const t = ($("g_tipo_cta")||{}).value || "";
-  const lista = (window._CTAS_GASTO||[]).filter(function(c){ return !t || String(c.tipo_cuenta_id)===String(t); });
-  const sel = $("g_cuenta"); if (!sel) return;
-  const antes = sel.value;
-  sel.innerHTML = lista.length ? optCtas(lista) : '<option value="">— no hay cuentas de ese tipo —</option>';
-  if (lista.some(function(c){ return String(c.id)===String(antes); })) sel.value = antes;
-}
+/* filtrarCtasGasto se saco el 14/8: la cuenta unica del gasto la reemplazo
+   la grilla de formas de pago, y la funcion quedaba sin nadie que la llamara. */
 
+/* ─────────── FORMAS DE PAGO DEL GASTO ───────────
+   14/8, Gilda: «que al ingresar uno nuevo se pueda combinar formas de pago.
+   Ej: cuando se hace adelanto de sueldo, que una parte vaya por banco y otra
+   en efectivo». Mismo molde que la orden de pago: se lee lo que hay escrito
+   en pantalla SIN redibujar, así no se pierde el cursor mientras se escribe. */
+let GMED = [];
+function gastoSincro(){
+  GMED.forEach(function(x,k){
+    const c=$("gm_"+k+"_cuenta"), i=$("gm_"+k+"_importe"), d=$("gm_"+k+"_detalle");
+    if (c) x.cuenta_id = c.value||null;
+    if (i) x.importe = i.value===""?0:Number(i.value);
+    if (d) x.detalle = d.value;
+  });
+}
+function medioGastoAgregar(){
+  gastoSincro();
+  const cs = window._CTAS_GASTO||[];
+  GMED.push({cuenta_id:(cs[0]?String(cs[0].id):null), importe:0, detalle:""});
+  pintarMediosGasto();
+}
+function medioGastoQuitar(k){ gastoSincro(); GMED.splice(k,1); pintarMediosGasto(); }
+/* Anotar el cambio ANTES de redibujar: si se redibuja primero, la tabla se
+   arma con la cuenta vieja y el cambio se pierde sin decir nada. Es el mismo
+   error que ya me comí con la grilla de impuestos y con la orden de pago. */
+function medioGastoCuenta(k){ gastoSincro(); pintarMediosGasto(); }
+function pintarMediosGasto(){
+  const el = $("g_medios"); if (!el) return;
+  const cs = window._CTAS_GASTO||[];
+  el.innerHTML = !GMED.length
+    ? '<div class="muted">Todavía no cargaste ninguna forma de pago.</div>'
+    : '<div class="tablewrap"><table><thead><tr><th>Sale de</th><th>Importe</th><th>Detalle</th><th></th></tr></thead><tbody>'+
+      GMED.map(function(x,k){
+        return '<tr><td><select id="gm_'+k+'_cuenta" style="min-width:190px" onchange="medioGastoCuenta('+k+')">'+
+            cs.map(c=>'<option value="'+c.id+'" '+(String(x.cuenta_id)===String(c.id)?"selected":"")+'>'+esc(c.nombre)+' ('+c.moneda+')</option>').join("")+'</select></td>'+
+          '<td><input type="number" step="0.01" style="width:130px" id="gm_'+k+'_importe" value="'+(x.importe||"")+'" oninput="calcGasto()"></td>'+
+          '<td><input id="gm_'+k+'_detalle" value="'+esc(x.detalle||"")+'" placeholder="opcional" style="min-width:140px"></td>'+
+          '<td>'+(GMED.length>1?'<button class="btn2 btn-sm" onclick="medioGastoQuitar('+k+')">Quitar</button>':'')+'</td></tr>';
+      }).join("")+'</tbody></table></div>';
+  calcGasto();
+}
+/* El total del gasto es la suma de las formas de pago. El impuesto NO se suma:
+   se desagrega de ese total, porque lo que se carga es lo que salió de la
+   cuenta —el importe del comprobante, con IVA adentro—. */
 function calcGasto(){
-  const t = Number($("g_importe").value||0), p = Number($("g_imp").value||0);
-  const neto = p? Math.round(t/(1+p/100)*100)/100 : t;
-  $("g_calc").innerHTML = 'Neto '+(fmtM(neto,"ARS")||"—")+' · IVA '+(fmtM(Math.round((t-neto)*100)/100,"ARS")||"—")+' · Total '+(fmtM(t,"ARS")||"—");
+  gastoSincro();
+  const el = $("g_calc"); if (!el) return;
+  const c0 = (CTAS||[]).find(c=>String(c.id)===String((GMED[0]||{}).cuenta_id));
+  const m = c0 ? c0.moneda : "ARS";
+  const total = GMED.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  const al = Number(($("g_imp")||{}).value||0);
+  const neto = al ? total/(1+al/100) : total;
+  const iva = total - neto;
+  el.innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr><td>Neto</td><td style="text-align:right">'+(fmtM(neto,m)||"—")+'</td></tr>'+
+    '<tr><td>IVA '+(al?String(al).replace(".",",")+" %":"exento")+'</td><td style="text-align:right">'+(fmtM(iva,m)||"—")+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>TOTAL del gasto</b></td><td style="text-align:right;font-size:16px"><b>'+(fmtM(total,m)||"—")+'</b></td></tr>'+
+    '</tbody></table></div>'+
+    (GMED.filter(x=>Number(x.importe)>0).length>1
+      ? '<div class="muted" style="margin-top:6px">'+GMED.filter(x=>Number(x.importe)>0).length+' formas de pago. Cada una descuenta de su cuenta por separado; el gasto queda uno solo.</div>'
+      : '');
 }
 async function concGastoAgregar(){
   const n = $("g_conc_nuevo").value.trim(); if(!n) return;
@@ -10717,33 +10958,31 @@ async function ajustarCuenta(id){
 }
 function monedaCta(id){ const c = CTAS.find(x=>String(x.id)===String(id)); return c?c.moneda:"ARS"; }
 
-/* cobranza: si la cuenta corriente y la cuenta de pago son de distinta moneda, hace falta el tipo de cambio */
-function calcCobranza(){
-  const mcc = $("k_moneda").value, mcta = monedaCta($("k_cuenta").value);
-  const distinta = mcc !== mcta;
-  $("k_box_tc").style.display = distinta ? "" : "none";
-  $("k_box_pago").style.display = distinta ? "" : "none";
-  /* el cuadro de «resta imputar» también se recalcula al cambiar el importe:
-     si no, se queda vacío hasta que toques una imputación */
-  try{ calcImputadoCob(); }catch(e){}
-  if (!distinta){ $("k_nota").innerHTML = "El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación."; return; }
-  const imp = Number($("k_importe").value||0), tc = Number($("k_tc").value||0);
-  if (imp>0 && tc>0){
-    const pago = (mcc === "USD" && mcta === "ARS") ? imp*tc : (mcc === "ARS" && mcta === "USD") ? imp/tc : imp;
-    $("k_pago").value = Math.round(pago*100)/100;
-  }
-  $("k_nota").innerHTML = 'La deuda está en <b>'+mcc+'</b> y el cliente paga en <b>'+mcta+'</b>. Se le descuentan '+
-    (fmtM(Number($("k_importe").value||0), mcc)||"—")+' de la cuenta corriente y entran '+
-    (fmtM(Number(($("k_pago")||{}).value||0), mcta)||"—")+' en la caja.';
+/* El total del recibo es la suma de las formas de pago. Se recalcula con cada
+   tecla pero NO redibuja la grilla: por eso no se traba al escribir.
+   El cambio de moneda del 14/8: como la base exige que todas las cuentas sean
+   de la misma moneda que la cuenta corriente, el tipo de cambio dejó de tener
+   sentido acá y se sacó. Un cobro en otra moneda se hace con la cuenta
+   corriente de esa moneda. */
+function totalCobranza(){
+  cobSincro();
+  return KMED.reduce(function(a,x){ return a+Number(x.importe||0); },0);
 }
-function calcCobranzaDesdePago(){
-  const mcc = $("k_moneda").value, mcta = monedaCta($("k_cuenta").value);
-  const pago = Number($("k_pago").value||0), tc = Number($("k_tc").value||0);
-  if (pago>0 && tc>0){
-    const imp = (mcc === "USD" && mcta === "ARS") ? pago/tc : (mcc === "ARS" && mcta === "USD") ? pago*tc : pago;
-    $("k_importe").value = Math.round(imp*100)/100;
-  }
-  calcCobranza();
+function calcCobranza(){
+  const m = ($("k_moneda")||{}).value || "ARS";
+  const total = totalCobranza();
+  const el = $("k_total");
+  if (el) el.innerHTML = '<div class="tablewrap"><table><tbody>'+
+    '<tr style="background:#f6f3ee"><td><b>TOTAL del recibo</b></td><td style="text-align:right;font-size:16px"><b>'+(fmtM(total,m)||"—")+'</b></td></tr>'+
+    '</tbody></table></div>'+
+    (KMED.filter(x=>Number(x.importe)>0).length>1
+      ? '<div class="muted" style="margin-top:6px">'+KMED.filter(x=>Number(x.importe)>0).length+' formas de pago. Cada una entra a su cuenta por separado; el recibo queda uno solo.</div>'
+      : '');
+  /* el cuadro de «resta imputar» también se recalcula acá: si no, se queda
+     vacío hasta que toques una imputación */
+  try{ calcImputadoCob(); }catch(e){}
+  const n = $("k_nota");
+  if (n) n.innerHTML = "El cobro va a bajar la deuda del cliente y subir el saldo de cada cuenta, en una sola operación.";
 }
 
 /* transferencia: si las cuentas son de distinta moneda, hace falta el tipo de cambio */
