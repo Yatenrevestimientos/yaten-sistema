@@ -237,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-123";
+const VERSION = "v2026.08.14-124";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6111,6 +6111,10 @@ function accionCheque(x){
   if (x.tipo === "Terceros" && x.estado === "Disponible" && P("finanzas-modificar"))
     return '<button class="btn btn-sm" onclick="formDepositar('+x.id+')">Depositar</button>'+
            (esDueno()? ' <button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Rechazado</button>' : '');
+  /* Un depósito mal cargado tiene que poder deshacerse: si no, el cheque queda
+     depositado para siempre y el recibo que lo trajo tampoco se puede anular. */
+  if (x.tipo === "Terceros" && x.estado === "Depositado" && P("finanzas-anular"))
+    return '<button class="btn2 btn-sm" onclick="anularDeposito('+x.id+')">Deshacer depósito</button>';
   if (esDueno() && x.estado !== "Cobrado")
     return '<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>';
   return '';
@@ -6147,6 +6151,14 @@ async function formDepositar(id){
       '<div class="acciones"><button class="btn" id="dp_ok" onclick="depositarConfirmar('+id+')">Depositar</button>'+
       '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
   try{ dlg2().showModal(); }catch(e){}
+}
+async function anularDeposito(id){
+  const m = prompt("¿Por qué deshacés el depósito? Queda registrado con tu nombre.");
+  if (m === null) return;
+  const {error} = await sb.rpc("anular_deposito_cheque",{p_cheque:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  await cargarFin();
+  VISTAS.cheques();
 }
 async function depositarConfirmar(id){
   const err = t => { const e=$("dpmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
