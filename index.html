@@ -87,11 +87,11 @@ tbody tr:nth-child(even){background:var(--cebra)}
 /* 14/8: el color del renglón de la planilla dice en qué está la oportunidad.
    Va en las celdas para que gane sobre el renglón alternado, y el resaltado
    del mouse pasa por encima como velo sin borrarlo. */
-tr.p-desc   td{background:#f7e2dd}
-tr.p-vend   td{background:#cfe0d3}
-tr.p-tomado td{background:#fbf1d2}
-tr.p-visita td{background:#e6f0e8}
-tr.p-presup td{background:#e2ecf4}
+tr.p-desc   td{background:#f4d8d1}
+tr.p-vend   td{background:#b2d0bb}
+tr.p-tomado td{background:#faecbb}
+tr.p-visita td{background:#e6f2e9}
+tr.p-presup td{background:#d9e8f5}
 tbody tr:hover{background:#eae4d9}
 /* el renglon de la planilla tiene color propio en cada celda: el resaltado va
    por encima, como un velo, para no borrarle el color de la etapa */
@@ -110,11 +110,11 @@ thead th.orden-desc::after{content:"▼";opacity:.85}
 .pill.sen{background:#fdf0d8;border-color:#e6cf9d;color:#7a5a12}
 .pill.esp{background:#eef3f3;border-color:#c6d3d4;color:#2c4448}
 /* los mismos colores del renglón, en chico, para la referencia de la planilla */
-.pill.p-desc{background:#f7e2dd;border-color:#e0bdb6}
-.pill.p-vend{background:#cfe0d3;border-color:#a8c6ae}
-.pill.p-tomado{background:#fbf1d2;border-color:#e6cf9d}
-.pill.p-visita{background:#e6f0e8;border-color:#bcd8c2}
-.pill.p-presup{background:#e2ecf4;border-color:#b8cddd}
+.pill.p-desc{background:#f4d8d1;border-color:#dcb3aa}
+.pill.p-vend{background:#b2d0bb;border-color:#8fb99b}
+.pill.p-tomado{background:#faecbb;border-color:#e2c98d}
+.pill.p-visita{background:#e6f2e9;border-color:#bcd8c2}
+.pill.p-presup{background:#d9e8f5;border-color:#aec8dd}
 .msg{padding:10px 12px;border-radius:8px;font-size:13.5px;line-height:1.5;margin-bottom:12px}
 .msg.err{background:#f9e7e4;color:#7a2415;border:1px solid #e6c3bb}
 .msg.ok{background:#e7f1e9;color:#1d5b2c;border:1px solid #c3ddc8}
@@ -237,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-117";
+const VERSION = "v2026.08.14-118";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
