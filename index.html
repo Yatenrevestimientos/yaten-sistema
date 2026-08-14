@@ -84,6 +84,14 @@ thead th{position:sticky;top:0;background:#f4f1ea;z-index:2;font-size:12px;font-
    pierda de columna. Los renglones con color propio (la planilla) mandan ellos,
    porque el color lo llevan las celdas y tapan al de la fila. */
 tbody tr:nth-child(even){background:var(--cebra)}
+/* 14/8: el color del renglón de la planilla dice en qué está la oportunidad.
+   Va en las celdas para que gane sobre el renglón alternado, y el resaltado
+   del mouse pasa por encima como velo sin borrarlo. */
+tr.p-desc   td{background:#f7e2dd}
+tr.p-vend   td{background:#cfe0d3}
+tr.p-tomado td{background:#fbf1d2}
+tr.p-visita td{background:#e6f0e8}
+tr.p-presup td{background:#e2ecf4}
 tbody tr:hover{background:#eae4d9}
 /* el renglon de la planilla tiene color propio en cada celda: el resaltado va
    por encima, como un velo, para no borrarle el color de la etapa */
@@ -101,6 +109,12 @@ thead th.orden-desc::after{content:"▼";opacity:.85}
 .pill.no{background:#f7e6e3;border-color:#e0bdb6;color:#7a2415}
 .pill.sen{background:#fdf0d8;border-color:#e6cf9d;color:#7a5a12}
 .pill.esp{background:#eef3f3;border-color:#c6d3d4;color:#2c4448}
+/* los mismos colores del renglón, en chico, para la referencia de la planilla */
+.pill.p-desc{background:#f7e2dd;border-color:#e0bdb6}
+.pill.p-vend{background:#cfe0d3;border-color:#a8c6ae}
+.pill.p-tomado{background:#fbf1d2;border-color:#e6cf9d}
+.pill.p-visita{background:#e6f0e8;border-color:#bcd8c2}
+.pill.p-presup{background:#e2ecf4;border-color:#b8cddd}
 .msg{padding:10px 12px;border-radius:8px;font-size:13.5px;line-height:1.5;margin-bottom:12px}
 .msg.err{background:#f9e7e4;color:#7a2415;border:1px solid #e6c3bb}
 .msg.ok{background:#e7f1e9;color:#1d5b2c;border:1px solid #c3ddc8}
@@ -223,7 +237,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.13-116";
+const VERSION = "v2026.08.14-117";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -986,6 +1000,7 @@ function tabla(rows, cols){
 let FILTROS = {desde:"",hasta:"",resultado:"",estado:"",ato:"",vl:"",texto:""};
 VISTAS.planilla = function(){
   $("main").innerHTML =
+   '<div id="plcola"></div>'+
    '<div class="panel"><h2>Planilla de ventas</h2>'+
    '<div class="desc">Una fila por oportunidad. Entrada · Visita · Presupuesto · Último seguimiento.</div>'+
    '<div class="filtros">'+
@@ -1000,11 +1015,15 @@ VISTAS.planilla = function(){
    '</div><div id="plres" class="muted">Cargando…</div></div>';
   $("fbtn").onclick = () => { FILTROS = {desde:$("fdesde").value,hasta:$("fhasta").value,resultado:$("fres").value,estado:$("fest").value,ato:$("fato").value,vl:"",texto:$("ftxt").value.trim()}; pintarPlanilla(); };
   $("fclr").onclick = () => { FILTROS={desde:"",hasta:"",resultado:"",estado:"",ato:"",vl:"",texto:""}; VISTAS.planilla(); };
+  pintarCola();
   pintarPlanilla();
 };
 async function pintarPlanilla(){
   $("plres").innerHTML = '<div class="muted">Cargando…</div>';
-  const d = await traerProspectos(FILTROS);
+  let d = await traerProspectos(FILTROS);
+  /* lo que está en la cola de trabajo vive arriba: acá no se repite, salvo que
+     alguien filtre a propósito por uno de esos dos estados */
+  if (!FILTROS.estado) d = d.filter(function(x){ return x.estado !== "DATO" && x.estado !== "CONTACTO"; });
   const ultimos = {};
   if (d.length && P("seguimiento-consultar")){
     const ids = d.slice(0,300).map(p=>p.id);
@@ -1024,34 +1043,186 @@ async function pintarPlanilla(){
       if (!ligados[x.prospecto_id]) ligados[x.prospecto_id] = x;
     });
   }
-  const th = (t,cl)=>'<th class="'+cl+'">'+t+'</th>';
+  /* 14/8, Gustavo: la planilla tenía 26 columnas y no se podía leer sin correrla
+     entera. Quedan 13: lo de la entrada, el resultado y la plata. El detalle de
+     la visita, del presupuesto y del seguimiento se mira entrando al prospecto.
+     Lo que antes se leía en una columna, ahora se ve en el color del renglón. */
   $("plres").innerHTML =
-  '<div class="muted" style="margin-bottom:8px">'+d.length+' oportunidad'+(d.length===1?"":"es")+'</div>'+
-  '<div class="tablewrap" style="max-height:70dvh;overflow:auto"><table><thead>'+
-    '<tr class="grupo"><th class="b-e" colspan="11">ENTRADA · VL</th><th class="b-v" colspan="3">VISITA · ATO</th>'+
-    '<th class="b-s" colspan="9">PRESUPUESTO</th><th class="b-u" colspan="3">ÚLTIMO SEGUIMIENTO</th></tr><tr>'+
-    ["Código","Fecha","Estado","Canal","Origen","VL","Cliente","Celular","Localidad","Objeción","Derivación"].map(t=>th(t,"b-e")).join("")+
-    ["ATO","Fecha visita","Hora"].map(t=>th(t,"b-v")).join("")+
-    ["Resultado","m² cotiz.","m² colocar","N° presup.","Fecha presup.","Importe","Objeción","2do prod.","Descarte"].map(t=>th(t,"b-s")).join("")+
-    ["Fecha","Observación","Próxima"].map(t=>th(t,"b-u")).join("")+
+  '<div class="muted" style="margin-bottom:8px">'+d.length+' oportunidad'+(d.length===1?"":"es")+' · '+
+    '<span class="pill p-visita">con visita</span> <span class="pill p-presup">presupuesto directo</span> '+
+    '<span class="pill p-vend">vendido</span> <span class="pill p-desc">descartado</span></div>'+
+  '<div class="tablewrap" style="max-height:70dvh;overflow:auto"><table><thead><tr>'+
+    ["Código","Fecha","Estado","Canal","Origen","VL","Cliente","Celular","Localidad","Objeción","Derivación","Resultado","Importe"]
+      .map(t=>'<th>'+t+'</th>').join("")+
   '</tr></thead><tbody>'+ d.map(function(p){
-    const s = ultimos[p.id]||{};
     const g = ligados[p.id];
-    const cod = g ? '<b>'+esc(g.codigo)+'</b>' : esc(p.nro_presup_papel||"");
-    const fpr = g ? fmtF(g.fecha) : fmtF(p.fecha_papel_a_vl);
     const imp = g ? fmtM(g.total,g.moneda) : fmtM(p.importe,p.moneda);
-    return '<tr style="cursor:pointer" onclick="abrir('+p.id+')">'+
-      '<td class="b-e"><b>'+esc(p.codigo)+'</b></td><td class="b-e">'+fmtF(p.fecha)+'</td><td class="b-e"><span class="pill">'+esc(p.estado)+'</span></td>'+
-      '<td class="b-e">'+esc(nom(M.can,p.canal_id))+'</td><td class="b-e">'+esc(nom(M.ori,p.origen_id))+'</td><td class="b-e">'+esc(nomP(p.vl_id))+'</td>'+
-      '<td class="b-e"><b>'+esc(p.nombre)+'</b></td><td class="b-e">'+esc(p.celular||p.telefono||"")+'</td><td class="b-e">'+esc(nom(M.loc,p.localidad_id))+'</td>'+
-      '<td class="b-e">'+esc(nom(M.obj,p.objecion_entrada_id))+'</td><td class="b-e">'+esc(p.derivacion||"")+'</td>'+
-      '<td class="b-v">'+esc(nomP(p.ato_id))+'</td><td class="b-v">'+fmtF(p.fecha_visita)+'</td><td class="b-v">'+esc(p.hora_visita||"")+'</td>'+
-      '<td class="b-s">'+badge(p.resultado)+'</td><td class="b-s">'+fmtN(p.m2_cotizados)+'</td><td class="b-s">'+fmtN(p.m2_colocar)+'</td>'+
-      '<td class="b-s">'+cod+'</td><td class="b-s">'+fpr+'</td><td class="b-s">'+imp+'</td>'+
-      '<td class="b-s">'+esc(nom(M.obj,p.objecion_visita_id))+'</td><td class="b-s">'+esc(p.producto_2do||"")+'</td><td class="b-s">'+esc(nom(M.mot,p.motivo_descarte_id))+'</td>'+
-      '<td class="b-u">'+fmtF(s.fecha)+'</td><td class="b-u">'+esc((s.observacion||"").slice(0,45))+'</td>'+
-      '<td class="b-u">'+(s.proxima_fecha?fmtF(s.proxima_fecha)+" "+esc(s.proxima_accion||""):"")+'</td></tr>';
+    return '<tr class="'+colorProspecto(p)+'" style="cursor:pointer" onclick="abrir('+p.id+')">'+
+      '<td><b>'+esc(p.codigo)+'</b></td><td>'+fmtF(p.fecha)+'</td><td><span class="pill">'+esc(p.estado)+'</span></td>'+
+      '<td>'+esc(nom(M.can,p.canal_id))+'</td><td>'+esc(nom(M.ori,p.origen_id))+'</td><td>'+esc(nomP(p.vl_id))+'</td>'+
+      '<td style="white-space:normal;min-width:150px"><b>'+esc(p.nombre)+'</b></td>'+
+      '<td>'+esc(p.celular||p.telefono||"")+'</td><td>'+esc(nom(M.loc,p.localidad_id))+'</td>'+
+      '<td>'+esc(nom(M.obj,p.objecion_entrada_id))+'</td><td>'+esc(p.derivacion||"")+'</td>'+
+      '<td>'+badge(p.resultado)+'</td><td>'+imp+'</td></tr>';
   }).join("")+'</tbody></table></div>';
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   COLA DE TRABAJO — 14/8/2026, pedido de Gustavo con Rocío
+
+   El prospecto entra acá antes de que se sepa qué es. La VL lo toma, insiste,
+   y recién cuando decide la derivación baja a la planilla. Lo que no avanza
+   se sigue sumando acá: es la lista del día, no un archivo.
+
+   No hizo falta ninguna migración: los cinco estados ya existían y se usaban
+   dos. DATO es «entró y nadie lo tomó»; CONTACTO es «lo estoy llamando».
+   Los intentos salen de la tabla de seguimientos, que ya distingue el tipo.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Cuántas veces se le intentó, y cuándo fue la última. Llamada, WhatsApp y
+   mail cuentan; una visita o un «otro» no son un intento de contacto. */
+const INTENTO = ["Llamada","WhatsApp","Email"];
+function contarIntentos(segs){
+  const c = {llamadas:0, mensajes:0, total:0, ultima:""};
+  (segs||[]).forEach(function(s){
+    if (INTENTO.indexOf(s.tipo) < 0) return;
+    if (s.tipo === "Llamada") c.llamadas++; else c.mensajes++;
+    c.total++;
+    if (!c.ultima || String(s.fecha) > c.ultima) c.ultima = s.fecha;
+  });
+  return c;
+}
+/* A los 6 intentos sin respuesta el sistema sugiere descartar. No descarta
+   solo: la decisión es de la VL. Sin este tope la cola crece para siempre y
+   se deja de mirar, que es como muere una lista de trabajo. */
+const INTENTOS_PARA_SUGERIR = 6;
+
+const diasDesde = f => f ? Math.round((new Date(hoy()+"T00:00:00") - new Date(String(f).slice(0,10)+"T00:00:00"))/86400000) : 0;
+
+async function pintarCola(){
+  const el = $("plcola"); if (!el) return;
+  const q = await sb.from("prospectos").select(COLS).in("estado",["DATO","CONTACTO"]).order("fecha").order("id");
+  if (q.error){ el.innerHTML = '<div class="msg err">'+esc(q.error.message)+'</div>'; return; }
+  const d = q.data||[];
+  const puede = P("prospecto-modificar");
+  if (!d.length){
+    el.innerHTML = '<div class="panel" style="border-left:4px solid var(--ocre)">'+
+      '<h2>Cola de trabajo</h2>'+
+      '<div class="muted">No hay nada esperando. Todo lo que entró ya tiene definida la derivación.</div></div>';
+    return;
+  }
+  const ids = d.map(x=>x.id);
+  const s = await sb.from("seguimientos").select("prospecto_id,tipo,fecha").in("prospecto_id", ids);
+  const porPros = {};
+  (s.data||[]).forEach(function(x){ (porPros[x.prospecto_id] = porPros[x.prospecto_id]||[]).push(x); });
+
+  const sinTomar = d.filter(x=>x.estado==="DATO").length;
+  const insistiendo = d.filter(x=>x.estado==="CONTACTO").length;
+  let paraDescartar = 0;
+  d.forEach(function(p){ if (contarIntentos(porPros[p.id]).total >= INTENTOS_PARA_SUGERIR) paraDescartar++; });
+
+  el.innerHTML = '<div class="panel" style="border-left:4px solid var(--ocre)">'+
+   '<h2>Cola de trabajo</h2>'+
+   '<div class="desc">Lo que entró y todavía no se sabe qué es. Se toma, se insiste, y cuando se decide la derivación baja a la planilla. '+
+   'Nada se va solo de acá: o avanza o se descarta con motivo.</div>'+
+   '<div id="colamsg"></div>'+
+   '<div class="kpis" style="margin-bottom:10px">'+
+     '<div class="kpi"><div class="t">Sin tomar</div><div class="n">'+sinTomar+'</div><div class="muted">nadie los llamó todavía</div></div>'+
+     '<div class="kpi"><div class="t">Tomados, insistiendo</div><div class="n">'+insistiendo+'</div><div class="muted">en intentos de contacto</div></div>'+
+     (paraDescartar? '<div class="kpi" style="border-left-color:#7a2415"><div class="t">Para decidir</div><div class="n" style="color:#7a2415">'+paraDescartar+'</div><div class="muted">'+INTENTOS_PARA_SUGERIR+' intentos o más, sin respuesta</div></div>' : '')+
+   '</div>'+
+   '<div class="tablewrap" style="max-height:40dvh;overflow:auto"><table><thead><tr>'+
+     ['Espera','Código','Cliente','Celular','Canal','Origen','VL','Intentos','Último',''].map(h=>'<th>'+h+'</th>').join("")+
+   '</tr></thead><tbody>'+
+   d.map(function(p){
+     const c = contarIntentos(porPros[p.id]);
+     const cansado = c.total >= INTENTOS_PARA_SUGERIR;
+     const dias = diasDesde(p.fecha);
+     const tomado = p.estado === "CONTACTO";
+     return '<tr class="'+(cansado?"p-desc":(tomado?"p-tomado":""))+'">'+
+       '<td'+(dias>=3?' style="color:#7a2415;font-weight:600"':'')+'>'+dias+' d</td>'+
+       '<td><b>'+esc(p.codigo)+'</b></td>'+
+       '<td style="white-space:normal;min-width:150px"><b>'+esc(p.nombre)+'</b></td>'+
+       '<td>'+esc(p.celular||p.telefono||"—")+'</td>'+
+       '<td>'+esc(nom(M.can,p.canal_id)||"—")+'</td>'+
+       '<td>'+esc(nom(M.ori,p.origen_id)||"—")+'</td>'+
+       '<td>'+esc(nomP(p.vl_id)||"—")+'</td>'+
+       '<td style="white-space:nowrap">'+(c.total
+          ? '<b'+(cansado?' style="color:#7a2415"':'')+'>'+c.total+'</b> <span class="muted">('+c.llamadas+' llam · '+c.mensajes+' msj)</span>'
+          : '<span class="muted">sin intentos</span>')+'</td>'+
+       '<td>'+(c.ultima? fmtF(c.ultima) : '<span class="muted">—</span>')+'</td>'+
+       '<td style="white-space:nowrap">'+(puede
+          ? (!tomado? '<button class="btn btn-sm" onclick="tomarProspecto('+p.id+')">Tomar</button> ' : '')+
+            '<button class="btn2 btn-sm" onclick="intentoContacto('+p.id+',\'Llamada\')">+ Llamada</button> '+
+            '<button class="btn2 btn-sm" onclick="intentoContacto('+p.id+',\'WhatsApp\')">+ WhatsApp</button> '+
+            '<button class="btn2 btn-sm" onclick="abrir('+p.id+')">Abrir</button> '+
+            '<button class="btn2 btn-sm" onclick="descartarProspecto('+p.id+')">Descartar</button>'
+          : '<button class="btn2 btn-sm" onclick="abrir('+p.id+')">Abrir</button>')+'</td></tr>'+
+       (cansado? '<tr class="p-desc"><td colspan="10" style="white-space:normal;padding-top:0"><span class="muted">'+
+          '<b>'+esc(p.nombre)+'</b>: '+c.total+' intentos sin respuesta. Conviene descartarlo con motivo, o dejar anotado por qué se sigue insistiendo.</span></td></tr>' : '');
+   }).join("")+
+   '</tbody></table></div>'+
+   '<div class="muted" style="margin-top:8px">Para que salga de la cola hay que abrirlo y cargar la <b>derivación</b>: ahí se piden los datos que faltan y baja a la planilla.</div>'+
+   '</div>';
+}
+
+/* Tomar es decir «me hago cargo». Si el prospecto no tenía VL, queda a nombre
+   de quien lo toma; si ya la tenía, se respeta la que está registrada. */
+async function tomarProspecto(id){
+  const p = await sb.from("prospectos").select("id,vl_id,estado").eq("id",id).single();
+  if (p.error) return alert(p.error.message);
+  const cambio = {estado:"CONTACTO"};
+  if (!p.data.vl_id) cambio.vl_id = PERFIL.id;
+  const r = await sb.from("prospectos").update(cambio).eq("id",id).select("id");
+  if (r.error) return alert(r.error.message);
+  if (!r.data || !r.data.length) return alert("No se pudo tomar el prospecto: la base no guardó el cambio.");
+  await pintarCola();
+}
+
+/* Un toque = un intento registrado, con quién y cuándo. Es lo que después
+   permite decir «cinco llamados, tres mensajes, nunca contestó». Y si todavía
+   no estaba tomado, llamarlo ya es tomarlo. */
+async function intentoContacto(id, tipo){
+  const r = await sb.from("seguimientos").insert({
+    prospecto_id:id, fecha:hoy(), tipo:tipo, quien_id:PERFIL.id,
+    observacion:"Intento de contacto"
+  }).select("id");
+  if (r.error) return alert(r.error.message);
+  const p = await sb.from("prospectos").select("estado,vl_id").eq("id",id).single();
+  if (!p.error && p.data.estado === "DATO"){
+    const cambio = {estado:"CONTACTO"};
+    if (!p.data.vl_id) cambio.vl_id = PERFIL.id;
+    await sb.from("prospectos").update(cambio).eq("id",id);
+  }
+  await pintarCola();
+}
+
+/* Descartar no borra: deja el prospecto en rojo, con el motivo a la vista. */
+function descartarProspecto(id){
+  $("d2tit").textContent = "Descartar prospecto";
+  $("d2body").innerHTML = '<div id="dsmsg"></div>'+
+   '<div class="muted" style="margin-bottom:8px">No se borra nada. El prospecto baja a la planilla <b>en rojo</b>, con el motivo a la vista, y se puede reabrir cuando quieras.</div>'+
+   '<div class="f"><label>Motivo de descarte '+AST+'</label><select id="ds_motivo">'+selOpts(M.mot,null)+'</select></div>'+
+   '<div class="f"><label>Qué pasó</label><input id="ds_obs" placeholder="opcional: «llamé 6 veces, nunca contestó»"></div>'+
+   '<div class="acciones"><button class="btn" onclick="descartarConfirmar('+id+')">Descartar</button>'+
+   '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+async function descartarConfirmar(id){
+  const err = t => { const e=$("dsmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const mot = ($("ds_motivo")||{}).value;
+  if (!mot) return err("Elegí el motivo: sin eso el descarte no dice nada.");
+  const obs = ($("ds_obs")||{}).value || "";
+  const r = await sb.from("prospectos").update({estado:"DESCARTADO", motivo_descarte_id:Number(mot)}).eq("id",id).select("id");
+  if (r.error) return err(r.error.message);
+  if (!r.data || !r.data.length) return err("La base no guardó el descarte.");
+  if (obs.trim()){
+    await sb.from("seguimientos").insert({prospecto_id:id, fecha:hoy(), tipo:"Otro",
+      quien_id:PERFIL.id, observacion:"Descartado: "+obs.trim()});
+  }
+  cerrarDlg2();
+  await pintarCola();
+  if (VISTA === "planilla") pintarPlanilla();
 }
 
 /* ─────────── FORMULARIO ─────────── */
@@ -1114,23 +1285,51 @@ function faltan(reglas){
 const AST = '<span style="color:#7a2415;font-weight:700" title="Obligatorio">*</span>';
 /* Las reglas de qué es obligatorio, escritas UNA vez y usadas por las dos
    pantallas del prospecto —el alta y la ficha—, para que no se separen. */
+/* 14/8: el prospecto ahora entra a una COLA DE TRABAJO antes de que se sepa
+   qué es. Los obligatorios no se sacaron: se corrieron al momento en que el
+   dato existe. Para ENTRAR alcanza con saber a quién llamar; todo lo demás se
+   exige para SALIR de la cola, que es cuando se carga la derivación. Es el
+   criterio que ya habíamos escrito: el campo se exige cuando existe, no antes.
+   Si se exigiera la derivación al guardar, la cola no podría existir. */
 function reglasProspecto(o){
+  const enCola = !o.derivacion;
   const visita = o.derivacion === "Visita a domicilio";
-  return [
-    {ok:!!o.nombre,                          q:"Cliente"},
-    {ok:!!(o.celular || o.telefono),         q:"Celular o teléfono (con uno alcanza)"},
-    {ok:!!o.canal_id,                        q:"Canal de contacto"},
-    {ok:!!o.origen_id,                       q:"Origen"},
-    {ok:!!o.vl_id,                           q:"VL responsable"},
-    {ok:!!o.localidad_id,                    q:"Localidad"},
-    {ok:!!o.motivo_consulta,                 q:"Motivo de consulta"},
-    {ok:!!o.derivacion,                      q:"Derivación (a visita o a presupuesto directo)"},
-    {ok:!visita || !!o.direccion,            q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
-    {ok:!visita || !!o.ato_id,               q:"ATO asignado (la visita necesita saber quién va)"},
-    {ok:!visita || !!o.fecha_visita,         q:"Fecha de visita"},
-    {ok:!visita || !!o.hora_visita,          q:"Hora de la visita"},
+  const base = [
+    {ok:!!o.nombre,                  q:"Cliente"},
+    {ok:!!(o.celular || o.telefono), q:"Celular o teléfono (con uno alcanza)"},
+    {ok:o.estado !== "DESCARTADO" || !!o.motivo_descarte_id,   q:"Motivo de descarte (el prospecto queda descartado: hay que decir por qué)"},
     {ok:o.resultado !== "No Vendido" || !!o.motivo_descarte_id, q:"Motivo de descarte (el resultado es «No Vendido»: hay que decir por qué no se cerró)"}
   ];
+  if (enCola) return base;
+  return base.concat([
+    {ok:!!o.canal_id,                q:"Canal de contacto"},
+    {ok:!!o.origen_id,               q:"Origen"},
+    {ok:!!o.vl_id,                   q:"VL responsable"},
+    {ok:!!o.localidad_id,            q:"Localidad"},
+    {ok:!!o.motivo_consulta,         q:"Motivo de consulta"},
+    {ok:!visita || !!o.direccion,    q:"Dirección de obra (la derivación es «Visita a domicilio»: sin dirección no se puede ir)"},
+    {ok:!visita || !!o.ato_id,       q:"ATO asignado (la visita necesita saber quién va)"},
+    {ok:!visita || !!o.fecha_visita, q:"Fecha de visita"},
+    {ok:!visita || !!o.hora_visita,  q:"Hora de la visita"}
+  ]);
+}
+/* El estado no se elige a mano: lo dice dónde está parado el prospecto.
+   Sin derivación vive en la cola —DATO si nadie lo tomó, CONTACTO si ya lo
+   están llamando—; con la derivación cargada sale de la cola. DESCARTADO
+   manda siempre: es una decisión, no una etapa. */
+function estadoSegunEtapa(o){
+  if (o.estado === "DESCARTADO") return "DESCARTADO";
+  if (o.derivacion) return (o.estado === "DERIVADO") ? "DERIVADO" : "CONSULTA";
+  return (o.estado === "CONTACTO") ? "CONTACTO" : "DATO";
+}
+/* El color del renglón dice en qué está la oportunidad sin leer una columna. */
+function colorProspecto(p){
+  if (p.estado === "DESCARTADO") return "p-desc";
+  if (p.resultado === "Vendido" || p.resultado === "Senado") return "p-vend";
+  if (p.estado === "CONTACTO") return "p-tomado";
+  if (p.derivacion === "Visita a domicilio") return "p-visita";
+  if (p.derivacion === "Presupuesto directo") return "p-presup";
+  return "";
 }
 function avisoFaltan(idMsg, lista, queEs){
   const el = $(idMsg); if (!el) return;
@@ -1151,7 +1350,7 @@ function llevaInstalacion(items, tipo){
    3) PRESUPUESTO — lo que se sabe recién después: m², importe, y si se vendió.
    Pedido de Rocío (VL), agosto 2026. */
 function formHTML(p, ro, lig){
-  p = p || {fecha:hoy(), estado:"CONSULTA", resultado:"Sin Visita", moneda:"ARS", vl_id:PERFIL.id};
+  p = p || {fecha:hoy(), estado:"DATO", resultado:"Sin Visita", moneda:"ARS", vl_id:PERFIL.id};
   const d = ro ? "disabled" : "";
   // Un bloque nunca se esconde si ya tiene algo cargado: esconder un dato es perderlo de vista.
   const hayVisita = !!(p.ato_id || p.fecha_visita || p.hora_visita || p.observaciones_previas);
@@ -1546,6 +1745,7 @@ VISTAS.nuevo = function(){
   $("ncancel").onclick = VISTAS.nuevo;
   $("nguardar").onclick = async function(){
     const o = leerForm();
+    o.estado = estadoSegunEtapa(o);
     const f = faltan(reglasProspecto(o));
     if (f.length){ avisoFaltan("nmsg", f, "el prospecto"); return; }
     $("nguardar").disabled = true;
@@ -1601,6 +1801,7 @@ async function abrir(id){
 
   if (puedeEditar) $("dguardar").onclick = async function(){
     const o = leerForm();
+    o.estado = estadoSegunEtapa(o);
     const fv = faltan(reglasProspecto(o));
     if (fv.length){ avisoFaltan("dmsg", fv, "el prospecto"); return; }
     $("dguardar").disabled = true;
