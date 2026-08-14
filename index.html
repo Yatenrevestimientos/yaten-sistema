@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-126";
+const VERSION = "v2026.08.14-127";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -246,6 +246,10 @@ const fmtM = (n,m) => (n==null||n===0||n==="")?"":(m==="USD"?"US$ ":"$ ")+Number
 /* En una cuenta corriente el cero es un dato, no un vacío: «saldo anterior $ 0»
    dice algo, la casilla en blanco no dice nada. */
 const fmtM0 = (n,m) => (m==="USD"?"US$ ":"$ ")+Number(n||0).toLocaleString("es-AR",{maximumFractionDigits:0});
+/* v61 (14/8): los índices únicos de comprobantes devuelven un error técnico
+   («duplicate key value violates unique constraint»). Esta función lo detecta
+   para que cada pantalla lo diga en criollo. */
+const esDuplicado = e => /duplicate key|ux_factura_compra|ux_nota_proveedor/i.test(String((e&&e.message)||""));
 /* Comprobante: si no hay punto de venta no se escribe el guión suelto */
 /* 13/8, Gilda: en la columna de comprobantes tiene que verse QUÉ comprobante es,
    no solo el número. F factura · NC nota de crédito · ND nota de débito ·
@@ -7298,7 +7302,11 @@ async function guardarFactura(){
   const r = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
     p_punto_venta:FAC.punto_venta||null, p_nro:FAC.nro||null, p_fecha:FAC.fecha||hoy(), p_moneda:FAC.moneda,
     p_neto:Number(FAC.neto), p_impuestos:filas, p_items:[], p_obs:FAC.obs||null, p_orden:null});
-  if (r.error) return err(r.error.message);
+  /* v61 (14/8): la base ya no acepta dos comprobantes iguales del mismo
+     proveedor. El error viene técnico; acá se dice en criollo. */
+  if (r.error) return err(esDuplicado(r.error)
+    ? "Ya hay una factura viva de este proveedor con ese mismo tipo, punto de venta y número. Si la anterior está mal, anulala primero; si es otra factura, revisá el número."
+    : r.error.message);
   /* La base y el porcentaje se guardan en un segundo paso, para no tocar la
      función que registra la factura. Si falla, la factura ya quedó bien: lo
      único que se pierde es el detalle de cómo se calculó cada impuesto. */
@@ -7779,7 +7787,9 @@ async function guardarNota(){
   const {error} = await sb.rpc("registrar_nota_proveedor",{p_proveedor:Number(NOT.proveedor_id), p_tipo:NOT.tipo,
     p_punto_venta:NOT.punto_venta||null, p_nro:NOT.nro||null, p_fecha:NOT.fecha||hoy(),
     p_moneda:NOT.moneda, p_neto:neto, p_impuestos:filas, p_obs:NOT.obs||null});
-  if (error) return err(error.message);
+  if (error) return err(esDuplicado(error)
+    ? "Ya hay una nota viva de este proveedor con ese mismo tipo, punto de venta y número. Si la anterior está mal, anulala primero; si es otra nota, revisá el número."
+    : error.message);
   $("dlg").close(); await cargarProveedores(); VISTAS.compras();
 }
 async function anularNota(id){
