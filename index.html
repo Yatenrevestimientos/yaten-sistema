@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-125";
+const VERSION = "v2026.08.14-126";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2499,13 +2499,38 @@ const DIAG_FUNCIONES = [
   {f:"guardar_entrega_venta", args:{p_id:-1, p_fecha_entrega:null, p_horario:null, p_fecha_instalacion:null,
      p_instalador:null, p_notificado:false, p_nota_interna:null},
    espera:/no se encontro la venta/i,
-   que:"guardar la entrega, la instalación y la nota interna de una venta"}
+   que:"guardar la entrega, la instalación y la nota interna de una venta"},
+  /* 14/8, revisión capa 2: las funciones de v59-v60. Cada una se llama con un
+     id inexistente o sin medios — no tocan ningún dato — y el error que
+     devuelven dice si la migración está corrida. Los mensajes esperados se
+     sondearon contra la base real, no se adivinaron. */
+  {f:"registrar_gasto_multi", args:{p_fecha:"2026-01-01", p_medios:[], p_impuesto:0, p_concepto:null, p_extra:null},
+   espera:/carga al menos una forma de pago/i,
+   que:"el gasto con varias formas de pago (v59)"},
+  {f:"registrar_cobranza_multi", args:{p_cliente:-1, p_fecha:"2026-01-01", p_moneda_cc:"ARS", p_medios:[], p_concepto:null, p_obs:null},
+   espera:/no existe ese cliente/i,
+   que:"la cobranza con varias formas de pago y cheque (v59-v60)"},
+  {f:"registrar_pago_compra_multi", args:{p_proveedor:-1, p_fecha:"2026-01-01", p_moneda:"ARS", p_medios:[], p_imputaciones:[], p_obs:null},
+   espera:/no existe ese proveedor/i,
+   que:"la orden de pago con varios medios (v58)"},
+  {f:"depositar_cheque", args:{p_cheque:-1, p_cuenta:-1},
+   espera:/no existe ese cheque/i,
+   que:"depositar un cheque de terceros (v59)"},
+  {f:"anular_deposito_cheque", args:{p_cheque:-1, p_motivo:"diagnostico"},
+   espera:/no existe ese cheque/i,
+   que:"deshacer un depósito mal cargado (v60)"},
+  {f:"set_sucursal_cheque", args:{p_id:-1, p_sucursal:"diagnostico"},
+   espera:/^$/,
+   que:"guardar la sucursal del cheque como texto libre (v60)"}
 ];
 /* Columna preferida para la prueba: se elige la más inofensiva que exista. */
 const DIAG_PREF = ["observaciones","descripcion","nombre","concepto","texto","titulo","codigo","estado"];
 /* Lo que la aplicación lee para llenar las pantallas. Si algo de acá no se lee,
    hay una pantalla que va a aparecer vacía sin decir por qué. */
-const DIAG_VISTAS = ["v_stock","v_saldos_cliente","v_saldos_proveedor","v_saldos_cuenta","equipo_visible"];
+const DIAG_VISTAS = ["v_stock","v_saldos_cliente","v_saldos_proveedor","v_saldos_cuenta","equipo_visible",
+  /* 14/8: las tablas hijas de medios — el recibo y la ficha del gasto las leen
+     para mostrar con qué se pagó; si no se leen, imprimen incompleto */
+  "pago_medios","gasto_medios","cobranza_medios"];
 
 /* ══ Quién lo corre cambia el resultado (13/8) ══
    Rocío lo corrió con su usuario y le salieron tres rojos. No eran errores del
@@ -2605,6 +2630,17 @@ async function correrDiagnostico(){
       filas.push({t:"permisos por rol", q:"solo el dueño", r:"nose", d:"tu rol no puede leer la matriz de permisos, así que este control no se pudo hacer"});
     }
   }catch(e){ filas.push({t:"permisos por rol", q:"solo el dueño", r:"nose", d:"no se pudo leer: "+e.message}); }
+
+  /* ── 1 quater. La numeración de los recibos (v59) ──
+     Toda cobranza tiene que tener su REC-: si alguna quedó sin número, o el
+     trigger no está o hay carga vieja sin backfill, y el recibo impreso sale
+     sin identificar. */
+  try{
+    const cnull = await sb.from("cobranzas").select("id",{count:"exact",head:true}).is("codigo",null);
+    if (!cnull.error) filas.push({t:"cobranzas.codigo", q:"numeración de recibos", r:(cnull.count||0)?"mal":"bien",
+      d:(cnull.count||0)? (cnull.count+" cobranza(s) sin número de recibo: falta el trigger de la v59 o el backfill")
+        : "todos los recibos tienen su número REC-"});
+  }catch(e){}
 
   /* ── 2. ¿Se leen las vistas que alimentan las pantallas? ── */
   for (const v of DIAG_VISTAS){
