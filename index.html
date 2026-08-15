@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.14-127";
+const VERSION = "v2026.08.15-128";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2495,7 +2495,9 @@ VISTAS.config = async function(){
    chequean permiso, y esas se prueban con el guion de homologación). */
 const DIAG_TABLAS = ["presupuestos","presupuesto_items","presupuesto_adicionales","prospectos","clientes",
   "notas_cliente","seguimientos","productos","proveedores","documentos","tags","leads",
-  "listas_precios","tipos_producto","tipos_cuenta","cuentas","perfiles","embarque_items","embarque_costos"];
+  "listas_precios","tipos_producto","tipos_cuenta","cuentas","perfiles","embarque_items","embarque_costos",
+  /* 15/8, v63: los candados del embarque */
+  "estados_embarque","embarque_hitos","embarque_cierre_costos"];
 /* «ventas» NO está en la lista de arriba a propósito: no se puede escribir directo
    —adentro viven el neto, el IVA y el total, y eso es plata— y se graba por la
    función de la v57. Acá se prueba que la función esté y conteste. */
@@ -2525,7 +2527,21 @@ const DIAG_FUNCIONES = [
    que:"deshacer un depósito mal cargado (v60)"},
   {f:"set_sucursal_cheque", args:{p_id:-1, p_sucursal:"diagnostico"},
    espera:/^$/,
-   que:"guardar la sucursal del cheque como texto libre (v60)"}
+   que:"guardar la sucursal del cheque como texto libre (v60)"},
+  /* 15/8, v63: los candados del embarque. Cada una se llama con un embarque que
+     no existe: contesta el error y no toca ni un dato. */
+  {f:"marcar_hito_embarque", args:{p_embarque:-1, p_estado_id:-1, p_fecha:"2026-01-01", p_nota:null},
+   espera:/no existe el embarque/i,
+   que:"marcar por dónde va el embarque (v63)"},
+  {f:"borrar_hito_embarque", args:{p_embarque:-1, p_estado_id:-1},
+   espera:/no existe el embarque/i,
+   que:"deshacer el último paso del embarque (v63)"},
+  {f:"reabrir_embarque", args:{p_embarque:-1},
+   espera:/no existe el embarque/i,
+   que:"reabrir un embarque y devolver el costo anterior a cada producto (v63)"},
+  {f:"anular_embarque", args:{p_id:-1, p_motivo:"diagnostico"},
+   espera:/no existe el embarque/i,
+   que:"anular un embarque (v63)"}
 ];
 /* Columna preferida para la prueba: se elige la más inofensiva que exista. */
 const DIAG_PREF = ["observaciones","descripcion","nombre","concepto","texto","titulo","codigo","estado"];
@@ -5542,7 +5558,7 @@ async function guardarRecepcion(ordenId){
 
 
 /* ═══════════ IMPORTACIONES · landed cost ═══════════ */
-let EMB = null, CEMB = [];
+let EMB = null, CEMB = [], EEMB = [];
 async function db24(){
   if (window._db24 !== undefined) return window._db24;
   const t = await sb.from("embarques").select("id").limit(1);
@@ -5553,8 +5569,10 @@ VISTAS.import = async function(){
   if (!(await db24())){ $("main").innerHTML = '<div class="panel"><h2>Importaciones</h2><div class="msg err">Falta correr la migración de importaciones en la base.</div></div>'; return; }
   if (!PROVS.length) await cargarProveedores();
   if (!CEMB.length){ const c = await sb.from("conceptos_embarque").select("*").order("id"); CEMB = c.data||[]; }
-  let q = sb.from("embarques").select("*").eq("anulado",false).order("id",{ascending:false}).limit(300);
-  if (SUBVISTA === "encurso") q = q.neq("estado","Cerrado");
+  /* 15/8: el anulado sigue estando en el historial, tachado — «un documento anulado
+     deja de contar en todos lados y se sigue pudiendo consultar». En «En curso» no va. */
+  let q = sb.from("embarques").select("*").order("id",{ascending:false}).limit(300);
+  if (SUBVISTA === "encurso") q = q.eq("anulado",false).neq("estado","Cerrado");
   const {data,error} = await q;
   if (error){ $("main").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const rot = SUBVISTA === "encurso" ? "Embarques en curso" : "Historial de embarques";
@@ -5564,11 +5582,11 @@ VISTAS.import = async function(){
    (P("compra-modificar")?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="nuevoEmbarque()">+ Nuevo embarque</button></div>':'')+
    ((data||[]).length? '<div class="tablewrap"><table><thead><tr>'+
      ['Código','Proveedor','Fecha','Arribo estimado','Modalidad','Cotización','Estado'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     data.map(x=>'<tr style="cursor:pointer" onclick="fichaEmbarque('+x.id+')"><td><b>'+esc(x.codigo)+'</b></td>'+
+     data.map(x=>'<tr style="cursor:pointer'+(x.anulado?';text-decoration:line-through;opacity:.6':'')+'" onclick="fichaEmbarque('+x.id+')"><td><b>'+esc(x.codigo)+'</b></td>'+
        '<td>'+esc(x.proveedor_id?nomProv(x.proveedor_id):"—")+'</td><td>'+fmtF(x.fecha)+'</td>'+
        '<td>'+(x.fecha_arribo?fmtF(x.fecha_arribo):'<span class="muted">—</span>')+'</td>'+
        '<td>'+esc(x.modalidad)+'</td><td>'+(x.cotizacion_usd?fmtN(x.cotizacion_usd):'—')+'</td>'+
-       '<td>'+esc(x.estado)+'</td></tr>').join("")+
+       '<td>'+(x.anulado?'<b style="color:#7a2415">Anulado</b>':esc(x.estado))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Todavía no hay embarques. Creá el primero cuando tengas la factura del proveedor y la cotización del flete.</div>')+
    '</div>';
 };
@@ -5601,27 +5619,30 @@ async function guardarEmbarque(){
 async function fichaEmbarque(id){
   if (!PRODS.length) await cargarCatalogo();
   if (!CEMB.length){ const c = await sb.from("conceptos_embarque").select("*").order("id"); CEMB = c.data||[]; }
-  const [e,i,c,l] = await Promise.all([
+  if (!EEMB.length){ const s = await sb.from("estados_embarque").select("*").eq("activo",true).order("orden"); EEMB = s.data||[]; }
+  const [e,i,c,l,h] = await Promise.all([
     sb.from("embarques").select("*").eq("id",id).single(),
     sb.from("embarque_items").select("*").eq("embarque_id",id).order("id"),
     sb.from("embarque_costos").select("*").eq("embarque_id",id).order("id"),
-    sb.from("v_landed").select("*").eq("embarque_id",id)
+    sb.from("v_landed").select("*").eq("embarque_id",id),
+    sb.from("embarque_hitos").select("*").eq("embarque_id",id)
   ]);
   if (e.error) return alert(e.error.message);
-  EMB = {cab:e.data, items:i.data||[], costos:c.data||[], landed:l.data||[]};
+  EMB = {cab:e.data, items:i.data||[], costos:c.data||[], landed:l.data||[], hitos:h.data||[]};
   pintarEmbarque();
   try{ $("dlg").showModal(); }catch(e2){}
 }
 function pintarEmbarque(){
-  const x = EMB.cab, puede = P("compra-modificar") && x.estado !== "Cerrado";
+  const x = EMB.cab, puede = P("compra-modificar") && x.estado !== "Cerrado" && !x.anulado;
   const land = {}; EMB.landed.forEach(y=>{ land[y.item_id] = y; });
   const totFob = EMB.landed.reduce((a,y)=>a+Number(y.fob_total||0),0);
   const totCost = EMB.landed.reduce((a,y)=>a+Number(y.costos_asignados||0),0);
   const recup = EMB.costos.filter(y=>y.recuperable).reduce((a,y)=>a+(y.moneda==="USD"?Number(y.importe||0):Number(y.importe||0)/(Number(x.cotizacion_usd)||1)),0);
   const totM3 = EMB.items.reduce((a,y)=>a+Number(y.cantidad||0)*Number(y.m3_unit||0),0);
-  $("dtit").textContent = x.codigo + (x.estado==="Cerrado"?" · CERRADO":"");
+  $("dtit").textContent = x.codigo + (x.anulado?" · ANULADO":(x.estado==="Cerrado"?" · CERRADO":" · "+(x.estado||"Abierto")));
   $("dbody").innerHTML = '<div id="embmsg"></div>'+
-   (x.estado==="Cerrado"?'<div class="msg ok">Embarque cerrado: el costo landed ya quedó escrito en cada producto.</div>':'')+
+   (x.anulado?'<div class="msg err">Embarque anulado'+(x.anulado_en?' el '+fmtF(x.anulado_en):'')+'. Motivo: '+esc(x.motivo_anulacion||"sin motivo")+'</div>':'')+
+   (x.estado==="Cerrado"?'<div class="msg ok">Embarque cerrado: el costo landed ya quedó escrito en cada producto. Si estaba mal, <b>Reabrir</b> le devuelve a cada producto el costo que tenía antes.</div>':'')+
    '<div class="grid">'+
      '<div class="f"><label>Proveedor</label><div>'+esc(x.proveedor_id?nomProv(x.proveedor_id):"—")+'</div></div>'+
      '<div class="f"><label>Modalidad</label><div>'+esc(x.modalidad)+' · '+esc(x.incoterm)+'</div></div>'+
@@ -5634,6 +5655,8 @@ function pintarEmbarque(){
      '<div class="kpi" style="border-left-color:#1d5b2c"><div class="t">Recuperable, no va al costo</div><div class="n">'+fmtM(recup,"USD")+'</div><div class="muted">IVA y percepciones</div></div>'+
      '<div class="kpi"><div class="t">Volumen total</div><div class="n">'+fmtN(totM3)+' m³</div></div>'+
    '</div>'+
+   '<div class="sec">Por dónde va</div>'+
+   '<div id="emb_ruta"></div>'+
    '<div class="sec">Qué viene en el embarque</div>'+
    (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embItemAgregar()">+ Renglón</button></div>':'')+
    '<div id="emb_items"></div>'+
@@ -5644,11 +5667,53 @@ function pintarEmbarque(){
    '<div class="acciones">'+
      (puede?'<button class="btn" onclick="guardarEmbarqueDetalle()">Guardar y recalcular</button>':'')+
      (puede&&EMB.items.length?'<button class="btn2" onclick="cerrarEmbarque('+x.id+')">Cerrar embarque y pasar el costo a los productos</button>':'')+
+     (x.estado==="Cerrado"&&!x.anulado&&P("compra-modificar")?'<button class="btn2" onclick="reabrirEmbarque('+x.id+')">Reabrir y devolver el costo anterior</button>':'')+
+     (!x.anulado&&x.estado!=="Cerrado"&&P("finanzas-anular")?'<button class="btn2" onclick="anularEmbarque('+x.id+')">Anular embarque</button>':'')+
      '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
-  pintarEmbItems(land); pintarEmbCostos();
+  pintarEmbRuta(); pintarEmbItems(land); pintarEmbCostos();
+}
+/* ── Por dónde va el embarque (15/8, v63) ──
+   Los seis pasos salen de la maestra `estados_embarque`, así que la lista se amplía
+   desde la aplicación como cualquier otra. El estado de la cabecera es siempre el
+   paso más avanzado que se dio: no se elige a mano, se calcula. Y un paso solo se
+   deshace si es el último — no se puede deshacer un paso si ya se dio el siguiente. */
+function pintarEmbRuta(){
+  const x = EMB.cab;
+  const puede = P("compra-modificar") && x.estado !== "Cerrado" && !x.anulado;
+  const hito = {}; (EMB.hitos||[]).forEach(function(h){ hito[h.estado_id] = h; });
+  const dados = EEMB.filter(function(s){ return hito[s.id]; });
+  const ultimo = dados.length ? dados[dados.length-1] : null;
+  if (!EEMB.length){ $("emb_ruta").innerHTML = '<div class="msg err">Falta correr la migración v63: no está la lista de estados del embarque.</div>'; return; }
+  $("emb_ruta").innerHTML =
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:180px">Paso</th><th style="min-width:160px">Fecha</th><th style="min-width:160px">Nota</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   EEMB.map(function(s){
+     const h = hito[s.id], esUltimo = ultimo && ultimo.id === s.id;
+     return '<tr'+(h?' style="background:#f1f7f2"':'')+'>'+
+      '<td>'+(h?'✔ <b>'+esc(s.nombre)+'</b>':'<span class="muted">○ '+esc(s.nombre)+'</span>')+'</td>'+
+      '<td>'+(h ? fmtF(h.fecha)
+                : (puede?'<input type="date" style="width:150px" id="eh_'+s.id+'_f" value="'+hoy()+'">':'<span class="muted">—</span>'))+'</td>'+
+      '<td>'+(h ? esc(h.nota||"")
+                : (puede?'<input id="eh_'+s.id+'_n" placeholder="opcional">':''))+'</td>'+
+      (puede?'<td>'+(h ? (esUltimo?'<button class="btn2 btn-sm" onclick="embHitoBorrar('+s.id+')">Deshacer</button>':'')
+                       : '<button class="btn2 btn-sm" onclick="embHitoMarcar('+s.id+')">Marcar</button>')+'</td>':'')+
+      '</tr>';
+   }).join("")+'</tbody></table></div>'+
+   '<div class="muted" style="margin-top:6px">El estado del embarque es el paso más avanzado que marcaste. Un paso se puede deshacer <b>solo si es el último</b>: si ya diste el siguiente, desandá ese primero.</div>';
+}
+async function embHitoMarcar(sid){
+  const f = $("eh_"+sid+"_f"), n = $("eh_"+sid+"_n");
+  const {error} = await sb.rpc("marcar_hito_embarque",{p_embarque:EMB.cab.id, p_estado_id:sid,
+    p_fecha:(f&&f.value)||hoy(), p_nota:(n&&n.value)||null});
+  if (error){ $("embmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  fichaEmbarque(EMB.cab.id);
+}
+async function embHitoBorrar(sid){
+  const {error} = await sb.rpc("borrar_hito_embarque",{p_embarque:EMB.cab.id, p_estado_id:sid});
+  if (error){ $("embmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  fichaEmbarque(EMB.cab.id);
 }
 function pintarEmbItems(land){
-  const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado";
+  const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado" && !EMB.cab.anulado;
   const opts = v => '<option value=""></option>'+PRODS.filter(p=>p.activo).map(p=>'<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+'</option>').join("");
   $("emb_items").innerHTML = !EMB.items.length ? '<div class="muted">Sin renglones. Agregá lo que viene en el envío.</div>' :
    '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Producto</th><th style="min-width:130px">Descripción</th><th>Cantidad</th><th>FOB unit. US$</th><th>m³ por unidad</th><th>Peso kg</th><th>FOB total</th><th>Costos</th><th>Landed unit.</th><th>× FOB</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
@@ -5669,7 +5734,7 @@ function pintarEmbItems(land){
    '<div class="muted" style="margin-top:6px">El <b>m³ por unidad</b> y el peso <b>salen solos de la ficha del producto</b> cuando lo elegís. Si en este embarque el proveedor cambió el packing, los podés pisar acá sin tocar el producto.<br>Sin el m³ el flete se reparte por valor, y el producto voluminoso queda con el costo subestimado: es el error clásico de la primera importación.</div>';
 }
 function pintarEmbCostos(){
-  const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado";
+  const puede = P("compra-modificar") && EMB.cab.estado !== "Cerrado" && !EMB.cab.anulado;
   $("emb_costos").innerHTML = !EMB.costos.length ? '<div class="muted">Sin costos cargados. Mientras no cargues nada, el landed es igual al FOB.</div>' :
    '<div class="tablewrap"><table><thead><tr><th style="min-width:200px">Concepto</th><th style="min-width:140px">Detalle</th><th>Importe</th><th>Moneda</th><th>¿Se recupera?</th><th>Se reparte por</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    EMB.costos.map(function(y,k){
@@ -5749,6 +5814,24 @@ async function cerrarEmbarque(id){
   await cargarCatalogo();
   $("embmsg").innerHTML='<div class="msg ok">Embarque cerrado. Se actualizó el costo de '+data+' producto'+(data===1?"":"s")+'.</div>';
   fichaEmbarque(id);
+}
+/* Reabrir: la vuelta atrás del cierre. Antes de pisar el costo de cada producto,
+   `cerrar_embarque` guarda el que tenía; acá se lo devuelve tal cual. Sin esto,
+   cerrar con una fórmula provisoria era irreversible y el costo viejo se perdía. */
+async function reabrirEmbarque(id){
+  if (!confirm("Reabrir le devuelve a cada producto el costo que tenía antes de cerrar este embarque. ¿Seguimos?")) return;
+  const {data,error} = await sb.rpc("reabrir_embarque",{p_embarque:id});
+  if (error){ $("embmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCatalogo();
+  $("embmsg").innerHTML='<div class="msg ok">Embarque reabierto. Se devolvió el costo anterior a '+data+' producto'+(data===1?"":"s")+'.</div>';
+  fichaEmbarque(id);
+}
+async function anularEmbarque(id){
+  const m = prompt("¿Por qué se anula este embarque?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_embarque",{p_id:id, p_motivo:m||"Sin motivo"});
+  if (error) return alert(error.message);
+  try{ $("dlg").close(); }catch(e){}
+  VISTAS.import();
 }
 
 /* ═══════════ STOCK ═══════════ */
