@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.15-129";
+const VERSION = "v2026.08.15-130";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1108,6 +1108,40 @@ function prospectoCerrado(p){
    directo —producto suelto, sin visita—, que sí es trabajo de la VL. */
 const PRESUP_VIVO = ["Abierto","Enviado","Vendido"];
 function tieneVisita(p){ return p.derivacion === "Visita a domicilio" || !!p.fecha_visita; }
+
+/* ── Del teléfono cargado a mano al link de WhatsApp (15/8) ──
+   El número que viaja a wa.me en la Argentina es 54 + 9 + área + abonado, SIN el
+   0 de larga distancia y SIN el 15. Los teléfonos se cargaron a mano y vienen de
+   todas las formas: «2944 15 123456», «02944-15123456», «+54 9 11 1234-5678».
+   Se limpian los prefijos y se arma el link SOLO si queda la cantidad de dígitos
+   que corresponde. Si no queda, no se inventa: se muestra el número pelado.
+   Un link a un número equivocado es peor que ningún link. */
+function waNumero(tel){
+  let n = String(tel||"").replace(/\D/g,"");
+  if (!n) return "";
+  if (n.indexOf("00") === 0) n = n.slice(2);
+  if (n.indexOf("54") === 0){ n = n.slice(2); if (n.indexOf("9") === 0) n = n.slice(1); }
+  if (n.indexOf("0") === 0) n = n.slice(1);
+  /* el 15 va después del código de área, que tiene 2, 3 o 4 dígitos */
+  if (n.length === 12){
+    for (const k of [2,3,4]){ if (n.slice(k,k+2) === "15"){ n = n.slice(0,k)+n.slice(k+2); break; } }
+  }
+  return n.length === 10 ? "549"+n : "";
+}
+function waLink(tel, texto){
+  const n = waNumero(tel);
+  return n ? "https://wa.me/"+n+(texto?"?text="+encodeURIComponent(texto):"") : "";
+}
+/* La celda del teléfono: si el número se puede interpretar, se toca y abre el
+   WhatsApp de esa persona; si no, sale como está. */
+function celdaWa(p){
+  const tel = p.celular || p.telefono || "";
+  if (!tel) return '<span class="muted">—</span>';
+  const l = waLink(tel);
+  return l ? '<a href="'+l+'" target="_blank" rel="noopener" title="Abrir WhatsApp con este número" '+
+             'onclick="event.stopPropagation()" style="text-decoration:none;font-weight:600">'+esc(tel)+' <span style="color:#1d5b2c">▸</span></a>'
+           : esc(tel);
+}
 let FTRAB = "";
 async function pintarCola(){
   const el = $("plcola"); if (!el) return;
@@ -1184,7 +1218,7 @@ async function pintarCola(){
        '<td'+(dias>=3&&enCola?' style="color:#7a2415;font-weight:600"':'')+'>'+dias+' d</td>'+
        '<td><b>'+esc(p.codigo)+'</b></td>'+
        '<td style="white-space:normal;min-width:150px"><b>'+esc(p.nombre)+'</b></td>'+
-       '<td>'+esc(p.celular||p.telefono||"—")+'</td>'+
+       '<td style="white-space:nowrap">'+celdaWa(p)+'</td>'+
        '<td>'+esc(nom(M.loc,p.localidad_id)||"—")+'</td>'+
        '<td>'+esc(nomP(p.vl_id)||"—")+'</td>'+
        '<td>'+esc(p.derivacion||"<span class=muted>sin definir</span>")+'</td>'+
@@ -2721,6 +2755,80 @@ async function correrDiagnostico(){
     const n = c.count||0, lim = LIMITES[t];
     filas.push({t:t, q:"volumen", r: n >= lim*0.8 ? "ojo" : "bien",
                 d: n+" registros (la pantalla trae hasta "+lim+")"+(n>=lim*0.8?" — se está acercando al tope: hay que subirlo antes de que corte sin avisar":"")});
+  }
+
+  /* ── 4. LOS VÍNCULOS ENTRE MÓDULOS — capa 5 (15/8) ──
+     Lo que fue apareciendo estos días no eran errores de un módulo: eran cables
+     sueltos ENTRE módulos. La venta que no le avisaba al prospecto. La columna
+     `anulado` del embarque, que el listado filtraba y nadie escribía. El
+     `oc_item_id` preparado y nunca conectado. El script de reset nombrando una
+     tabla que no existe, y salteándola en silencio. Leads entero sin entrada en
+     el menú. Cada módulo estaba bien por dentro; nadie miraba los cables.
+     Esta parte los mira, y tres de los cuatro controles no necesitan que nadie
+     se acuerde de nada: comparan la base contra el texto del propio programa.
+     El programa se lee a sí mismo. */
+  try{
+    const dv = await sb.rpc("diagnostico_vinculos");
+    if (dv.error) throw new Error(dv.error.message);
+    const cat = dv.data || {};
+    const fuente = await fetch("index.html", {cache:"no-store"}).then(r=>r.text()).catch(function(){ return ""; });
+
+    /* a. Columnas que existen en la base y el programa no nombra nunca.
+       Las genéricas se saltean: las escribe el sistema, no una pantalla. */
+    const GENERICAS = ["id","creado_en","creado_por","modificado_en","modificado_por","anulado_por",
+                       "anulado_en","motivo_anulacion","activo","orden","nombre","codigo","fecha"];
+    const muertas = (cat.columnas||[]).filter(function(tc){
+      const col = String(tc).split(".")[1];
+      return col && GENERICAS.indexOf(col) < 0 && fuente.indexOf(col) < 0;
+    });
+    filas.push({t:"columnas que nadie usa", q:"vínculos entre módulos", r: muertas.length?"ojo":"bien",
+      d: muertas.length
+        ? muertas.length+" columna(s) están en la base y el programa no las nombra nunca: "+
+          muertas.slice(0,12).join(", ")+(muertas.length>12?" y "+(muertas.length-12)+" más":"")+
+          ". O falta conectarlas, o sobran — pero mientras estén, alguien va a suponer que funcionan."
+        : "todas las columnas de la base aparecen en el programa"});
+
+    /* b. Vínculos preparados y nunca llenados: la columna que apunta a otra
+       tabla y está vacía en el 100% de las filas. Así estaba `oc_item_id`. */
+    const fkv = cat.fk_vacias||[];
+    filas.push({t:"vínculos vacíos", q:"vínculos entre módulos", r: fkv.length?"ojo":"bien",
+      d: fkv.length
+        ? fkv.map(function(x){ return x.tabla+"."+x.columna+" ("+x.filas+" filas, ninguna con dato)"; }).join(" · ")+
+          " — el vínculo está preparado en la base y nadie lo llena."
+        : "todos los vínculos entre tablas tienen datos"});
+
+    /* c. Crear y anular que no se espejan. Si registrar_X escribe en una tabla
+       que anular_X no toca, ahí PUEDE quedar un lado sin revertir.
+       Es un aviso, no un error, y a propósito: muchas veces la tabla que no se
+       toca es una hija —los renglones, los impuestos, las imputaciones— que no
+       necesita anularse porque el padre ya está anulado y nadie la suma sin
+       mirarlo. El control levanta la mano; confirmarlo es leer las dos
+       funciones. La capa 3 ya verificó al centavo varios de estos circuitos. */
+    const asi = cat.asimetrias||[];
+    filas.push({t:"crear contra anular", q:"vínculos entre módulos", r: asi.length?"ojo":"bien",
+      d: asi.length
+        ? asi.map(function(x){ return x.crear+"() escribe en "+(x.sin_revertir||[]).join(", ")+" y "+x.anular+"() no la nombra"; }).join(" · ")+
+          " — revisar si esa tabla necesita revertirse o si alcanza con que el documento padre quede anulado."
+        : "cada función que crea tiene su anular tocando los mismos lados"});
+
+    /* d. Nombres que el programa invoca y en la base no existen. Es el error del
+       script de reset, que falla callado. */
+    if (fuente){
+      const hay = {}; (cat.columnas||[]).forEach(function(tc){ hay[String(tc).split(".")[0]] = true; });
+      (cat.vistas||[]).forEach(function(v){ hay[v] = true; });
+      const fns = {}; (cat.funciones||[]).forEach(function(f){ fns[f] = true; });
+      const usaT = [...new Set((fuente.match(/from\("[a-z0-9_]+"\)/g)||[]).map(function(s){ return s.slice(6,-2); }))];
+      const usaF = [...new Set((fuente.match(/rpc\("[a-z0-9_]+"/g)||[]).map(function(s){ return s.slice(5,-1); }))];
+      const rotas = usaT.filter(function(t){ return !hay[t]; }).map(function(t){ return "tabla "+t; })
+        .concat(usaF.filter(function(f){ return !fns[f]; }).map(function(f){ return "función "+f+"()"; }));
+      filas.push({t:"nombres rotos", q:"vínculos entre módulos", r: rotas.length?"mal":"bien",
+        d: rotas.length
+          ? "el programa llama a algo que en la base no existe: "+rotas.join(", ")
+          : usaT.length+" tablas y "+usaF.length+" funciones invocadas, todas existen"});
+    }
+  }catch(e){
+    filas.push({t:"vínculos entre módulos", q:"vínculos entre módulos", r:"nose",
+      d:"no se pudo correr: "+e.message+" — o falta la migración v65, o tu rol no puede"});
   }
 
   const icono = {bien:"✔", mal:"✘", ojo:"!", nose:"?"};
