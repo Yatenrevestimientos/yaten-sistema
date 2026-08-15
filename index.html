@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.15-128";
+const VERSION = "v2026.08.15-129";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1100,24 +1100,41 @@ function prospectoCerrado(p){
   return p.estado === "DESCARTADO" ||
          p.resultado === "Vendido" || p.resultado === "Senado" || p.resultado === "No Vendido";
 }
+/* 15/8, pedido de Rocío: el prospecto que ya tuvo visita Y tiene presupuesto
+   cargado se va de la cola. De ahí en adelante el seguimiento es de la visita
+   y no de la VL, así que dejarlo arriba le figura como pendiente algo que ella
+   nunca va a trabajar desde esta pantalla.
+   Sigue en la cola: el que no tiene visita ni presupuesto, y el de presupuesto
+   directo —producto suelto, sin visita—, que sí es trabajo de la VL. */
+const PRESUP_VIVO = ["Abierto","Enviado","Vendido"];
+function tieneVisita(p){ return p.derivacion === "Visita a domicilio" || !!p.fecha_visita; }
 let FTRAB = "";
 async function pintarCola(){
   const el = $("plcola"); if (!el) return;
   const q = await sb.from("prospectos").select(COLS).order("fecha").order("id");
   if (q.error){ el.innerHTML = '<div class="msg err">'+esc(q.error.message)+'</div>'; return; }
-  const todos = (q.data||[]).filter(p=>!prospectoCerrado(p));
+  const vivos = (q.data||[]).filter(p=>!prospectoCerrado(p));
+  /* Los que ya tienen visita y presupuesto salen de la cola: pasan al historial. */
+  const conPresup = {};
+  if (vivos.length){
+    const pr = await sb.from("presupuestos").select("prospecto_id,estado").in("prospecto_id", vivos.map(x=>x.id));
+    (pr.data||[]).forEach(function(y){ if (PRESUP_VIVO.indexOf(y.estado) >= 0) conPresup[y.prospecto_id] = true; });
+  }
+  const salieron = vivos.filter(p=>tieneVisita(p) && conPresup[p.id]).length;
+  const todos = vivos.filter(p=>!(tieneVisita(p) && conPresup[p.id]));
   const puede = P("prospecto-modificar");
   const t = FTRAB.toLowerCase();
   const d = t ? todos.filter(p=>((p.codigo||"")+" "+(p.nombre||"")+" "+(p.celular||"")+" "+(p.telefono||"")).toLowerCase().indexOf(t)>=0) : todos;
 
   const cab = '<div class="panel" style="border-left:4px solid var(--ocre)">'+
    '<h2>Prospectos en trabajo</h2>'+
-   '<div class="desc">Todo lo que todavía hay que trabajar: lo que entró y nadie tomó, lo que se está llamando, lo que tiene visita y lo que está presupuestado. '+
-   '<b>Lo vendido y lo perdido no aparece acá</b>: baja al historial.</div>'+
+   '<div class="desc">Lo que todavía tiene que trabajar la VL: lo que entró y nadie tomó, lo que se está llamando, la visita que todavía no dio presupuesto, y el <b>presupuesto directo</b> sin visita. '+
+   '<b>No aparece acá</b> lo vendido, lo perdido, ni <b>lo que ya tuvo visita y tiene presupuesto</b>: eso baja al historial y lo sigue la visita.</div>'+
    '<div id="colamsg"></div>';
 
   if (!todos.length){
-    el.innerHTML = cab + '<div class="muted">No hay nada en trabajo. Todo lo que entró está vendido o cerrado.</div></div>';
+    el.innerHTML = cab + '<div class="muted">No hay nada en trabajo'+
+      (salieron? ': los '+salieron+' que quedaban ya tienen visita y presupuesto, y están en el historial.' : '. Todo lo que entró está vendido o cerrado.')+'</div></div>';
     return;
   }
   const ids = todos.map(x=>x.id);
@@ -1132,8 +1149,11 @@ async function pintarCola(){
     presup: todos.filter(x=>x.derivacion==="Presupuesto directo").length,
     decidir: 0
   };
+  /* 15/8: la sugerencia de descartar valía solo para DATO y CONTACTO, así que a
+     un prospecto con derivación cargada no le salía nunca, por más intentos que
+     tuviera. Rocío lo encontró con uno de 10 intentos. Ahora cuenta para todo lo
+     que siga en la cola: si está acá arriba, es porque todavía hay que trabajarlo. */
   todos.forEach(function(p){
-    if (p.estado!=="DATO" && p.estado!=="CONTACTO") return;
     if (contarIntentos(porPros[p.id]).total >= INTENTOS_PARA_SUGERIR) cuenta.decidir++;
   });
 
@@ -1158,7 +1178,7 @@ async function pintarCola(){
    d.map(function(p){
      const c = contarIntentos(porPros[p.id]);
      const enCola = p.estado==="DATO" || p.estado==="CONTACTO";
-     const cansado = enCola && c.total >= INTENTOS_PARA_SUGERIR;
+     const cansado = c.total >= INTENTOS_PARA_SUGERIR;
      const dias = diasDesde(p.fecha);
      return '<tr class="'+(cansado?"p-desc":colorProspecto(p))+'">'+
        '<td'+(dias>=3&&enCola?' style="color:#7a2415;font-weight:600"':'')+'>'+dias+' d</td>'+
@@ -1184,7 +1204,8 @@ async function pintarCola(){
           '<b>'+esc(p.nombre)+'</b>: '+c.total+' intentos sin respuesta. Conviene descartarlo con motivo, o dejar anotado por qué se sigue insistiendo.</span></td></tr>' : '');
    }).join("")+
    '</tbody></table></div>'+
-   '<div class="muted" style="margin-top:8px">Un prospecto baja al historial cuando se vende o cuando se cierra: descartado, o «No Vendido» después de la visita.</div>'+
+   '<div class="muted" style="margin-top:8px">Un prospecto baja al historial cuando se vende, cuando se cierra —descartado o «No Vendido»— y cuando <b>ya tuvo visita y tiene presupuesto</b>.'+
+     (salieron? ' Hoy bajaron '+salieron+' por esto último.' : '')+'</div>'+
    '</div>';
   const b = $("tr_txt");
   if (b) b.onkeydown = function(e){ if (e.key==="Enter"){ FTRAB = b.value.trim(); pintarCola(); } };
@@ -1672,15 +1693,35 @@ async function clienteSiHayVisita(o){
 async function presupuestosDeProspecto(id){
   const r = await sb.from("presupuestos").select("id,codigo,fecha,estado,total,moneda,cliente_id,nro_papel")
     .eq("prospecto_id", id).order("id",{ascending:false});
-  return r.error ? [] : (r.data||[]);
+  if (r.error) return [];
+  const arr = r.data||[];
+  /* 15/8: la venta que salió de cada presupuesto viaja con él. El prospecto, el
+     presupuesto y la venta son el mismo proceso: desde la ficha del prospecto se
+     tiene que ver dónde terminó, sin ir a buscarlo a Ventas. Si el rol no puede
+     leer ventas, la consulta vuelve vacía y la columna queda en «—». */
+  if (arr.length){
+    try{
+      const v = await sb.from("ventas").select("id,codigo,presupuesto_id,anulado").in("presupuesto_id", arr.map(x=>x.id));
+      (v.data||[]).forEach(function(y){
+        const p = arr.find(z=>String(z.id)===String(y.presupuesto_id));
+        if (p && (!p.venta || p.venta.anulado)) p.venta = y;
+      });
+    }catch(e){}
+  }
+  return arr;
 }
 
 function listaPresupPros(arr){
   if (!arr.length) return '<div class="muted">Todavía no tiene ningún presupuesto cargado.</div>';
-  return '<div class="tablewrap"><table><thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th class="r">Total</th></tr></thead><tbody>'+
+  return '<div class="tablewrap"><table><thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th class="r">Total</th><th>Venta</th></tr></thead><tbody>'+
     arr.map(x=>'<tr style="cursor:pointer" onclick="verPresupDesdeProspecto('+x.id+')">'+
       '<td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+pillE(x.estado)+'</td>'+
-      '<td class="r"><b>'+fmtM(x.total,x.moneda)+'</b></td></tr>').join("")+
+      '<td class="r"><b>'+fmtM(x.total,x.moneda)+'</b></td>'+
+      '<td>'+(x.venta
+         ? (x.venta.anulado
+             ? '<span style="text-decoration:line-through;color:#7a2415">'+esc(x.venta.codigo)+'</span>'
+             : '<b style="color:#1d5b2c">'+esc(x.venta.codigo)+'</b>')
+         : '<span class="muted">—</span>')+'</td></tr>').join("")+
     '</tbody></table></div>';
 }
 function verPresupDesdeProspecto(id){ try{ $("dlg").close(); }catch(e){} abrirPresupuesto(id); }
@@ -7606,21 +7647,22 @@ async function imprimirPagoCompra(id){
      '<tr class="tot"><td colspan="3" class="r"><b>IMPUTADO</b></td><td class="r"><b>'+fmtM0(imputado,x.moneda)+'</b></td></tr>'+
      '</tbody></table>'
     : '<div>Sin imputar a comprobantes: baja la deuda general del proveedor.</div>')+
+   /* 15/8: se sacó la columna «Sale de». De qué caja o de qué banco pagamos es
+      dato de adentro y el proveedor no tiene por qué verlo. Los datos del cheque
+      sí quedan: ese papel es suyo y lo tiene que poder identificar. */
    '<h3>Forma de pago</h3>'+
-   '<table><thead><tr><th>Medio</th><th>Sale de</th><th class="r">Importe</th></tr></thead><tbody>'+
+   '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
      (medios.length
        ? medios.map(function(y){
-           const c2 = (CTAS||[]).find(z=>String(z.id)===String(y.cuenta_id));
            const ch = chqs.find(z=>String(z.id)===String(y.cheque_id));
            return '<tr><td>'+(ch
               ? 'Cheque '+(String(ch.tipo).toLowerCase().indexOf("prop")>=0?"propio":"de terceros")+' N° '+esc(ch.numero)+
                 (ch.vencimiento?' (vence '+fmtF(ch.vencimiento)+')':'')
               : esc(y.detalle||"Efectivo o banco"))+'</td>'+
-             '<td>'+esc(c2?c2.nombre:"—")+'</td>'+
              '<td class="r">'+fmtM0(y.importe,x.moneda)+'</td></tr>';
          }).join("")
-       : '<tr><td>Efectivo o banco</td><td>'+esc(cta?cta.nombre:"—")+'</td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>')+
-     '<tr class="tot"><td colspan="2" class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
+       : '<tr><td>Efectivo o banco</td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>')+
+     '<tr class="tot"><td class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
    '</tbody></table>'+
    (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
    '<div class="firma"><div>Firma y aclaración de quien paga</div><div>Recibí conforme</div></div>'+
@@ -8709,6 +8751,39 @@ async function guardarVentaDirecta(){
       else avisoPros = "ok";
     }catch(e){ avisoPros = e.message; }
   }
+  /* ── Venta de mostrador a un cliente que nunca fue prospecto (15/8) ──
+     Decisión de Gustavo: TODA venta entra al embudo. Si la venta no vino de
+     ningún prospecto, se le crea uno con los datos del cliente y se engancha al
+     presupuesto automático. Nace con derivación «Presupuesto directo» y sin
+     resultado: el disparador de la base lo pasa a «Vendido» al enganchar el
+     presupuesto, así la regla vive en un solo lugar. Nace cerrado, no cae en la
+     cola de la VL. Tercer paso, como los otros dos: si falla, la venta ya está
+     bien y la plata también. */
+  let avisoNuevoPros = "";
+  if (!VTA.prospecto_id && !avisoPre){
+    try{
+      const vq = await sb.from("ventas").select("presupuesto_id").eq("id",data).single();
+      const preId = vq.data ? vq.data.presupuesto_id : null;
+      if (preId){
+        const yq = await sb.from("presupuestos").select("prospecto_id").eq("id",preId).single();
+        if (yq.data && !yq.data.prospecto_id){
+          const np = await sb.from("prospectos").insert({
+            fecha: VTA.fecha||hoy(), nombre: cli.nombre||"Cliente de mostrador",
+            telefono: cli.telefono||null, celular: cli.celular||null, email: cli.email||null,
+            direccion: cli.direccion||null, localidad_id: cli.localidad_id||null,
+            derivacion: "Presupuesto directo", estado: "CONSULTA",
+            motivo_consulta: "Venta directa de mostrador",
+            importe: t.total, moneda: VTA.moneda||"ARS"
+          }).select("id,codigo").single();
+          if (np.error) avisoNuevoPros = np.error.message;
+          else {
+            const lk = await sb.from("presupuestos").update({prospecto_id:np.data.id}).eq("id",preId);
+            avisoNuevoPros = lk.error ? lk.error.message : ("ok:"+np.data.codigo);
+          }
+        }
+      }
+    }catch(e){ avisoNuevoPros = e.message; }
+  }
   await cargarClientes();
   await fichaVenta(data);
   if (avisoPre && $("vnmsg")) $("vnmsg").innerHTML =
@@ -8718,6 +8793,10 @@ async function guardarVentaDirecta(){
     '<div class="msg ok">Venta registrada. El presupuesto quedó detrás, cerrado y marcado «auto», y el prospecto pasó a <b>Vendido</b>.</div>';
   else if (avisoPros && $("vnmsg")) $("vnmsg").innerHTML =
     '<div class="msg err">La venta y el presupuesto quedaron bien, pero el prospecto no se pudo marcar «Vendido»: '+esc(avisoPros)+'. Marcalo a mano desde su ficha.</div>';
+  else if (avisoNuevoPros.indexOf("ok:")===0 && $("vnmsg")) $("vnmsg").innerHTML =
+    '<div class="msg ok">Venta registrada, con su presupuesto detrás. Como el cliente no venía de ningún prospecto, se le creó el prospecto <b>'+esc(avisoNuevoPros.slice(3))+'</b>, ya cerrado como <b>Vendido</b>: así la venta entra en el embudo y en Efectividad.</div>';
+  else if (avisoNuevoPros && $("vnmsg")) $("vnmsg").innerHTML =
+    '<div class="msg err">La venta y el presupuesto quedaron bien, pero no pude crearle el prospecto: '+esc(avisoNuevoPros)+'. Esa venta va a quedar afuera del embudo hasta que se le cargue uno.</div>';
   if (VISTA==="ventas") VISTAS.ventas();
 }
 
@@ -9545,6 +9624,25 @@ function seccionCC(c, seg){
 
 /* 14/8, Gilda: «colocar botón imprimir recibo». Es el papel que se le entrega
    al cliente cuando paga: qué se cobró, con qué, y a qué ventas se aplicó. */
+/* Cómo pagó el cliente, dicho para el cliente (15/8).
+   El recibo tiene que decir «efectivo», «transferencia» o «cheque a 30 días»,
+   y NO en qué caja o en qué banco entró la plata: eso es de adentro.
+   `cobranza_medios` no guarda una forma de pago, solo la cuenta, así que el
+   medio se deduce del TIPO de esa cuenta y el nombre de la cuenta no se imprime
+   nunca. El cheque se identifica entero —número y vencimiento— porque ese papel
+   es del cliente y lo tiene que poder reconocer. */
+function medioParaElCliente(tipoCta, ch){
+  if (ch) return 'Cheque N° ' + esc(ch.numero||"s/n") +
+    (ch.vencimiento ? ' · vence ' + fmtF(ch.vencimiento) : '') +
+    (ch.librador ? ' · ' + esc(ch.librador) : '');
+  const t = String(tipoCta||"").toLowerCase();
+  if (t.indexOf("efectivo")>=0 || t.indexOf("caja")>=0) return "Efectivo";
+  if (t.indexOf("banco")>=0)      return "Transferencia o depósito";
+  if (t.indexOf("tarjeta")>=0)    return "Tarjeta";
+  if (t.indexOf("cheque")>=0)     return "Cheque";
+  if (t.indexOf("mercado")>=0)    return "Mercado Pago";
+  return "Otro medio";
+}
 async function imprimirRecibo(cobId){
   const [k, im, me] = await Promise.all([
     sb.from("cobranzas").select("*").eq("id",cobId).single(),
@@ -9553,15 +9651,31 @@ async function imprimirRecibo(cobId){
   ]);
   if (k.error) return alert(k.error.message);
   const x = k.data, imps = im.data||[], medios = me.data||[];
+  /* Se pide el TIPO de cada cuenta y los cheques; el nombre de la cuenta ni se
+     consulta. Si el rol no puede leerlos, el medio sale «Otro medio» y el recibo
+     se imprime igual: no se cae por esto. */
+  const tipoDeCuenta = {}; let chqs = [];
+  try{
+    /* x.cuenta_id entra en la lista por los recibos viejos, anteriores a la v59,
+       que tienen una sola cuenta y ninguna fila en cobranza_medios. */
+    const ctaIds = [...new Set(medios.map(y=>y.cuenta_id).concat([x.cuenta_id]).filter(Boolean))];
+    if (ctaIds.length){
+      const cq = await sb.from("cuentas").select("id,tipo_cuenta_id").in("id", ctaIds);
+      const tIds = [...new Set((cq.data||[]).map(c=>c.tipo_cuenta_id).filter(Boolean))];
+      const tq = tIds.length ? await sb.from("tipos_cuenta").select("id,nombre").in("id", tIds) : {data:[]};
+      const tn = {}; (tq.data||[]).forEach(function(t){ tn[t.id] = t.nombre; });
+      (cq.data||[]).forEach(function(c){ tipoDeCuenta[c.id] = tn[c.tipo_cuenta_id]||""; });
+    }
+    const chIds = [...new Set(medios.map(y=>y.cheque_id).filter(Boolean))];
+    if (chIds.length){ const c = await sb.from("cheques").select("*").in("id", chIds); chqs = c.data||[]; }
+  }catch(e){}
   if (!CLIS.length) await cargarClientes();
-  if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
   let vtas = [];
   if (imps.length){
     const v = await sb.from("ventas").select("id,codigo,fecha,total,moneda").in("id", imps.map(y=>y.venta_id));
     vtas = v.data||[];
   }
   const cli = CLIS.find(y=>String(y.id)===String(x.cliente_id)) || {};
-  const cta = (CTAS||[]).find(y=>String(y.id)===String(x.cuenta_id));
   const mon = x.moneda_cc || x.moneda_pago || "ARS";
   const imputado = imps.reduce(function(a,y){ return a+Number(y.monto||0); },0);
   const sinImputar = Number(x.importe||0) - imputado;
@@ -9582,18 +9696,18 @@ async function imprimirRecibo(cobId){
      (cli.nro_doc?' \u00b7 '+esc(cli.tipo_doc||"Doc")+' '+esc(cli.nro_doc):'')+
      (cli.direccion?'<br>'+esc(cli.direccion):'')+'</div>'+
    '<div class="caja">Recibimos la suma de<br><b class="grande">'+fmtM0(x.importe,mon)+'</b></div>'+
-   /* 14/8: un recibo puede tener varias formas de pago. Si las tiene, se
-      listan una por una; los recibos viejos, que tienen una sola cuenta,
-      siguen saliendo igual que siempre. */
+   /* 15/8, pedido de Roc\u00edo: se muestra CON QU\u00c9 pag\u00f3 \u2014efectivo, transferencia,
+      tarjeta, cheque con su n\u00famero y vencimiento\u2014 y no D\u00d3NDE entr\u00f3 la plata.
+      La caja y el banco son datos de adentro. */
    '<h3>Con qu\u00e9 se pag\u00f3</h3>'+
    '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
      (medios.length
        ? medios.map(function(y){
-           const c2 = (CTAS||[]).find(z=>String(z.id)===String(y.cuenta_id));
-           return '<tr><td>'+esc(c2?c2.nombre:"\u2014")+(y.detalle?' \u00b7 '+esc(y.detalle):'')+'</td>'+
+           const ch = chqs.find(z=>String(z.id)===String(y.cheque_id));
+           return '<tr><td>'+medioParaElCliente(tipoDeCuenta[y.cuenta_id], ch)+'</td>'+
              '<td class="r">'+fmtM0(y.importe,mon)+'</td></tr>';
          }).join("")
-       : '<tr><td>'+esc(cta?cta.nombre:"\u2014")+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>')+
+       : '<tr><td>'+medioParaElCliente(tipoDeCuenta[x.cuenta_id], null)+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>')+
    '</tbody></table>'+
    '<h3>Se aplic\u00f3 a</h3>'+
    (imps.length? '<table><thead><tr><th>Venta</th><th>Fecha</th><th class="r">Total</th><th class="r">Imputado</th></tr></thead><tbody>'+
