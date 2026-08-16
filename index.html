@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.16-132";
+const VERSION = "v2026.08.16-133";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -381,7 +381,7 @@ $("dcerrar").onclick = () => $("dlg").close();
    venta o de un prospecto, las banderas quedaban prendidas y el próximo alta
    de cliente —de cualquier pantalla— saltaba a la venta vieja y enganchaba un
    prospecto ajeno. Al cerrar, se apagan siempre. */
-$("dlg").addEventListener("close", function(){ _VOLVER_A_VENTA = false; _PROS_CLI = null; });
+$("dlg").addEventListener("close", function(){ _VOLVER_A_VENTA = false; _PROS_CLI = null; _VOLVER_EMB = null; });
 
 sb.auth.onAuthStateChange((_e, session) => { if (session) arrancar(); });
 sb.auth.getSession().then(({data}) => { if (data.session) arrancar(); });
@@ -2754,6 +2754,47 @@ async function correrDiagnostico(){
     if (!cnull.error) filas.push({t:"cobranzas.codigo", q:"numeración de recibos", r:(cnull.count||0)?"mal":"bien",
       d:(cnull.count||0)? (cnull.count+" cobranza(s) sin número de recibo: falta el trigger de la v59 o el backfill")
         : "todos los recibos tienen su número REC-"});
+  }catch(e){}
+
+  /* ── 1 quinquies. Los tres datos que, si faltan, hacen que el sistema calcule
+     mal en silencio (16/8, bloque C) ──
+     Los tres salieron del bloque C. No son errores de programa: son datos que
+     alguien tiene que cargar, y mientras no estén el sistema no se rompe —
+     hace algo peor, que es dar un número equivocado sin avisar. */
+  try{
+    const chq = await sb.from("chequeras").select("id,nombre,cuenta_id,activo").eq("activo",true);
+    if (!chq.error){
+      const sin = (chq.data||[]).filter(function(x){ return !x.cuenta_id; });
+      filas.push({t:"chequeras sin cuenta", q:"datos que hacen calcular mal", r: sin.length?"mal":"bien",
+        d: sin.length
+          ? sin.map(function(x){ return x.nombre; }).join(", ")+" — sin cuenta de tesorería. Un cheque de esa chequera se puede descontar del banco equivocado."
+          : "todas las chequeras activas tienen su cuenta"});
+    }
+  }catch(e){}
+  try{
+    const mot = await sb.from("motivos").select("id,nombre,aplica_a,activo").eq("activo",true);
+    if (!mot.error){
+      const sin = (mot.data||[]).filter(function(x){ return !String(x.aplica_a||"").trim(); });
+      filas.push({t:"motivos sin «aplica a»", q:"datos que hacen calcular mal", r: sin.length?"ojo":"bien",
+        d: sin.length
+          ? sin.map(function(x){ return x.nombre; }).join(", ")+" — sin decir si son de prospecto o de presupuesto, así que aparecen en las dos listas y el reporte de por qué se pierde una venta sale mezclado."
+          : "cada motivo dice a qué se aplica"});
+    }
+  }catch(e){}
+  try{
+    /* «Con instalación» es marca de cada renglón, no de la venta: la venta lleva
+       instalación si alguno de sus renglones la lleva. */
+    const vit = await sb.from("venta_items").select("venta_id,con_instalacion").eq("con_instalacion",true).limit(5000);
+    const conInst = {}; (vit.data||[]).forEach(function(y){ conInst[y.venta_id] = true; });
+    const vi = await sb.from("ventas").select("id,codigo,instalador_id").eq("anulado",false);
+    if (!vi.error && !vit.error){
+      const sin = (vi.data||[]).filter(function(x){ return conInst[x.id] && !x.instalador_id; });
+      filas.push({t:"ventas con instalación sin instalador", q:"datos que hacen calcular mal", r: sin.length?"ojo":"bien",
+        d: sin.length
+          ? sin.length+" venta(s) con instalación y sin cuadrilla asignada ("+sin.slice(0,6).map(function(x){ return x.codigo; }).join(", ")+
+            (sin.length>6?" y "+(sin.length-6)+" más":"")+"). El costo de la mano de obra no se resta y el margen sale inflado."
+          : "toda venta con instalación tiene su cuadrilla"});
+    }
   }catch(e){}
 
   /* ── 2. ¿Se leen las vistas que alimentan las pantallas? ── */
@@ -5811,7 +5852,24 @@ async function fichaEmbarque(id){
     sb.from("embarque_hitos").select("*").eq("embarque_id",id)
   ]);
   if (e.error) return alert(e.error.message);
-  EMB = {cab:e.data, items:i.data||[], costos:c.data||[], landed:l.data||[], hitos:h.data||[]};
+  EMB = {cab:e.data, items:i.data||[], costos:c.data||[], landed:l.data||[], hitos:h.data||[], papeles:[], ocDe:{}, faltaDoc:false};
+  /* Los papeles de la importación. Si todavía no se corrió la migración que crea
+     `documentos.embarque_id`, la consulta falla y la sección lo dice en vez de
+     romper la ficha entera. */
+  const pp = await sb.from("documentos").select("id,codigo,nombre,archivo_nombre,archivo_path,enlace")
+    .eq("embarque_id",id).eq("anulado",false).order("id",{ascending:false});
+  if (pp.error) EMB.faltaDoc = true; else EMB.papeles = pp.data||[];
+  /* De qué orden de compra vino cada renglón, para poder mirarlo desde acá. */
+  const ocIds = EMB.items.map(y=>y.oc_item_id).filter(Boolean);
+  if (ocIds.length){
+    const oi = await sb.from("oc_items").select("id,orden_id").in("id", ocIds);
+    const ords = Array.from(new Set((oi.data||[]).map(y=>y.orden_id)));
+    if (ords.length){
+      const oc = await sb.from("ordenes_compra").select("id,codigo").in("id", ords);
+      const cod = {}; (oc.data||[]).forEach(function(o){ cod[o.id] = o.codigo; });
+      (oi.data||[]).forEach(function(y){ EMB.ocDe[y.id] = cod[y.orden_id] || ("OC #"+y.orden_id); });
+    }
+  }
   pintarEmbarque();
   try{ $("dlg").showModal(); }catch(e2){}
 }
@@ -5841,19 +5899,62 @@ function pintarEmbarque(){
    '<div class="sec">Por dónde va</div>'+
    '<div id="emb_ruta"></div>'+
    '<div class="sec">Qué viene en el embarque</div>'+
-   (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embItemAgregar()">+ Renglón</button></div>':'')+
+   (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embItemAgregar()">+ Renglón</button>'+
+     '<button class="btn2 btn-sm" onclick="embTraerOC()">Traer renglones de una orden de compra</button></div>':'')+
+   '<div id="emb_ocpick"></div>'+
    '<div id="emb_items"></div>'+
    '<div class="sec">Costos del embarque</div>'+
    '<div class="muted" style="margin-bottom:8px">Cargá cada costo con su concepto. El sistema ya sabe cuáles son recuperables y cómo se reparten, pero lo podés cambiar renglón por renglón.</div>'+
    (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embCostoAgregar()">+ Costo</button></div>':'')+
    '<div id="emb_costos"></div>'+
+   '<div class="sec">Papeles del embarque</div>'+
+   '<div id="emb_papeles"></div>'+
    '<div class="acciones">'+
      (puede?'<button class="btn" onclick="guardarEmbarqueDetalle()">Guardar y recalcular</button>':'')+
      (puede&&EMB.items.length?'<button class="btn2" onclick="cerrarEmbarque('+x.id+')">Cerrar embarque y pasar el costo a los productos</button>':'')+
      (x.estado==="Cerrado"&&!x.anulado&&P("compra-modificar")?'<button class="btn2" onclick="reabrirEmbarque('+x.id+')">Reabrir y devolver el costo anterior</button>':'')+
      (!x.anulado&&x.estado!=="Cerrado"&&P("finanzas-anular")?'<button class="btn2" onclick="anularEmbarque('+x.id+')">Anular embarque</button>':'')+
      '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>';
-  pintarEmbRuta(); pintarEmbItems(land); pintarEmbCostos();
+  pintarEmbRuta(); pintarEmbItems(land); pintarEmbCostos(); pintarEmbPapeles();
+}
+/* ── Papeles del embarque (16/8) ──
+   La carpeta de la importación: packing list, BL, despacho, factura del
+   despachante, certificados. Son documentos comunes, con sus tags y su
+   buscador; lo único nuevo es que quedan colgados del embarque. */
+function pintarEmbPapeles(){
+  const puede = P("documento-agregar");
+  if (EMB.faltaDoc){
+    $("emb_papeles").innerHTML = '<div class="msg err">Falta correr la migración v67: los documentos todavía no se pueden colgar de un embarque.</div>';
+    return;
+  }
+  $("emb_papeles").innerHTML =
+   '<div class="muted" style="margin-bottom:8px">Todo lo que respalda esta importación. Queda guardado adentro del sistema y se busca después por el código del embarque.</div>'+
+   (puede?'<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="embPapelNuevo()">+ Adjuntar un papel</button></div>':'')+
+   (EMB.papeles.length
+     ? '<div class="tablewrap"><table><thead><tr><th>Código</th><th style="min-width:220px">Nombre</th><th>Archivo</th><th></th></tr></thead><tbody>'+
+       EMB.papeles.map(function(d){
+         return '<tr><td><b>'+esc(d.codigo)+'</b></td>'+
+          '<td style="white-space:normal">'+esc(d.nombre)+'</td>'+
+          '<td>'+esc(d.archivo_nombre||(d.enlace?"enlace":"—"))+'</td>'+
+          '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="abrirDocumento('+d.id+')">Abrir</button>'+
+            (puede?' <button class="btn2 btn-sm" onclick="embPapelSacar('+d.id+')">Sacar</button>':'')+'</td></tr>';
+       }).join("")+'</tbody></table></div>'
+     : '<div class="muted">Todavía no hay papeles de este embarque.</div>');
+}
+async function embPapelNuevo(){
+  const id = EMB.cab.id;
+  if (!(await cargarDocs())){ $("embmsg").innerHTML='<div class="msg err">Falta la tabla de documentos en la base.</div>'; return; }
+  _VOLVER_EMB = id;
+  await formDocumento(null);
+  const s = $("d_emb"); if (s) s.value = String(id);
+}
+/* «Sacar» no borra el papel: lo despega del embarque y queda en Documentos. */
+async function embPapelSacar(docId){
+  if (!confirm("El documento se despega del embarque, pero no se borra: queda en Documentos. ¿Seguimos?")) return;
+  const id = EMB.cab.id;
+  const {error} = await sb.from("documentos").update({embarque_id:null}).eq("id",docId);
+  if (error){ $("embmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  fichaEmbarque(id);
 }
 /* ── Por dónde va el embarque (15/8, v63) ──
    Los seis pasos salen de la maestra `estados_embarque`, así que la lista se amplía
@@ -5902,7 +6003,8 @@ function pintarEmbItems(land){
    '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Producto</th><th style="min-width:130px">Descripción</th><th>Cantidad</th><th>FOB unit. US$</th><th>m³ por unidad</th><th>Peso kg</th><th>FOB total</th><th>Costos</th><th>Landed unit.</th><th>× FOB</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    EMB.items.map(function(y,k){ const L = land[y.id]||{};
      return '<tr>'+
-      '<td><select style="width:100%;min-width:220px" id="ei_'+k+'_producto_id" onchange="embProducto('+k+')" '+(puede?'':'disabled')+'>'+opts(y.producto_id)+'</select></td>'+
+      '<td><select style="width:100%;min-width:220px" id="ei_'+k+'_producto_id" onchange="embProducto('+k+')" '+(puede?'':'disabled')+'>'+opts(y.producto_id)+'</select>'+
+        (y.oc_item_id?'<div class="muted">viene de '+esc((EMB.ocDe||{})[y.oc_item_id]||"una orden de compra")+'</div>':'')+'</td>'+
       '<td><input id="ei_'+k+'_descripcion" value="'+esc(y.descripcion)+'" '+(puede?'':'disabled')+'></td>'+
       '<td><input type="number" step="0.01" style="width:90px" id="ei_'+k+'_cantidad" value="'+(y.cantidad||"")+'" '+(puede?'':'disabled')+'></td>'+
       '<td><input type="number" step="0.0001" style="width:100px" id="ei_'+k+'_precio_fob_unit" value="'+(y.precio_fob_unit||"")+'" '+(puede?'':'disabled')+'></td>'+
@@ -5965,7 +6067,68 @@ function embSincro(){
     const pr=$("ec_"+k+"_prorrateo"); if(pr) y.prorrateo = pr.value;
   });
 }
-function embItemAgregar(){ embSincro(); EMB.items.push({producto_id:null, descripcion:"", cantidad:0, precio_fob_unit:0, m3_unit:null, peso_unit:null}); pintarEmbItems({}); }
+function embItemAgregar(){ embSincro(); EMB.items.push({producto_id:null, descripcion:"", cantidad:0, precio_fob_unit:0, m3_unit:null, peso_unit:null, oc_item_id:null}); pintarEmbItems({}); }
+/* ── Traer los renglones desde una orden de compra (16/8) ──
+   Antes, lo que se le pedía al proveedor se tipeaba dos veces: una en la orden
+   de compra y otra en el embarque. Se cargaba distinto, y después no había
+   forma de saber qué orden estaba viajando en qué embarque. Ahora el renglón
+   del embarque se trae de la orden y se queda con el número: `oc_item_id`. */
+async function embTraerOC(){
+  embSincro();
+  const box = $("emb_ocpick");
+  if (box.getAttribute("data-abierto") === "1"){ box.setAttribute("data-abierto",""); box.innerHTML = ""; return; }
+  box.setAttribute("data-abierto","1");
+  box.innerHTML = '<div class="muted">Buscando órdenes de compra…</div>';
+  let q = sb.from("ordenes_compra").select("id,codigo,fecha,proveedor_id,estado,total,moneda")
+    .eq("anulado",false).order("id",{ascending:false}).limit(100);
+  if (EMB.cab.proveedor_id) q = q.eq("proveedor_id", EMB.cab.proveedor_id);
+  const {data,error} = await q;
+  if (error){ box.innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const rows = data||[];
+  box.innerHTML = '<div class="panel" style="margin:0 0 10px">'+
+   '<div class="muted" style="margin-bottom:8px">'+
+     (EMB.cab.proveedor_id ? 'Órdenes de <b>'+esc(nomProv(EMB.cab.proveedor_id))+'</b>, que es el proveedor de este embarque.'
+                           : 'El embarque no tiene proveedor cargado, así que se listan todas las órdenes.')+
+     ' Los renglones se agregan a los que ya tenés; lo que ya trajiste de esta orden no se duplica.</div>'+
+   (rows.length? '<div class="tablewrap" style="max-height:240px;overflow:auto"><table><thead><tr><th>Orden</th><th>Fecha</th><th>Total</th><th>Estado</th><th></th></tr></thead><tbody>'+
+     rows.map(function(o){
+       return '<tr><td><b>'+esc(o.codigo)+'</b></td><td>'+fmtF(o.fecha)+'</td>'+
+        '<td>'+fmtM(o.total,o.moneda)+'</td><td>'+esc(o.estado||"")+'</td>'+
+        '<td><button class="btn2 btn-sm" onclick="embTraerOCItems('+o.id+')">Traer</button></td></tr>';
+     }).join("")+'</tbody></table></div>'
+    : '<div class="muted">No hay órdenes de compra de este proveedor.</div>')+
+   '<div class="acciones"><button class="btn2 btn-sm" onclick="embTraerOC()">Cerrar</button></div></div>';
+}
+async function embTraerOCItems(ordenId){
+  embSincro();
+  const [o,i] = await Promise.all([
+    sb.from("ordenes_compra").select("id,codigo").eq("id",ordenId).single(),
+    sb.from("oc_items").select("*").eq("orden_id",ordenId).order("id")
+  ]);
+  if (i.error){ $("embmsg").innerHTML='<div class="msg err">'+esc(i.error.message)+'</div>'; return; }
+  const ya = {}; EMB.items.forEach(function(y){ if (y.oc_item_id) ya[y.oc_item_id] = true; });
+  let n = 0;
+  (i.data||[]).forEach(function(x){
+    if (ya[x.id]) return;
+    const p = PRODS.find(z=>String(z.id)===String(x.producto_id));
+    EMB.items.push({
+      producto_id: x.producto_id||null,
+      descripcion: x.descripcion || (p?p.nombre:""),
+      cantidad: Number(x.cantidad||0),
+      precio_fob_unit: Number(x.precio_unit||0),
+      m3_unit:  p && p.m3_por_caja  != null && p.m3_por_caja  !== "" ? Number(p.m3_por_caja)  : null,
+      peso_unit:p && p.peso_kg_caja != null && p.peso_kg_caja !== "" ? Number(p.peso_kg_caja) : null,
+      oc_item_id: x.id
+    });
+    if (o.data) EMB.ocDe[x.id] = o.data.codigo;
+    n++;
+  });
+  $("emb_ocpick").setAttribute("data-abierto",""); $("emb_ocpick").innerHTML = "";
+  $("embmsg").innerHTML = n
+    ? '<div class="msg ok">Se trajeron '+n+' renglón'+(n===1?'':'es')+' de '+esc(o.data?o.data.codigo:("OC #"+ordenId))+'. Revisá el m³ por unidad y apretá <b>Guardar y recalcular</b>.</div>'
+    : '<div class="msg err">Esa orden ya estaba traída entera: no quedaba ningún renglón nuevo.</div>';
+  pintarEmbItems({});
+}
 function embItemQuitar(k){ embSincro(); const y=EMB.items[k]; if(y.id) (EMB.borrarI=EMB.borrarI||[]).push(y.id); EMB.items.splice(k,1); pintarEmbItems({}); }
 function embCostoAgregar(){ embSincro(); EMB.costos.push({concepto_id:null, detalle:"", importe:0, moneda:"USD", recuperable:false, prorrateo:"valor"}); pintarEmbCostos(); }
 function embCostoQuitar(k){ embSincro(); const y=EMB.costos[k]; if(y.id) (EMB.borrarC=EMB.borrarC||[]).push(y.id); EMB.costos.splice(k,1); pintarEmbCostos(); }
@@ -5978,7 +6141,8 @@ async function guardarEmbarqueDetalle(){
   for (const y of EMB.items){
     const fila = {embarque_id:id, producto_id:y.producto_id||null, descripcion:y.descripcion||"(sin detalle)",
       cantidad:Number(y.cantidad||0), precio_fob_unit:Number(y.precio_fob_unit||0),
-      m3_unit:y.m3_unit==null?null:Number(y.m3_unit), peso_unit:y.peso_unit==null?null:Number(y.peso_unit)};
+      m3_unit:y.m3_unit==null?null:Number(y.m3_unit), peso_unit:y.peso_unit==null?null:Number(y.peso_unit),
+      oc_item_id:y.oc_item_id||null};
     const r = y.id ? await sb.from("embarque_items").update(fila).eq("id",y.id) : await sb.from("embarque_items").insert(fila);
     if (r.error){ $("embmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
   }
@@ -9018,6 +9182,14 @@ async function cargarDocs(){
   ]);
   DOCS = d.data||[]; TAGS = t.data||[]; DOCTAGS = {};
   (dt.data||[]).forEach(function(x){ (DOCTAGS[x.documento_id] = DOCTAGS[x.documento_id] || []).push(x.tag_id); });
+  /* Los códigos de venta y de embarque, para que la columna «Colgado de» diga
+     VTA-0007 y no «#7». Se piden una sola vez y solo si hace falta. */
+  if (!VENTASDOC.length && DOCS.some(x=>x.venta_id)){
+    try{ const vq = await sb.from("ventas").select("id,codigo").eq("anulado",false).order("id",{ascending:false}).limit(500); VENTASDOC = vq.data||[]; }catch(e){}
+  }
+  if (!EMBDOC.length && DOCS.some(x=>x.embarque_id)){
+    try{ const eq = await sb.from("embarques").select("id,codigo").eq("anulado",false).order("id",{ascending:false}).limit(300); EMBDOC = eq.data||[]; }catch(e){}
+  }
   return true;
 }
 function tagsDe(docId){
@@ -9085,12 +9257,16 @@ function pintarDocsListado(){
   if (FDOC.ambito === "cliente")  rows = rows.filter(d=>d.cliente_id);
   if (FDOC.ambito === "producto") rows = rows.filter(d=>d.producto_id);
   if (FDOC.ambito === "proveedor")rows = rows.filter(d=>d.proveedor_id);
-  if (FDOC.ambito === "general")  rows = rows.filter(d=>!d.cliente_id && !d.producto_id && !d.proveedor_id);
+  if (FDOC.ambito === "venta")    rows = rows.filter(d=>d.venta_id);
+  if (FDOC.ambito === "embarque") rows = rows.filter(d=>d.embarque_id);
+  if (FDOC.ambito === "general")  rows = rows.filter(d=>!d.cliente_id && !d.producto_id && !d.proveedor_id && !d.venta_id && !d.embarque_id);
   if (t) rows = rows.filter(d => ((d.codigo||"")+" "+(d.nombre||"")+" "+(d.descripcion||"")+" "+(d.archivo_nombre||"")+" "+tagsDe(d.id).map(x=>x.nombre).join(" ")).toLowerCase().indexOf(t)>=0);
   const aQue = function(d){
     if (d.cliente_id){ const c = CLIS.find(x=>x.id===d.cliente_id); return "Cliente: "+(c?c.nombre:("#"+d.cliente_id)); }
     if (d.producto_id){ const p = PRODS.find(x=>x.id===d.producto_id); return "Producto: "+(p?p.nombre:("#"+d.producto_id)); }
     if (d.proveedor_id){ const p = PROVS.find(x=>x.id===d.proveedor_id); return "Proveedor: "+(p?p.nombre:("#"+d.proveedor_id)); }
+    if (d.venta_id){ const v = (VENTASDOC||[]).find(x=>x.id===d.venta_id); return "Venta: "+(v?v.codigo:("#"+d.venta_id)); }
+    if (d.embarque_id){ const e = (EMBDOC||[]).find(x=>x.id===d.embarque_id); return "Embarque: "+(e?e.codigo:("#"+d.embarque_id)); }
     return "General";
   };
   $("main").innerHTML =
@@ -9101,7 +9277,7 @@ function pintarDocsListado(){
    '<div><label>Tag</label><select id="dl_tag"><option value="">Todos</option>'+
      TAGS.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" '+(String(FDOC.tag)===String(x.id)?"selected":"")+'>'+esc(x.nombre)+'</option>').join("")+'</select></div>'+
    '<div><label>Colgado de</label><select id="dl_amb">'+
-     [["","Todo"],["general","Nada en particular"],["cliente","Un cliente"],["producto","Un producto"],["proveedor","Un proveedor"]]
+     [["","Todo"],["general","Nada en particular"],["cliente","Un cliente"],["producto","Un producto"],["proveedor","Un proveedor"],["venta","Una venta"],["embarque","Un embarque"]]
        .map(o=>'<option value="'+o[0]+'" '+(FDOC.ambito===o[0]?"selected":"")+'>'+o[1]+'</option>').join("")+'</select></div>'+
    '<div style="min-width:auto"><button class="btn" id="dl_btn">Buscar</button></div>'+
    (puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formDocumento(null)">+ Documento nuevo</button></div>':'')+
@@ -9134,7 +9310,7 @@ async function abrirDocumento(id){
   window.open(data.signedUrl, "_blank");
 }
 
-let VENTASDOC = [];
+let VENTASDOC = [], EMBDOC = [], _VOLVER_EMB = null;
 async function formDocumento(id){
   const d = id ? DOCS.find(x=>x.id===id) : null;
   const v = k => d ? (d[k]==null?"":d[k]) : "";
@@ -9149,6 +9325,16 @@ async function formDocumento(id){
       VENTASDOC = vq.data||[];
     }catch(e){ VENTASDOC = []; }
   }
+  /* 16/8: lo mismo con los embarques. Los papeles de una importación —el packing
+     list, el BL, el despacho, la factura del despachante— no tenían dónde
+     colgarse: se guardaban como documentos generales y a los seis meses nadie
+     sabía de qué embarque eran. */
+  if (!EMBDOC.length){
+    try{
+      const eq = await sb.from("embarques").select("id,codigo").eq("anulado",false).order("id",{ascending:false}).limit(300);
+      EMBDOC = eq.data||[];
+    }catch(e){ EMBDOC = []; }
+  }
   const mios = d ? (DOCTAGS[d.id]||[]) : [];
   $("dtit").textContent = d ? ("Documento "+d.codigo) : "Documento nuevo";
   $("dbody").innerHTML = '<div id="fdmsg"></div><div class="grid">'+
@@ -9161,6 +9347,7 @@ async function formDocumento(id){
        ofrecia, asi que no habia forma de colgar un papel de una venta — el plano
        de la obra, la conformidad firmada, la garantia. */
     '<div class="f"><label>Venta</label><select id="d_venta">'+selOpts((VENTASDOC||[]).map(x=>({id:x.id,nombre:x.codigo,activo:true})), v("venta_id"))+'</select></div>'+
+    '<div class="f"><label>Embarque</label><select id="d_emb">'+selOpts((EMBDOC||[]).map(x=>({id:x.id,nombre:x.codigo,activo:true})), v("embarque_id"))+'</select></div>'+
     '<div class="f"><label>¿Mostrar en el catálogo?</label><select id="d_cat"><option value="0" '+(d&&d.en_catalogo?"":"selected")+'>No</option><option value="1" '+(d&&d.en_catalogo?"selected":"")+'>Sí</option></select></div>'+
    '</div>'+
    '<div class="muted" style="margin:2px 0 10px">Cliente, producto y proveedor son opcionales: si dejás los tres vacíos el documento queda como general, disponible para todos.</div>'+
@@ -9204,6 +9391,7 @@ async function guardarDocumento(id){
     producto_id:  $("d_prod").value ? Number($("d_prod").value) : null,
     proveedor_id: $("d_prov").value ? Number($("d_prov").value) : null,
     venta_id:     ($("d_venta")||{}).value ? Number($("d_venta").value) : null,
+    embarque_id:  ($("d_emb")||{}).value   ? Number($("d_emb").value)   : null,
     en_catalogo:  $("d_cat").value === "1",
     enlace: $("d_enlace").value.trim() || null,
     activo: true
@@ -9229,6 +9417,10 @@ async function guardarDocumento(id){
     if (ins.error) return msg("Se guardó el documento pero no los tags: "+ins.error.message);
   }
   await cargarDocs();
+  /* si el papel se cargó desde la ficha del embarque, se vuelve ahí y no al
+     listado de documentos: el que está armando la carpeta de la importación
+     sigue en la importación. */
+  if (_VOLVER_EMB){ const e = _VOLVER_EMB; _VOLVER_EMB = null; await fichaEmbarque(e); return; }
   $("dlg").close();
   if (VISTA === "docs") VISTAS.docs();
 }
