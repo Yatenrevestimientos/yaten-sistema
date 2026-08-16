@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.16-131";
+const VERSION = "v2026.08.16-132";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2380,8 +2380,9 @@ const MAESTRAS = [
    ayuda:"Las personas a las que se les puede imputar un gasto: sueldos, cargas sociales, fondo de desempleo, combustible. NO es la lista de usuarios del sistema —acá van también los que no entran a la computadora—. Cargar la persona acá evita lo que pasó en Pirka, donde cada empleado nuevo agregaba dos conceptos y la lista llegó a 226. Cuando alguien se va, se pone en «Activo: No» y desaparece del desplegable sin borrarse del historial.<br><b>Cargale el área a cada uno.</b> Es lo que hace que el gasto se clasifique solo cuando elegís la persona, y lo que permite que el reporte filtrado por «Instalaciones» te muestre a toda la gente de instalaciones sin depender de que alguien se haya acordado de poner el área a mano.",
    cols:[{c:"area_id", t:"Área", sel:function(){ return M.agt||[]; }}]},
   {k:"veh", extra:true, tabla:"vehiculos", titulo:"Vehículos",
-   ayuda:"Las camionetas y autos del negocio. Sirve para que combustible, patente, seguro y service se puedan imputar a cada uno y saber cuánto cuesta mantener cada vehículo por separado.",
-   cols:[{c:"patente", t:"Patente", ph:"AB 123 CD"}]},
+   ayuda:"Las camionetas y autos del negocio. Sirve para que combustible, patente, seguro y service se puedan imputar a cada uno y saber cuánto cuesta mantener cada vehículo por separado.<br><b>Cargale el área a cada uno</b>, igual que a las personas: es lo que hace que el combustible de la camioneta de instalaciones se clasifique solo, sin depender de que alguien se acuerde de poner el área a mano.",
+   cols:[{c:"patente", t:"Patente", ph:"AB 123 CD"},
+         {c:"area_id", t:"Área", sel:function(){ return M.agt||[]; }}]},
   {k:"mpg", extra:true, tabla:"medios_pago", titulo:"Formas de pago",
    ayuda:"Con qué paga la gente: efectivo, transferencia, débito, cada tarjeta y cada plan de cuotas. El «Tipo» agrupa la familia (Crédito, Débito, Efectivo…) para filtrar de a montones. El «Costo %» es lo que te descuenta esa forma de pago: el arancel de la tarjeta más lo que te cuesta el plan de cuotas. Es el dato con el que el Estado de resultado calcula cuánta plata se te va en financiación — si lo dejás vacío, esa venta se cuenta como si no te costara nada.",
    cols:[{c:"tipo", t:"Tipo", ph:"Crédito, Débito, Efectivo, Transferencia…"},
@@ -2809,6 +2810,13 @@ async function correrDiagnostico(){
     /* b. Vínculos preparados y nunca llenados: la columna que apunta a otra
        tabla y está vacía en el 100% de las filas. Así estaba `oc_item_id`. */
     const fkv = cat.fk_vacias||[];
+    /* 16/8: los que están vacíos A PROPÓSITO salen aparte, con su motivo, y no
+       cuentan como hallazgo. Sin esto el control marca en rojo para siempre algo
+       que ya se decidió, y una lista que grita por algo que está bien se deja de
+       mirar — que es justo lo que esta capa existe para evitar. */
+    const prop = cat.a_proposito||[];
+    if (prop.length) filas.push({t:"vacíos a propósito", q:"vínculos entre módulos", r:"bien",
+      d: prop.map(function(x){ return x.tabla+"."+x.columna+" — "+x.motivo; }).join(" · ")});
     filas.push({t:"vínculos vacíos", q:"vínculos entre módulos", r: fkv.length?"ojo":"bien",
       d: fkv.length
         ? fkv.map(function(x){ return x.tabla+"."+x.columna+" ("+x.filas+" filas, ninguna con dato)"; }).join(" · ")+
@@ -3310,6 +3318,14 @@ function areaIdGasto(x){
   if (x.persona_id && M.per){
     const p = M.per.find(function(y){ return y.id === x.persona_id; });
     if (p && p.area_id) return p.area_id;
+  }
+  /* 16/8: el vehiculo tambien dice el area. `vehiculos.area_id` existia en la
+     base, la maestra no la ofrecia y aca no se heredaba: el combustible de la
+     camioneta de instalaciones quedaba sin clasificar. Misma clase de columna
+     muerta que tenia `personal` y que se arreglo el 9/8. */
+  if (x.vehiculo_id && M.veh){
+    const v = M.veh.find(function(y){ return y.id === x.vehiculo_id; });
+    if (v && v.area_id) return v.area_id;
   }
   return null;
 }
@@ -4290,7 +4306,7 @@ const REPORTES = [
    return {cols:[{t:"Venta"},{t:"Cliente"},{t:"Entrega",tipo:"f"},{t:"Horario"},{t:"Instalación",tipo:"f"},{t:"Instalador"},{t:"Estado"}],
      filas: rows.map(x=>[x.codigo, (CLIS.find(c=>c.id===x.cliente_id)||{}).nombre||"—",
        x.fecha_entrega||"", x.horario_entrega||"", x.fecha_instalacion||"",
-       nom(M.ins||[], x.instalador_id)||nomP(x.instalador_id)||"", x.estado])};
+       nom(M.ins||[], x.instalador_id)||"", x.estado])};
  }}
 ];
 
@@ -8568,7 +8584,13 @@ async function fichaVenta(id){
      '<div class="f"><label>Fecha de entrega</label><input type="date" id="ve_entrega" value="'+(ve.fecha_entrega||"")+'" '+(P("venta-agregar")?"":"disabled")+'></div>'+
      '<div class="f"><label>Horario de entrega</label><input id="ve_horario" value="'+esc(ve.horario_entrega)+'" placeholder="9 a 12" '+(P("venta-agregar")?"":"disabled")+'></div>'+
      '<div class="f"><label>Fecha de instalación</label><input type="date" id="ve_instalacion" value="'+(ve.fecha_instalacion||"")+'" '+(P("venta-agregar")?"":"disabled")+'></div>'+
-     '<div class="f"><label>Instalador</label><select id="ve_instalador" '+(P("venta-agregar")?"":"disabled")+'>'+selPer(EQUIPO.filter(x=>x.activo), ve.instalador_id)+'</select></div>'+
+     /* 16/8, v66: el instalador sale de la MAESTRA de instaladores, que es donde
+      vive la cuadrilla con su costo por m2. Antes salia del equipo de usuarios
+      del sistema: los instaladores reales no son usuarios, asi que no aparecian
+      en la lista y el campo quedaba vacio siempre — y el Estado de resultado
+      buscaba el costo cruzando un uuid contra un bigint, asi que el costo de la
+      mano de obra nunca se restaba. */
+     '<div class="f"><label>Instalador</label><select id="ve_instalador" '+(P("venta-agregar")?"":"disabled")+'>'+selOpts(M.ins||[], ve.instalador_id)+'</select></div>'+
      '<div class="f"><label>Colocador avisado</label><select id="ve_notificado" '+(P("venta-agregar")?"":"disabled")+'><option value="0" '+(ve.notificado_colocador?"":"selected")+'>No</option><option value="1" '+(ve.notificado_colocador?"selected":"")+'>Sí</option></select></div>'+
      '<div class="f"><label>Estado de la venta</label><select id="ve_estado" '+(P("venta-cerrar")?"":"disabled")+'>'+selTxt(["En curso","Pendiente a cerrar","Cerrada"], ve.estado)+'</select></div>'+
    '</div>'+
@@ -9112,11 +9134,21 @@ async function abrirDocumento(id){
   window.open(data.signedUrl, "_blank");
 }
 
+let VENTASDOC = [];
 async function formDocumento(id){
   const d = id ? DOCS.find(x=>x.id===id) : null;
   const v = k => d ? (d[k]==null?"":d[k]) : "";
   if (!CLIS.length) await cargarClientes();
   if (!PROVS.length && typeof cargarProveedores === "function") { try{ await cargarProveedores(); }catch(e){} }
+  /* Las ventas para poder colgarle un papel a una: se piden solo cuando se abre
+     el formulario, y si el rol no puede leerlas la lista queda vacia y el campo
+     no se ofrece. */
+  if (!VENTASDOC.length){
+    try{
+      const vq = await sb.from("ventas").select("id,codigo").eq("anulado",false).order("id",{ascending:false}).limit(500);
+      VENTASDOC = vq.data||[];
+    }catch(e){ VENTASDOC = []; }
+  }
   const mios = d ? (DOCTAGS[d.id]||[]) : [];
   $("dtit").textContent = d ? ("Documento "+d.codigo) : "Documento nuevo";
   $("dbody").innerHTML = '<div id="fdmsg"></div><div class="grid">'+
@@ -9125,6 +9157,10 @@ async function formDocumento(id){
     '<div class="f"><label>Cliente</label><select id="d_cli">'+selOpts(CLIS, v("cliente_id"))+'</select></div>'+
     '<div class="f"><label>Producto</label><select id="d_prod">'+selOpts(PRODS, v("producto_id"))+'</select></div>'+
     '<div class="f"><label>Proveedor</label><select id="d_prov">'+selOpts(PROVS, v("proveedor_id"))+'</select></div>'+
+    /* 16/8: `documentos.venta_id` existia en la base y el formulario no lo
+       ofrecia, asi que no habia forma de colgar un papel de una venta — el plano
+       de la obra, la conformidad firmada, la garantia. */
+    '<div class="f"><label>Venta</label><select id="d_venta">'+selOpts((VENTASDOC||[]).map(x=>({id:x.id,nombre:x.codigo,activo:true})), v("venta_id"))+'</select></div>'+
     '<div class="f"><label>¿Mostrar en el catálogo?</label><select id="d_cat"><option value="0" '+(d&&d.en_catalogo?"":"selected")+'>No</option><option value="1" '+(d&&d.en_catalogo?"selected":"")+'>Sí</option></select></div>'+
    '</div>'+
    '<div class="muted" style="margin:2px 0 10px">Cliente, producto y proveedor son opcionales: si dejás los tres vacíos el documento queda como general, disponible para todos.</div>'+
@@ -9167,6 +9203,7 @@ async function guardarDocumento(id){
     cliente_id:   $("d_cli").value  ? Number($("d_cli").value)  : null,
     producto_id:  $("d_prod").value ? Number($("d_prod").value) : null,
     proveedor_id: $("d_prov").value ? Number($("d_prov").value) : null,
+    venta_id:     ($("d_venta")||{}).value ? Number($("d_venta").value) : null,
     en_catalogo:  $("d_cat").value === "1",
     enlace: $("d_enlace").value.trim() || null,
     activo: true
