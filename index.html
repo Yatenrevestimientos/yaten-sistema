@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.15-130";
+const VERSION = "v2026.08.16-131";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1282,7 +1282,7 @@ function descartarProspecto(id){
   $("d2tit").textContent = "Descartar prospecto";
   $("d2body").innerHTML = '<div id="dsmsg"></div>'+
    '<div class="muted" style="margin-bottom:8px">No se borra nada. El prospecto baja a la planilla <b>en rojo</b>, con el motivo a la vista, y se puede reabrir cuando quieras.</div>'+
-   '<div class="f"><label>Motivo de descarte '+AST+'</label><select id="ds_motivo">'+selOpts(M.mot,null)+'</select></div>'+
+   '<div class="f"><label>Motivo de descarte '+AST+'</label><select id="ds_motivo">'+motivosDe("Prospecto",null)+'</select></div>'+
    '<div class="f"><label>Qué pasó</label><input id="ds_obs" placeholder="opcional: «llamé 6 veces, nunca contestó»"></div>'+
    '<div class="acciones"><button class="btn" onclick="descartarConfirmar('+id+')">Descartar</button>'+
    '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
@@ -1309,6 +1309,24 @@ async function descartarConfirmar(id){
 }
 
 /* ─────────── FORMULARIO ─────────── */
+/* ── Los motivos, cada uno en su lista (16/8) ──
+   La maestra `motivos` tiene una columna `aplica_a` bien cargada: cuatro motivos
+   de PROSPECTO (duplicado, dato falso, fuera de zona, nunca respondió) y cuatro
+   de PRESUPUESTO (eligió otro proveedor, precio fuera de presupuesto, postergó
+   la obra, error de carga). Los tres selects que la usan la ignoraban y ofrecían
+   los ocho mezclados: se podía descartar un prospecto con «precio fuera de
+   presupuesto» y rechazar un presupuesto con «nunca respondió». Y así el reporte
+   de por qué se pierde una venta sale mezclado y no sirve para decidir nada.
+   Lo ya elegido se sigue mostrando aunque sea del otro tipo, para no romper lo
+   cargado antes. */
+function motivosDe(que, val){
+  const l = (M.mot||[]).filter(function(x){
+    const a = String(x.aplica_a||"").trim();
+    return !a || /todos/i.test(a) || a.toLowerCase() === String(que).toLowerCase() ||
+           String(val) === String(x.id);
+  });
+  return selOpts(l, val);
+}
 function selOpts(arr,val){
   // muestra los activos, y ademas el que ya estuviera elegido aunque se haya dado de baja
   const vis = (arr||[]).filter(o=>o.activo || String(val)===String(o.id));
@@ -1534,7 +1552,7 @@ function formHTML(p, ro, lig){
       : '')+
     '<div class="f"><label>Objeción</label><select id="c_objecion_visita_id" '+d+'>'+selOpts(M.obj,p.objecion_visita_id)+'</select></div>'+
     '<div class="f"><label>2do producto</label><input id="c_producto_2do" value="'+esc(p.producto_2do)+'" '+d+'></div>'+
-    '<div class="f"><label>Motivo de descarte</label><select id="c_motivo_descarte_id" '+d+'>'+selOpts(M.mot,p.motivo_descarte_id)+'</select></div>'+
+    '<div class="f"><label>Motivo de descarte</label><select id="c_motivo_descarte_id" '+d+'>'+motivosDe("Prospecto",p.motivo_descarte_id)+'</select></div>'+
   '</div>'+
   '<div class="f"><label>Notas del ATO / observaciones del plano</label><textarea id="c_notas_ato" rows="2" '+d+'>'+esc(p.notas_ato)+'</textarea></div>'+
   '</div>';
@@ -4778,7 +4796,7 @@ function pintarFichaPre(){
        (c.m2_colocar!=null ? c.m2_colocar : ((PRE.pros&&PRE.pros.m2_colocar!=null)?PRE.pros.m2_colocar:""))+'" '+d+'></div>'+
      '<div class="f"><label>VL '+AST+'</label><select id="w_vl_id" '+d+'>'+selPer(VLS(),c.vl_id)+'</select></div>'+
      '<div class="f"><label>ATO <span class="muted" style="font-size:.85em">(obligatorio si viene de una visita)</span></label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
-     '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+selOpts(M.mot,c.motivo_rechazo_id)+'</select></div>'+
+     '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+motivosDe("Presupuesto",c.motivo_rechazo_id)+'</select></div>'+
    '</div>'+
    /* La preferencia de pago se anota acá, que es donde se habla de plata, pero
       se guarda en el CLIENTE: la promoción de mañana se le manda a la persona,
@@ -6586,6 +6604,7 @@ async function estadoCheque(id){
 }
 function pintarChequeras(){
   const puede = P("finanzas-modificar");
+  const faltanCta = (CHEQUERAS||[]).filter(x=>x.activo && !x.cuenta_id);
   $("main").innerHTML = '<div class="panel"><h2>Chequeras</h2>'+
    '<div class="desc">Las chequeras propias, con su banco, sucursal y número de cuenta. De acá salen los cheques propios que le entregamos a un proveedor.</div>'+
    '<div id="cqmsg"></div>'+
@@ -6598,16 +6617,46 @@ function pintarChequeras(){
    SUCS.map(x=>'<tr'+(x.activo?'':' style="opacity:.55"')+'><td>'+esc(nom(BANCOS,x.banco_id))+'</td><td>'+esc(x.nombre)+'</td><td>'+(x.activo?"Sí":"No")+'</td>'+(puede?'<td></td>':'')+'</tr>').join("")+
    '</tbody></table></div>'+
    '<div class="sec">Chequeras</div>'+
-   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>N° de cuenta</th><th>Banco</th><th>Sucursal</th><th>Activa</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
+   /* 16/8: «N° de cuenta» es el número impreso en el papel. «Cuenta» es de dónde
+      sale la plata cuando se emite un cheque de esta chequera: son dos cosas
+      distintas y hasta hoy solo estaba la primera. La columna `cuenta_id` existía
+      en la base, el formulario no la pedía y la emisión sí la leía — así que el
+      autocompletado no funcionó nunca y nada impedía emitir de la chequera del
+      Macro y descontar del Patagonia. */
+   '<div class="muted" style="margin-bottom:8px">La <b>cuenta</b> es de dónde sale la plata cuando emitís un cheque de esta chequera. No es lo mismo que el N° de cuenta: ese es el número impreso en el papel; esta es la cuenta del sistema.</div>'+
+   (faltanCta.length? '<div class="msg err" style="line-height:1.5"><b>'+faltanCta.length+' chequera'+(faltanCta.length===1?'':'s')+' sin cuenta asignada: '+esc(faltanCta.map(x=>x.nombre).join(", "))+'.</b><br>'+
+     'Mientras no la tengan, al emitir un cheque propio hay que elegir la cuenta a mano, y se puede descontar del banco equivocado sin que el sistema avise. Asignala en la fila que corresponde.</div>' : '')+
+   '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>N° de cuenta</th><th>Banco</th><th>Sucursal</th><th style="min-width:190px">Cuenta *</th><th>Activa</th>'+(puede?'<th></th>':'')+'</tr></thead><tbody>'+
    (puede?'<tr style="background:#f6fbf7"><td><input id="ncq_nombre" placeholder="Chequera Galicia 1"></td>'+
      '<td><input id="ncq_cuenta" placeholder="N° de cuenta"></td>'+
      '<td><select id="ncq_banco">'+selOpts(BANCOS,null)+'</select></td>'+
-     '<td><select id="ncq_suc">'+selOpts(SUCS,null)+'</select></td><td>—</td>'+
+     '<td><select id="ncq_suc">'+selOpts(SUCS,null)+'</select></td>'+
+     '<td><select id="ncq_cta">'+ctasChequera(null)+'</select></td><td>—</td>'+
      '<td><button class="btn btn-sm" onclick="chequeraAgregar()">Agregar</button></td></tr>':'')+
    (CHEQUERAS.length? CHEQUERAS.map(x=>'<tr'+(x.activo?'':' style="opacity:.55"')+'><td><b>'+esc(x.nombre)+'</b></td><td>'+esc(x.nro_cuenta)+'</td>'+
-     '<td>'+esc(nom(BANCOS,x.banco_id))+'</td><td>'+esc(nom(SUCS,x.sucursal_id))+'</td><td>'+(x.activo?"Sí":"No")+'</td>'+(puede?'<td></td>':'')+'</tr>').join("")
-     : '<tr><td colspan="6" class="muted">Todavía no hay chequeras cargadas.</td></tr>')+
+     '<td>'+esc(nom(BANCOS,x.banco_id))+'</td><td>'+esc(nom(SUCS,x.sucursal_id))+'</td>'+
+     '<td>'+(x.cuenta_id
+        ? '<b>'+esc(nom(CTAS,x.cuenta_id)||"—")+'</b>'
+        : (puede
+            ? '<select id="cqc_'+x.id+'" style="min-width:140px">'+ctasChequera(null)+'</select> '+
+              '<button class="btn btn-sm" onclick="chequeraAsignarCuenta('+x.id+')">Asignar</button>'
+            : '<span style="color:#7a2415">sin cuenta</span>'))+'</td>'+
+     '<td>'+(x.activo?"Sí":"No")+'</td>'+(puede?'<td></td>':'')+'</tr>').join("")
+     : '<tr><td colspan="7" class="muted">Todavía no hay chequeras cargadas.</td></tr>')+
    '</tbody></table></div></div>';
+}
+/* Las cuentas de las que puede salir un cheque propio: las mismas que ofrece el
+   pago, para que el autocompletado de la emisión siempre encuentre la opción. */
+function ctasChequera(val){ return selOpts(ctasDePago(), val); }
+/* Para las chequeras que ya estaban cargadas sin cuenta. Sin esto la regla nueva
+   no arreglaría lo ya cargado: quedarían para siempre eligiendo a mano. */
+async function chequeraAsignarCuenta(id){
+  const el = $("cqc_"+id), v = el ? el.value : "";
+  if (!v){ $("cqmsg").innerHTML='<div class="msg err">Elegí la cuenta de la que sale la plata de esa chequera.</div>'; return; }
+  const {error} = await sb.from("chequeras").update({cuenta_id:Number(v)}).eq("id",id);
+  if (error){ $("cqmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  await cargarCheques(); pintarChequeras();
+  $("cqmsg").innerHTML='<div class="msg ok">Cuenta asignada. Los cheques que emitas de esa chequera ya salen de ahí.</div>';
 }
 async function sucursalAgregar(){
   const b = $("nsu_banco").value, n = $("nsu_nombre").value.trim();
@@ -6619,9 +6668,15 @@ async function sucursalAgregar(){
 async function chequeraAgregar(){
   const n = $("ncq_nombre").value.trim();
   if (!n){ $("cqmsg").innerHTML='<div class="msg err">Poné un nombre para la chequera.</div>'; return; }
+  /* 16/8: la cuenta es obligatoria. Una chequera sin cuenta obliga a elegir a
+     mano de dónde sale la plata cada vez, y ahí es donde se descuenta del banco
+     equivocado. Decisión de Gustavo. */
+  const cta = ($("ncq_cta")||{}).value || "";
+  if (!cta){ $("cqmsg").innerHTML='<div class="msg err">Falta la <b>cuenta</b> de la que sale la plata de esta chequera. Sin eso, los cheques que emitas de acá se pueden descontar de la cuenta equivocada.</div>'; return; }
   const {error} = await sb.from("chequeras").insert({nombre:n, nro_cuenta:$("ncq_cuenta").value||null,
     banco_id:$("ncq_banco").value?Number($("ncq_banco").value):null,
-    sucursal_id:$("ncq_suc").value?Number($("ncq_suc").value):null, activo:true});
+    sucursal_id:$("ncq_suc").value?Number($("ncq_suc").value):null,
+    cuenta_id:Number(cta), activo:true});
   if (error){ $("cqmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   await cargarCheques(); pintarChequeras();
 }
@@ -8305,6 +8360,7 @@ function abrirChequePropio(){
         '<div class="f"><label>Fecha de emisión</label><input type="date" id="cp_fecha" value="'+hoy()+'"></div>'+
         '<div class="f"><label>Fecha de cobro *</label><input type="date" id="cp_venc"></div>'+
       '</div>'+
+      '<div id="cp_ctaav" style="margin:-4px 0 8px"></div>'+
       '<div class="f"><label>Comentarios</label><input id="cp_obs"></div>'+
       '<div class="acciones"><button class="btn" onclick="chequePropioAgregar()">Agregar a la orden</button>'+
       '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
@@ -8315,8 +8371,19 @@ function abrirChequePropio(){
    Gilda elige de cual sale. Sin esto, una chequera sin cuenta frenaba el pago. */
 function chequeraCuenta(){
   const q = (CHEQUERAS||[]).find(x=>String(x.id)===String(($("cp_chequera")||{}).value));
-  const el = $("cp_cuenta");
-  if (q && q.cuenta_id && el) el.value = String(q.cuenta_id);
+  const el = $("cp_cuenta"), av = $("cp_ctaav");
+  if (!el) return;
+  if (q && q.cuenta_id){
+    /* 16/8: si la chequera tiene su cuenta, la cuenta NO se elige: sale de ahí.
+       Un cheque del Macro se descuenta del Macro. Se deja a la vista, bloqueada,
+       para que se pueda leer antes de firmar. */
+    el.value = String(q.cuenta_id);
+    el.disabled = true;
+    if (av) av.innerHTML = '<span class="muted">Sale de la cuenta de la chequera. Si está mal, corregila en <b>Cheques → Chequeras</b>.</span>';
+  } else {
+    el.disabled = false;
+    if (av) av.innerHTML = '<span style="color:#7a2415">Esta chequera <b>no tiene cuenta asignada</b>: elegí a mano de dónde sale la plata, y asignásela en Cheques → Chequeras para que no vuelva a pasar.</span>';
+  }
 }
 function chequePropioAgregar(){
   const err = t => { const e=$("cpmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
