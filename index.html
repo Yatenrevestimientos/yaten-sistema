@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.23-135";
+const VERSION = "v2026.08.23-136";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2939,6 +2939,33 @@ async function correrDiagnostico(){
         ? asi.map(function(x){ return x.crear+"() escribe en "+(x.sin_revertir||[]).join(", ")+" y "+x.anular+"() no la nombra"; }).join(" · ")+
           " — revisar si esa tabla necesita revertirse o si alcanza con que el documento padre quede anulado."
         : "cada función que crea tiene su anular tocando los mismos lados"});
+
+    /* c bis. Candados escritos y nunca enchufados (23/8) ──
+       Apareció trabajando: existía en la base `tg_venta_sin_remitos_vivos()`,
+       una función de disparador escrita para frenar la anulación de una venta
+       con remitos vivos, con su mensaje y todo — y NUNCA se enganchó a la tabla.
+       Quedó escrita y desconectada. Por eso la venta se podía anular con la
+       mercadería afuera, y por eso el comentario del programa afirmaba un
+       candado que no existía: quien lo escribió creyó haberlo instalado.
+       Es el mismo caso que una columna preparada y nunca llenada, pero peor:
+       una columna vacía se ve, un candado desconectado no se ve nunca — hasta
+       que alguien anula algo que no debía.
+       Un disparador APAGADO cuenta igual: está enchufado y no hace nada. */
+    try{
+      const dt = await sb.rpc("diagnostico_triggers");
+      if (dt.error) throw new Error(dt.error.message);
+      const tg = dt.data || {};
+      const huerf = tg.huerfanas || [], apag = tg.apagados || [];
+      filas.push({t:"candados sin enchufar", q:"vínculos entre módulos", r: (huerf.length||apag.length)?"mal":"bien",
+        d: (huerf.length||apag.length)
+          ? [huerf.length ? huerf.length+" función(es) de disparador escritas y sin enganchar a ninguna tabla: "+huerf.join(", ") : "",
+             apag.length  ? apag.length+" disparador(es) instalados pero APAGADOS: "+apag.join(", ") : ""].filter(Boolean).join(" · ")+
+            " — un candado escrito y desconectado no protege nada, y no se ve hasta que alguien hace lo que tenía que estar prohibido."
+          : (tg.instalados||0)+" disparadores instalados y andando, ninguna función de disparador quedó sin enchufar"});
+    }catch(e){
+      filas.push({t:"candados sin enchufar", q:"vínculos entre módulos", r:"nose",
+        d:"no se pudo probar: "+e.message+" — o falta la migración v70, o tu rol no puede"});
+    }
 
     /* d. Nombres que el programa invoca y en la base no existen. Es el error del
        script de reset, que falla callado. */
