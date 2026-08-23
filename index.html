@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.16-133";
+const VERSION = "v2026.08.23-134";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2796,6 +2796,68 @@ async function correrDiagnostico(){
           : "toda venta con instalación tiene su cuadrilla"});
     }
   }catch(e){}
+
+  /* ── 1 sexies. El candado de la v64: el prospecto, el presupuesto y la venta
+     siguen atados (23/8) ──
+     El 15/8 se arregló que la venta no le avisaba al prospecto, y el arreglo no
+     es código de la aplicación sino DOS DISPARADORES en la base. Un disparador
+     no se ve: nadie abre la pantalla del disparador. Si alguien lo borra —o si
+     una migración futura lo pisa— el sistema vuelve a mentir exactamente igual
+     que antes y no hay ningún cartel.
+     Estos dos controles no preguntan si el disparador está instalado: prueban
+     que HIZO SU TRABAJO, en las dos direcciones. Es el control que vale, porque
+     un disparador presente pero roto pasaría el otro. */
+  try{
+    const vv = await sb.from("ventas").select("id,codigo,presupuesto_id").eq("anulado",false)
+      .not("presupuesto_id","is",null).limit(2000);
+    if (vv.error) throw new Error(vv.error.message);
+    const preIds = Array.from(new Set((vv.data||[]).map(function(x){ return x.presupuesto_id; })));
+    const pr = preIds.length ? await sb.from("presupuestos").select("id,prospecto_id").in("id",preIds) : {data:[]};
+    if (pr.error) throw new Error(pr.error.message);
+    const proDe = {}; (pr.data||[]).forEach(function(x){ if (x.prospecto_id) proDe[x.id] = x.prospecto_id; });
+    const prosIds = Array.from(new Set(Object.keys(proDe).map(function(k){ return proDe[k]; })));
+    /* `resultado_antes_venta` es de la v64: si la columna no está, la consulta
+       falla y el control lo dice, en vez de dar verde por no haber mirado. */
+    const ps = prosIds.length
+      ? await sb.from("prospectos").select("id,nombre,resultado,resultado_antes_venta").in("id",prosIds)
+      : {data:[]};
+    if (ps.error) throw new Error(ps.error.message);
+    const pMap = {}; (ps.data||[]).forEach(function(x){ pMap[x.id] = x; });
+
+    /* a. Hacia adelante: toda venta viva tiene que haber dejado su prospecto en
+       Vendido o Señado. Si no, el disparador de la venta no corrió. */
+    const sinMarcar = [];
+    (vv.data||[]).forEach(function(v){
+      const pid = proDe[v.presupuesto_id]; if (!pid) return;
+      const p = pMap[pid]; if (!p) return;
+      if (VENDIDO_RES.indexOf(p.resultado) < 0) sinMarcar.push(v.codigo+" → "+(p.nombre||("#"+pid)));
+    });
+    filas.push({t:"la venta le avisa al prospecto", q:"el candado de la v64", r: sinMarcar.length?"mal":"bien",
+      d: sinMarcar.length
+        ? sinMarcar.length+" venta(s) vivas cuyo prospecto NO quedó marcado: "+sinMarcar.slice(0,8).join(" · ")+
+          (sinMarcar.length>8?" y "+(sinMarcar.length-8)+" más":"")+
+          ". El disparador de la v64 no está haciendo su trabajo: el prospecto vuelve a aparecer en la cola con una venta hecha."
+        : (vv.data||[]).length+" venta(s) vivas con presupuesto, todas con su prospecto marcado"});
+
+    /* b. Hacia atrás: un prospecto con `resultado_antes_venta` cargado es uno
+       que el sistema marcó. Si ya no tiene venta viva, el desmarcado tenía que
+       haberle devuelto el resultado anterior y haber borrado esa foto. Que la
+       foto siga ahí quiere decir que la vuelta atrás quedó a mitad de camino. */
+    const conFoto = await sb.from("prospectos").select("id,nombre,resultado,resultado_antes_venta")
+      .not("resultado_antes_venta","is",null).limit(1000);
+    if (conFoto.error) throw new Error(conFoto.error.message);
+    const vivos = {}; prosIds.forEach(function(id){ vivos[id] = true; });
+    const colgados = (conFoto.data||[]).filter(function(x){ return !vivos[x.id]; });
+    filas.push({t:"al anular la venta el prospecto vuelve", q:"el candado de la v64", r: colgados.length?"mal":"bien",
+      d: colgados.length
+        ? colgados.length+" prospecto(s) quedaron con la foto del resultado anterior y ya no tienen venta viva: "+
+          colgados.slice(0,8).map(function(x){ return (x.nombre||("#"+x.id))+" (hoy «"+(x.resultado||"")+"», antes «"+x.resultado_antes_venta+"»)"; }).join(" · ")+
+          ". La vuelta atrás quedó a mitad de camino: hay que devolverles el resultado anterior a mano."
+        : "ningún prospecto quedó a mitad de camino entre vendido y desvendido"});
+  }catch(e){
+    filas.push({t:"el candado de la v64", q:"el candado de la v64", r:"nose",
+      d:"no se pudo probar: "+e.message+" — o falta la migración v64 (la columna «resultado_antes_venta»), o tu rol no puede leer ventas, presupuestos o prospectos"});
+  }
 
   /* ── 2. ¿Se leen las vistas que alimentan las pantallas? ── */
   for (const v of DIAG_VISTAS){
@@ -5756,6 +5818,11 @@ async function formRecepcion(ordenId){
   if (o.error) return alert(o.error.message);
   const pend = (i.data||[]).filter(x=>(Number(x.cantidad||0)-Number(x.recibido||0)) > 0.0001);
   RCP = {orden:o.data, items:pend};
+  /* 23/8 — cuánto se recibió ya, para poder deshacerlo. Sin esto, una recepción
+     mal cargada solo se corregía ajustando el stock a mano y la orden quedaba
+     «Recibida» para siempre. */
+  const yaRec = (i.data||[]).reduce(function(a,x){ return a + Number(x.recibido||0); },0);
+  const puedeDeshacer = yaRec > 0.0001 && P("stock-modificar") && !o.data.anulado;
   $("dtit").textContent = "Recepción · " + o.data.codigo;
   $("dbody").innerHTML = '<div id="rcpmsg"></div>'+
    '<div class="muted" style="margin-bottom:10px">Marcá cuánto llegó de cada renglón. <b>Lo que recibís entra al stock</b> con motivo «Recepción de importación». Podés recibir en partes.</div>'+
@@ -5768,8 +5835,26 @@ async function formRecepcion(ordenId){
      '<div class="acciones"><button class="btn" onclick="guardarRecepcion('+ordenId+')">Registrar recepción</button>'+
      '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>'
     : '<div class="muted">Esta orden ya está recibida por completo.</div>'+
-      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>');
+      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>')+
+   (puedeDeshacer
+     ? '<div class="sec">¿Cargaste mal la recepción?</div>'+
+       '<div class="muted" style="margin-bottom:8px">Deshacer devuelve <b>toda</b> la mercadería de esta orden: el stock baja lo mismo que había subido, cada renglón vuelve a «recibido 0» y la orden vuelve a <b>Abierta</b>, lista para cargarla de nuevo. '+
+       'No se borra nada: queda el movimiento de entrada y el de vuelta, los dos a la vista en el historial del producto.<br>'+
+       '<b>Si algo de esta mercadería ya salió del depósito, el sistema no te va a dejar</b> y te va a decir de qué producto se trata: primero hay que resolver esa salida.</div>'+
+       '<div class="acciones"><button class="btn2" onclick="deshacerRecepcion('+ordenId+')">Deshacer la recepción de esta orden</button></div>'
+     : '');
   try{ $("dlg").showModal(); }catch(e){}
+}
+/* v68, 23/8 — la vuelta atrás de la recepción. */
+async function deshacerRecepcion(ordenId){
+  const m = prompt("¿Por qué deshacés la recepción de esta orden?\n\nVuelve TODA la mercadería de la orden: el stock baja, los renglones vuelven a cero y la orden queda Abierta.");
+  if (m === null) return;
+  if (!m.trim()) return alert("Hay que decir por qué se deshace la recepción.");
+  const {data,error} = await sb.rpc("deshacer_recepcion_oc",{p_orden:ordenId, p_motivo:m.trim()});
+  if (error){ $("rcpmsg").innerHTML='<div class="msg err" style="line-height:1.5">'+esc(error.message)+'</div>'; return; }
+  alert("Listo: volvieron "+data+" renglón"+(data===1?"":"es")+". La orden quedó Abierta y el stock volvió a como estaba.");
+  $("dlg").close();
+  if (VISTA === "compras") VISTAS.compras();
 }
 async function guardarRecepcion(ordenId){
   const items = [];
@@ -6569,16 +6654,27 @@ VISTAS.cheques = async function(){
    operación cubre: un cheque rechazado por el banco. */
 function accionCheque(x){
   if (x.anulado) return '<span class="pill no">Anulado</span>';
+  /* 23/8 — anular no es lo mismo que rechazar. Rechazado lo rechaza el banco y
+     es un hecho del mundo; anulado lo anula quien lo cargó mal, y es un error de
+     carga. Hasta hoy un cheque mal cargado solo se podía pasar a «Rechazado»:
+     quedaba en el historial como si el banco lo hubiera rechazado, ensuciando la
+     cartera y el comportamiento de pago del cliente.
+     Solo se ofrece para el cheque cargado a mano que sigue EN CARTERA. Si entró
+     con un recibo o salió en una orden de pago, lo que se anula es la operación
+     entera —no el cheque suelto—, que es la regla de siempre: una operación
+     mueve todos sus lados o ninguno. */
+  const anulable = x.estado === "Disponible" && !x.cobranza_id && !x.pago_id && P("finanzas-anular");
+  const btnAnular = anulable ? ' <button class="btn2 btn-sm" onclick="anularCheque('+x.id+')">Anular</button>' : '';
   if (x.tipo === "Terceros" && x.estado === "Disponible" && P("finanzas-modificar"))
     return '<button class="btn btn-sm" onclick="formDepositar('+x.id+')">Depositar</button>'+
-           (esDueno()? ' <button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Rechazado</button>' : '');
+           (esDueno()? ' <button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Rechazado</button>' : '')+btnAnular;
   /* Un depósito mal cargado tiene que poder deshacerse: si no, el cheque queda
      depositado para siempre y el recibo que lo trajo tampoco se puede anular. */
   if (x.tipo === "Terceros" && x.estado === "Depositado" && P("finanzas-anular"))
     return '<button class="btn2 btn-sm" onclick="anularDeposito('+x.id+')">Deshacer depósito</button>';
   if (esDueno() && x.estado !== "Cobrado")
-    return '<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>';
-  return '';
+    return '<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>'+btnAnular;
+  return btnAnular;
 }
 /* Depositar el cheque: sale de la cuenta «Cheques de terceros» y entra al banco.
    Es la operación que faltaba —Gustavo, 14/8: «si revisás el sistema de Pirka y
@@ -6770,6 +6866,20 @@ async function guardarCheque(){
   VISTAS.cheques();
 }
 
+/* Anular un cheque mal cargado (v68, 23/8).
+   La plata se revierte del lado de la base: el movimiento que le sumó el cheque
+   a la cuenta «Cheques de terceros» queda anulado en la misma operación, así el
+   saldo vuelve exacto al que había antes del alta. Probado ida y vuelta. */
+async function anularCheque(id){
+  const m = prompt("¿Por qué anulás este cheque?\n\nOjo: anular no es rechazar. Rechazado lo rechaza el banco; anulado se usa cuando el cheque se cargó mal. Sale de la cartera y deja de contar en el saldo de la cuenta, y queda en el historial tachado, con tu nombre y este motivo.");
+  if (m === null) return;
+  if (!m.trim()) return alert("Hay que decir por qué se anula el cheque.");
+  const {error} = await sb.rpc("anular_cheque",{p_id:id, p_motivo:m.trim()});
+  if (error) return alert(error.message);
+  await cargarCheques();
+  try{ if (typeof cargarFin === "function") await cargarFin(); }catch(e){}
+  VISTAS.cheques();
+}
 async function estadoCheque(id){
   const e = prompt("Nuevo estado del cheque: Disponible, Depositado, Entregado, Cobrado o Rechazado");
   if (e === null) return;
@@ -7454,7 +7564,7 @@ async function comOrdenes(){
        '<td>'+(x.fecha_recepcion?fmtF(x.fecha_recepcion):'<span class="muted">sin fecha</span>')+'</td>'+
        '<td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(x.estado)+'</td>'+
        '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':
-         ((P("stock-modificar")&&x.estado!=="Recibida"?'<button class="btn2 btn-sm" onclick="formRecepcion('+x.id+')">Recibir</button> ':'')+
+         ((P("stock-modificar")?'<button class="btn2 btn-sm" onclick="formRecepcion('+x.id+')">'+(x.estado!=="Recibida"?"Recibir":"Recepción")+'</button> ':'')+
           (P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularOC('+x.id+')">Anular</button>':'')))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">No hay órdenes de compra con esos filtros.</div>');
   engancharFiltros("oc");
@@ -7617,8 +7727,8 @@ function pintarFac(){
    '<div class="grid">'+
      '<div class="f"><label>Proveedor *</label><select id="fa_prov">'+selProv(FAC.proveedor_id)+'</select></div>'+
      '<div class="f"><label>Tipo</label><select id="fa_tipo">'+selTxt(["Factura A","Factura B","Factura C","Factura M","Ticket","Despacho de importación","Otro"],FAC.tipo)+'</select></div>'+
-     '<div class="f"><label>Punto de venta</label><input id="fa_pv" value="'+esc(FAC.punto_venta)+'" placeholder="0001"></div>'+
-     '<div class="f"><label>Número</label><input id="fa_nro" value="'+esc(FAC.nro)+'" placeholder="00001234"></div>'+
+     '<div class="f"><label>Punto de venta '+AST+'</label><input id="fa_pv" value="'+esc(FAC.punto_venta)+'" placeholder="0001"></div>'+
+     '<div class="f"><label>Número '+AST+'</label><input id="fa_nro" value="'+esc(FAC.nro)+'" placeholder="00001234"></div>'+
      '<div class="f"><label>Fecha</label><input type="date" id="fa_fecha" value="'+FAC.fecha+'"></div>'+
      '<div class="f"><label>Moneda</label><select id="fa_moneda"><option value="ARS" '+(FAC.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(FAC.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
      '<div class="f"><label>Neto gravado *</label><input type="number" step="0.01" id="fa_neto" value="'+(FAC.neto||"")+'" oninput="facSincro()"></div>'+
@@ -7763,8 +7873,23 @@ function pintarFacTot(){
 async function guardarFactura(){
   facSincro();
   const err = t => { $("facmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
-  if (!FAC.proveedor_id) return err("Elegí el proveedor.");
-  if (!(Number(FAC.neto)>0)) return err("El neto gravado tiene que ser mayor a cero.");
+  /* 23/8 — el número del comprobante pasa a ser obligatorio. No es una manía
+     administrativa: el candado de la v61 que impide cargar dos veces la misma
+     factura compara proveedor + tipo + punto de venta + número, y en Postgres
+     dos nulos NO chocan. O sea que sin número el candado no existe y la misma
+     factura se puede cargar dos veces, inflando la deuda con el proveedor.
+     Hoy hay 1 factura sin número y 11 sin punto de venta, todas de prueba:
+     nadie las cargó mal, es que nada lo impedía.
+     El punto de venta se exige solo en las facturas que lo tienen: un ticket o
+     un despacho de importación traen número y no traen punto de venta. */
+  const conPV = /^Factura /.test(String(FAC.tipo||""));
+  const f = faltan([
+    {ok:!!FAC.proveedor_id,            q:"Proveedor"},
+    {ok:Number(FAC.neto)>0,            q:"Neto gravado (mayor a cero)"},
+    {ok:!!String(FAC.nro||"").trim(),  q:"Número del comprobante (sin él se puede cargar dos veces la misma factura)"},
+    {ok:!conPV || !!String(FAC.punto_venta||"").trim(), q:"Punto de venta (es una "+String(FAC.tipo||"")+": lo trae impreso)"}
+  ]);
+  if (f.length){ avisoFaltan("facmsg", f, "la factura"); return; }
   const filas = FAC.imp.filter(x=>Number(x.importe)>0);
   const r = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
     p_punto_venta:FAC.punto_venta||null, p_nro:FAC.nro||null, p_fecha:FAC.fecha||hoy(), p_moneda:FAC.moneda,
@@ -8136,8 +8261,8 @@ function pintarNot(){
    '<div class="grid">'+
      '<div class="f"><label>Proveedor *</label><select id="nt_prov">'+selProv(NOT.proveedor_id)+'</select></div>'+
      '<div class="f"><label>Tipo *</label><select id="nt_tipo"><option value="Credito" '+(NOT.tipo==="Credito"?"selected":"")+'>Nota de Crédito — le debemos menos</option><option value="Debito" '+(NOT.tipo==="Debito"?"selected":"")+'>Nota de Débito — le debemos más</option></select></div>'+
-     '<div class="f"><label>Punto de venta</label><input id="nt_pv" value="'+esc(NOT.punto_venta)+'" placeholder="0001"></div>'+
-     '<div class="f"><label>Número</label><input id="nt_nro" value="'+esc(NOT.nro)+'" placeholder="00001234"></div>'+
+     '<div class="f"><label>Punto de venta '+AST+'</label><input id="nt_pv" value="'+esc(NOT.punto_venta)+'" placeholder="0001"></div>'+
+     '<div class="f"><label>Número '+AST+'</label><input id="nt_nro" value="'+esc(NOT.nro)+'" placeholder="00001234"></div>'+
      '<div class="f"><label>Fecha</label><input type="date" id="nt_fecha" value="'+NOT.fecha+'"></div>'+
      '<div class="f"><label>Moneda</label><select id="nt_moneda"><option value="ARS" '+(NOT.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(NOT.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
      '<div class="f"><label>Neto *</label><input type="number" step="0.01" id="nt_neto" value="'+(NOT.neto||"")+'" oninput="notSincro()"></div>'+
@@ -8240,8 +8365,15 @@ function pintarNotTot(){
 async function guardarNota(){
   notSincro();
   const err = t => { $("notmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
-  if (!NOT.proveedor_id) return err("Elegí el proveedor.");
-  const neto = Number(NOT.neto||0); if (!(neto>0)) return err("El neto tiene que ser mayor a cero.");
+  const neto = Number(NOT.neto||0);
+  /* Misma razón que la factura: el candado de duplicados necesita el número. */
+  const fn = faltan([
+    {ok:!!NOT.proveedor_id,                            q:"Proveedor"},
+    {ok:neto>0,                                        q:"Neto (mayor a cero)"},
+    {ok:!!String(NOT.nro||"").trim(),                  q:"Número de la nota (sin él se puede cargar dos veces la misma)"},
+    {ok:!!String(NOT.punto_venta||"").trim(),          q:"Punto de venta"}
+  ]);
+  if (fn.length){ avisoFaltan("notmsg", fn, "la nota"); return; }
   /* la alícuota y la base quedan escritas en el detalle: la tabla de impuestos
      de la nota no tiene columnas propias para eso */
   const filas = NOT.imp.filter(x=>Number(x.importe)>0).map(function(x){
@@ -11345,14 +11477,21 @@ function formRetiro(){
     '<div class="f"><label>Fecha</label><input type="date" id="r_fecha" value="'+hoy()+'"></div>'+
     '<div class="f"><label>Cuenta</label><select id="r_cuenta">'+optCtas(cs)+'</select></div>'+
     '<div class="f"><label>Importe <span id="r_mon" class="muted"></span></label><input type="number" step="0.01" id="r_importe"></div>'+
-    '<div class="f"><label>Quién retira</label><input id="r_quien"></div>'+
+    '<div class="f"><label>Quién retira '+AST+'</label><input id="r_quien" placeholder="nombre y apellido"></div>'+
    '</div><div class="f"><label>Observaciones</label><input id="r_obs"></div>'+
    '<div class="acciones"><button class="btn" id="r_guardar">Registrar retiro</button></div>';
   const pintarMonRetiro = function(){ $("r_mon").textContent = "en " + monedaCta($("r_cuenta").value); };
   $("r_cuenta").onchange = pintarMonRetiro; pintarMonRetiro();
   $("r_guardar").onclick = async function(){
     const imp = Number($("r_importe").value||0);
-    if (!(imp>0)){ $("frmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
+    /* 23/8 — un retiro es plata que sale de la caja y no vuelve. Que se pueda
+       registrar sin decir quién la retiró convierte al retiro en el único
+       movimiento del sistema sin responsable, y es el que más lo necesita. */
+    const fr = faltan([
+      {ok:imp>0,                                  q:"Importe (mayor a cero)"},
+      {ok:!!$("r_quien").value.trim(),            q:"Quién retira (es plata que sale de la caja: tiene que quedar el nombre)"}
+    ]);
+    if (fr.length){ avisoFaltan("frmsg", fr, "el retiro"); return; }
     const {error} = await sb.rpc("registrar_retiro",{p_fecha:$("r_fecha").value||hoy(), p_cuenta:Number($("r_cuenta").value), p_importe:imp, p_quien:$("r_quien").value||null, p_obs:$("r_obs").value||null});
     if (error){ $("frmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
