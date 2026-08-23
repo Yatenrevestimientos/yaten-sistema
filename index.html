@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.23-136";
+const VERSION = "v2026.08.23-137";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6713,7 +6713,10 @@ async function formDepositar(id){
   const c = q.data;
   if (!CTAS.length) await cargarFin();
   /* No se deposita en la misma cuenta de cheques de donde sale, ni en una de
-     otra moneda: la base lo rechaza, así que acá directamente no se ofrecen. */
+     otra moneda: acá directamente no se ofrecen.
+     23/8: este comentario decía «la base lo rechaza» y solo era cierto para la
+     moneda — lo de la misma cuenta NO estaba controlado del lado de la base.
+     Salió del barrido de comentarios que afirman candados. Tapado en la v72. */
   const tipoChq = (TCTAS||[]).filter(t=>/cheques de terceros/i.test(t.nombre||"")).map(t=>t.id);
   const destinos = (CTAS||[]).filter(y=>y.activo && String(y.id)!==String(c.cuenta_id) &&
                     y.moneda === (c.moneda||"ARS") && tipoChq.indexOf(y.tipo_cuenta_id)<0);
@@ -8777,6 +8780,7 @@ async function guardarPago(){
     }
   });
   if (mal) return err(mal);
+  if (!saldoAlcanzaMedios(PAG.medios, "pagmsg")) return;
   const total = PAG.medios.reduce(function(a,x){ return a+Number(x.importe||0); },0);
   const imputaciones = [];
   PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0; if (v>0) imputaciones.push({factura_id:x.id, importe:v}); });
@@ -11266,6 +11270,7 @@ function formGasto(){
         mal = "Todas las formas de pago del gasto tienen que ser en la misma moneda: «"+c.nombre+"» es en "+c.moneda+" y «"+m0.nombre+"» en "+m0.moneda+".";
     });
     if (mal){ $("fgmsg").innerHTML='<div class="msg err">'+esc(mal)+'</div>'; return; }
+    if (!saldoAlcanzaMedios(medios, "fgmsg")) return;
     const r = await sb.rpc("registrar_gasto_multi",{p_fecha:$("g_fecha").value||hoy(),
       p_medios: medios.map(x=>({cuenta_id:Number(x.cuenta_id), importe:Number(x.importe), detalle:x.detalle||null})),
       p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null,
@@ -11481,6 +11486,7 @@ function formTransf(){
        el campo editable permitía que salgan 100 y entren 1000. La base también
        lo bloquea ahora (v52). */
     const idst = distinta ? Number($("x_id").value||0) : io;
+    if (!saldoAlcanza($("x_origen").value, io, "ftmsg")) return;
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
       p_imp_origen:io, p_imp_destino:idst, p_obs:$("x_obs").value||null, p_cotizacion:tc||null});
     if (error){ $("ftmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
@@ -11539,6 +11545,7 @@ function formRetiro(){
       {ok:!!$("r_quien").value.trim(),            q:"Quién retira (es plata que sale de la caja: tiene que quedar el nombre)"}
     ]);
     if (fr.length){ avisoFaltan("frmsg", fr, "el retiro"); return; }
+    if (!saldoAlcanza($("r_cuenta").value, imp, "frmsg")) return;
     const {error} = await sb.rpc("registrar_retiro",{p_fecha:$("r_fecha").value||hoy(), p_cuenta:Number($("r_cuenta").value), p_importe:imp, p_quien:$("r_quien").value||null, p_obs:$("r_obs").value||null});
     if (error){ $("frmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarFin(); $("dlg").close(); VISTAS.finanzas();
@@ -11800,6 +11807,7 @@ async function aplicarAjuste(){
 async function ajustarCuenta(id){
   const imp = Number($("aj_importe").value||0);
   if (!(imp>0)){ $("ajmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+  if ($("aj_tipo").value === "Egreso" && !saldoAlcanza(id, imp, "ajmsg")) return;
   const {error} = await sb.rpc("ajustar_saldo_cuenta",{p_cuenta:id, p_fecha:$("aj_fecha").value||hoy(), p_tipo:$("aj_tipo").value, p_importe:imp, p_detalle:$("aj_detalle").value||null});
   if (error){ $("ajmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   await cargarFin();
@@ -11807,6 +11815,57 @@ async function ajustarCuenta(id){
   $("ajmsg").innerHTML='<div class="msg ok">Listo. El saldo de la cuenta quedó actualizado.</div>';
 }
 function monedaCta(id){ const c = CTAS.find(x=>String(x.id)===String(id)); return c?c.moneda:"ARS"; }
+
+/* ── Ninguna cuenta queda en negativo (23/8, Gustavo) ──
+   «Si no hay plata para hacer un pago, gasto o transferencia tiene que decir
+   sin saldo. La única cuenta que puede tener saldo negativo son las bancarias,
+   porque pueden tener descubierto, pero que avise que está usando descubierto.»
+
+   El candado duro está en la base, en el disparador `tg_saldo_cuenta` (v71):
+   ahí no entra nadie, ni por la puerta de atrás. Esto de acá es el aviso ANTES,
+   que hace dos cosas que la base no puede hacer: evita llenar un formulario
+   entero para que lo rechacen al final, y sobre todo PREGUNTA cuando se va a
+   usar descubierto, en vez de dejar que pase en silencio.
+
+   El límite del descubierto es el campo «Tope» de la cuenta. En 0 quiere decir
+   que no hay descubierto acordado: se avisa igual, pero no se frena.
+   Devuelve true si se puede seguir. */
+function saldoAlcanza(cuentaId, importe, idMsg){
+  const c = (CTAS||[]).find(x=>String(x.id)===String(cuentaId));
+  if (!c) return true;
+  const imp = Number(importe||0);
+  if (!(imp > 0)) return true;
+  const saldo = Number(c.saldo||0), queda = saldo - imp, mon = c.moneda;
+  if (queda >= -0.009) return true;
+  const decir = function(txt){
+    if (idMsg && $(idMsg)) $(idMsg).innerHTML = '<div class="msg err" style="line-height:1.5">'+txt+'</div>';
+    else alert(txt.replace(/<[^>]+>/g,""));
+    return false;
+  };
+  const t = (TCTAS||[]).find(x=>String(x.id)===String(c.tipo_cuenta_id));
+  if (!(t && t.permite_negativo))
+    return decir('<b>Sin saldo en «'+esc(c.nombre)+'».</b><br>Tiene '+fmtM(saldo,mon)+' y esta operación saca '+fmtM(imp,mon)+
+      '. Una cuenta de tipo '+esc(t?t.nombre:"")+' no puede quedar en negativo: usá otra cuenta, o ingresá la plata primero.');
+  const tope = Number(c.tope||0);
+  if (tope > 0 && queda < -tope - 0.009)
+    return decir('<b>Se pasa del descubierto de «'+esc(c.nombre)+'».</b><br>Quedaría en '+fmtM(queda,mon)+
+      ' y el descubierto acordado es '+fmtM(tope,mon)+'. Contando el descubierto hay '+fmtM(saldo+tope,mon)+' disponibles.');
+  return confirm("Ojo: vas a usar descubierto.\n\n«"+c.nombre+"» tiene "+fmtM(saldo,mon)+
+    " y esta operación saca "+fmtM(imp,mon)+": queda en "+fmtM(queda,mon)+"."+
+    (tope>0 ? "\nDescubierto acordado: "+fmtM(tope,mon)+"."
+            : "\nEsta cuenta no tiene descubierto acordado cargado (Tope en 0), así que el sistema no sabe hasta dónde puede ir.")+
+    "\n\n¿Seguimos?");
+}
+/* Lo mismo para las operaciones con varias formas de pago: se suma por cuenta,
+   porque dos renglones de la misma caja se comen el mismo saldo. */
+function saldoAlcanzaMedios(medios, idMsg){
+  const porCta = {};
+  (medios||[]).forEach(function(x){
+    if (!x.cuenta_id) return;
+    porCta[x.cuenta_id] = (porCta[x.cuenta_id]||0) + Number(x.importe||0);
+  });
+  return Object.keys(porCta).every(function(id){ return saldoAlcanza(id, porCta[id], idMsg); });
+}
 
 /* El total del recibo es la suma de las formas de pago. Se recalcula con cada
    tecla pero NO redibuja la grilla: por eso no se traba al escribir.
