@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.23-134";
+const VERSION = "v2026.08.23-135";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -7708,7 +7708,21 @@ async function guardarOC(){
   $("dlg").close(); VISTAS.compras();
 }
 async function anularOC(id){
-  const m = prompt("¿Por qué se anula esta orden de compra?"); if (m===null) return;
+  /* 23/8, Gustavo: «no se puede anular nada que tenga mercadería recibida o
+     entregada; primero que vuelva la mercadería». Es la misma regla que ya regía
+     para la venta y su remito, aplicada a la compra: acá el paso previo es
+     deshacer la recepción, que existe desde la v68. La base lo frena igual; esto
+     lo explica antes de que la persona escriba el motivo al pedo. */
+  const oi = await sb.from("oc_items").select("recibido").eq("orden_id",id);
+  const rec = (oi.data||[]).reduce(function(a,x){ return a+Number(x.recibido||0); },0);
+  if (rec > 0.0001){
+    alert("Esta orden tiene mercadería recibida: ese stock ya entró al depósito.\n\n"+
+      "Primero deshacé la recepción —botón «Recepción» de la orden, y ahí «Deshacer la recepción de esta orden»—: eso devuelve la mercadería.\n"+
+      "Después sí, anulá la orden con su motivo.\n\n"+
+      "Si algo de esa mercadería ya salió del depósito, el sistema no te va a dejar deshacerla: primero hay que resolver esa salida.");
+    return;
+  }
+  const m = prompt("¿Por qué se anula esta orden de compra?\n\nNo tiene nada recibido: no entró mercadería al depósito."); if (m===null) return;
   const {error} = await sb.rpc("anular_orden_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   VISTAS.compras();
@@ -8995,7 +9009,13 @@ async function guardarEntrega(id){
 async function anularVenta(id){
   /* Proceso clave (Gustavo, 10/8): si la venta tiene remitos vivos, primero se
      anula el remito —eso devuelve la mercadería al stock— y recién después la
-     venta. La base también lo bloquea (v52); acá se explica antes de intentar. */
+     venta.
+     23/8: acá decía «la base también lo bloquea (v52)» y NO era cierto —se
+     verificó leyendo la función: `anular_venta` no miraba los remitos—. O sea
+     que la pantalla lo frenaba y la puerta de atrás quedaba abierta, justo lo
+     que dice la regla: la pantalla esconde, la base tiene que esconder también.
+     Desde la v69 el candado está de los dos lados; esto lo explica antes de
+     que la persona escriba el motivo al pedo. */
   const rv = await sb.from("remitos").select("id,codigo").eq("venta_id",id).eq("anulado",false);
   if ((rv.data||[]).length){
     alert("Esta venta tiene "+rv.data.length+" remito(s) sin anular ("+rv.data.map(function(x){return x.codigo;}).join(", ")+").\n\n"+
