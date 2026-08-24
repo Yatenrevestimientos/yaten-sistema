@@ -233,7 +233,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.23-137";
+const VERSION = "v2026.08.24-138";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1381,6 +1381,30 @@ function faltan(reglas){
   reglas.forEach(function(r){ if (!r.ok) f.push(r.q); });
   return f;
 }
+/* ── La hora de la visita, de media en media hora (24/8, Gustavo) ──
+   Era un campo de texto libre, y ya se estaba notando: de las 9 horas cargadas
+   había una «11.30» con punto y una «17 00» con espacio. Tres formas de escribir
+   lo mismo hacen que la agenda no se pueda ordenar ni cruzar con nada.
+   De 8:30 a 18:30, que es la franja en la que se visita.
+   Si un prospecto viejo tiene una hora que no está en la grilla, se le agrega su
+   valor a la lista para NO perderlo: una regla nueva no arregla lo ya cargado,
+   pero tampoco tiene por qué romperlo. */
+const HORAS_VISITA = (function(){
+  const l = [];
+  for (let m = 8*60+30; m <= 18*60+30; m += 30)
+    l.push(String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"));
+  return l;
+})();
+function selHoraVisita(id, val, dis){
+  const v = String(val==null?"":val).trim();
+  const lista = HORAS_VISITA.slice();
+  if (v && lista.indexOf(v) < 0) lista.unshift(v);   /* la vieja, tal cual estaba */
+  return '<select id="'+id+'" '+(dis||"")+'><option value="">—</option>'+
+    lista.map(function(h){
+      return '<option value="'+esc(h)+'" '+(v===h?"selected":"")+'>'+esc(h)+
+             (HORAS_VISITA.indexOf(h)<0?" (cargada antes)":"")+'</option>';
+    }).join("")+'</select>';
+}
 /* 11/8, Gustavo: «campos obligatorios indicar con asterisco». Uno solo acá, así
    el día que se decida cambiarlo de color o de forma se cambia en un lugar. */
 const AST = '<span style="color:#7a2415;font-weight:700" title="Obligatorio">*</span>';
@@ -1501,9 +1525,13 @@ function formHTML(p, ro, lig){
   '<div class="grid">'+
     '<div class="f"><label>ATO asignado '+AST+'</label><select id="c_ato_id" '+d+'>'+selPer(ATOS(),p.ato_id)+'</select></div>'+
     '<div class="f"><label>Fecha de visita '+AST+'</label><input type="date" id="c_fecha_visita" value="'+(p.fecha_visita||"")+'" '+d+'></div>'+
-    '<div class="f"><label>Hora '+AST+'</label><input id="c_hora_visita" value="'+esc(p.hora_visita)+'" placeholder="10:30" '+d+'></div>'+
+    '<div class="f"><label>Hora '+AST+'</label>'+selHoraVisita("c_hora_visita", p.hora_visita, d)+'</div>'+
   '</div>'+
   '<div class="f"><label>Observaciones previas</label><textarea id="c_observaciones_previas" rows="2" placeholder="Lo que hay que saber antes de ir: cómo llegar, con quién, qué mirar." '+d+'>'+esc(p.observaciones_previas)+'</textarea></div>'+
+  (p.fecha_visita && p.hora_visita
+    ? '<div class="acciones" style="margin-top:6px">'+botonCalendario(p)+
+      '<span class="muted" style="align-self:center">Se abre Google Calendar con la visita cargada: cliente, dirección, teléfono y ATO. Dura una hora.</span></div>'
+    : '<div class="muted" style="margin-top:6px">Cargá el día y la hora y guardá: ahí aparece el botón para agendarla en Google Calendar.</div>')+
   '</div>'+
 
   '<div id="bloquePresup" data-hay="'+(hayPresup?1:0)+'">'+
@@ -1995,6 +2023,50 @@ function listaSeg(s, prosId){
 }
 
 /* ─────────── AGENDA ATO ─────────── */
+/* ── Agregar la visita a Google Calendar (24/8, Gustavo) ──
+   Sin API ni permisos: se arma el enlace que Google entiende y se abre con la
+   visita ya cargada —cliente, dirección, teléfono, ATO— para que cada uno la
+   guarde en SU calendario, desde la compu o el celular. Dura una hora.
+   La sincronización de verdad (que el sistema cree y borre eventos solo) es
+   otra cosa y necesita conectar la cuenta de Google: quedó para después del
+   reset. Esto resuelve hoy el 90% del problema, que es no tener que copiar los
+   datos a mano. */
+function fechaCal(fecha, hora, sumarMin){
+  if (!fecha) return null;
+  const hm = String(hora||"").replace(/[.\s]/g, ":").match(/^(\d{1,2}):?(\d{2})?/);
+  let h = hm ? Number(hm[1]) : 9, m = hm && hm[2] ? Number(hm[2]) : 0;
+  if (!(h>=0 && h<=23)) h = 9;
+  if (!(m>=0 && m<=59)) m = 0;
+  const t = new Date(Number(fecha.slice(0,4)), Number(fecha.slice(5,7))-1, Number(fecha.slice(8,10)), h, m, 0);
+  t.setMinutes(t.getMinutes() + (sumarMin||0));
+  const dd = function(x){ return String(x).padStart(2,"0"); };
+  return t.getFullYear()+dd(t.getMonth()+1)+dd(t.getDate())+"T"+dd(t.getHours())+dd(t.getMinutes())+"00";
+}
+function linkCalendario(p){
+  const ini = fechaCal(p.fecha_visita, p.hora_visita, 0);
+  const fin = fechaCal(p.fecha_visita, p.hora_visita, 60);
+  if (!ini || !fin) return "";
+  const detalle = [
+    "Visita a domicilio — Yaten Revestimientos",
+    p.codigo ? "Prospecto: "+p.codigo : "",
+    p.celular||p.telefono ? "Teléfono: "+(p.celular||p.telefono) : "",
+    p.ato_id ? "ATO: "+nomP(p.ato_id) : "",
+    p.motivo_consulta ? "Consulta: "+p.motivo_consulta : "",
+    p.observaciones_previas ? "Antes de ir: "+p.observaciones_previas : ""
+  ].filter(Boolean).join("\n");
+  const lugar = [p.direccion, nom(M.loc, p.localidad_id)].filter(Boolean).join(", ");
+  return "https://calendar.google.com/calendar/render?action=TEMPLATE" +
+    "&text="    + encodeURIComponent("Visita — " + (p.nombre||"cliente")) +
+    "&dates="   + ini + "/" + fin +
+    "&details=" + encodeURIComponent(detalle) +
+    "&location="+ encodeURIComponent(lugar);
+}
+function botonCalendario(p, chico){
+  const u = linkCalendario(p);
+  if (!u) return "";
+  return '<a class="btn2'+(chico?" btn-sm":"")+'" href="'+esc(u)+'" target="_blank" rel="noopener" '+
+         'onclick="event.stopPropagation()" title="Abre Google Calendar con la visita ya cargada">📅 Agendar</a>';
+}
 VISTAS.agenda = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   const d = (await traerProspectos()).filter(p=>p.fecha_visita);
@@ -2003,10 +2075,11 @@ VISTAS.agenda = async function(){
   const futuras = d.filter(p=>p.fecha_visita>=h);
   const pasadas = d.filter(p=>p.fecha_visita<h).reverse();
   const bloque = (t,rows) => '<div class="panel"><h2>'+t+'</h2>'+
-    (rows.length?'<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Código</th><th>Cliente</th><th>Localidad</th><th>Dirección</th><th>Celular</th><th>ATO</th><th>Resultado</th></tr></thead><tbody>'+
+    (rows.length?'<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Código</th><th>Cliente</th><th>Localidad</th><th>Dirección</th><th>Celular</th><th>ATO</th><th>Resultado</th><th></th></tr></thead><tbody>'+
     rows.map(p=>'<tr style="cursor:pointer" onclick="abrir('+p.id+')"><td><b>'+fmtF(p.fecha_visita)+'</b></td><td>'+esc(p.hora_visita)+'</td><td>'+esc(p.codigo)+'</td>'+
       '<td>'+esc(p.nombre)+'</td><td>'+esc(nom(M.loc,p.localidad_id))+'</td><td style="white-space:normal;min-width:180px">'+esc(p.direccion)+'</td>'+
-      '<td>'+esc(p.celular||p.telefono||"")+'</td><td>'+esc(nomP(p.ato_id))+'</td><td>'+badge(p.resultado)+'</td></tr>').join("")+
+      '<td>'+esc(p.celular||p.telefono||"")+'</td><td>'+esc(nomP(p.ato_id))+'</td><td>'+badge(p.resultado)+'</td>'+
+      '<td style="white-space:nowrap">'+botonCalendario(p, true)+'</td></tr>').join("")+
     '</tbody></table></div>':'<div class="muted">Sin visitas.</div>')+'</div>';
   $("main").innerHTML = bloque("Visitas de hoy en adelante", futuras) + bloque("Visitas anteriores", pasadas.slice(0,60));
 };
@@ -4780,7 +4853,7 @@ async function abrirPresupuesto(id, desde){
     PRE = {cab:c.data, items:(i.data||[]), adic:(a.data||[]), borrarItems:[], borrarAdic:[], pros:null};
     /* los m² viven en el prospecto pero se editan desde acá */
     if (PRE.cab.prospecto_id && P("prospecto-consultar")){
-      const qp = await sb.from("prospectos").select("id,codigo,nombre,m2_cotizados,m2_colocar,nro_presup_papel,derivacion").eq("id",PRE.cab.prospecto_id).single();
+      const qp = await sb.from("prospectos").select("id,codigo,nombre,m2_cotizados,m2_colocar,nro_presup_papel,derivacion,resultado").eq("id",PRE.cab.prospecto_id).single();
       PRE.pros = qp.data || null;
     }
   } else {
@@ -4942,6 +5015,22 @@ function pintarFichaPre(){
        (c.m2_colocar!=null ? c.m2_colocar : ((PRE.pros&&PRE.pros.m2_colocar!=null)?PRE.pros.m2_colocar:""))+'" '+d+'></div>'+
      '<div class="f"><label>VL '+AST+'</label><select id="w_vl_id" '+d+'>'+selPer(VLS(),c.vl_id)+'</select></div>'+
      '<div class="f"><label>ATO <span class="muted" style="font-size:.85em">(obligatorio si viene de una visita)</span></label><select id="w_ato_id" '+d+'>'+selPer(ATOS(),c.ato_id)+'</select></div>'+
+     /* 24/8, Gustavo: «en el presupuesto con visita, al crear el presupuesto que
+        sea obligatorio modificar resultado / venta». Tiene razón y los datos lo
+        confirmaban: de los 9 prospectos con visita cargada, uno seguía en «Sin
+        Visita» y otro en «Pendiente a Visitar» — el ATO ya había ido.
+        El resultado se elige ACÁ y no en la ficha del prospecto: quien carga el
+        presupuesto es el que volvió de la visita y sabe cómo salió. Pedirle que
+        vaya a otra pantalla es garantizar que no lo haga.
+        No se ofrece si ya está en «Vendido»: eso lo pone el disparador de la v64
+        cuando hay una venta viva, y no se pisa a mano. «Señado» sí se puede
+        corregir, porque ese lo carga una persona. */
+     ((PRE.cab.prospecto_id && PRE.pros && PRE.pros.derivacion === "Visita a domicilio" &&
+       PRE.pros.resultado !== "Vendido")
+       ? '<div class="f"><label>Resultado de la visita '+AST+'</label><select id="w_pros_resultado" '+d+'>'+
+         selTxt(["Sin Decision","Senado","Vendido","No Vendido"], PRE.pros.resultado||"")+'</select>'+
+         '<div class="muted" style="margin-top:3px">Cómo salió la visita. Queda en la ficha del prospecto.</div></div>'
+       : '')+
      '<div class="f"><label>Motivo de rechazo</label><select id="w_motivo_rechazo_id" '+d+'>'+motivosDe("Presupuesto",c.motivo_rechazo_id)+'</select></div>'+
    '</div>'+
    /* La preferencia de pago se anota acá, que es donde se habla de plata, pero
@@ -5378,6 +5467,10 @@ async function guardarPresupuesto(){
     {ok:!deVisita || !!o.nro_papel,         q:"N° de presupuesto en papel (este presupuesto viene de una visita: es el que escribió el ATO a mano)"},
     {ok:!!o.vl_id,                          q:"VL (la vendedora responsable)"},
     {ok:!deVisita || !!o.ato_id,            q:"ATO (este presupuesto viene de una visita: hay que decir quién fue)"},
+    /* 24/8: el resultado de la visita. Solo se exige si el campo se ofreció —si
+       la venta ya dejó el prospecto en Vendido, no aparece y no se pide. */
+    {ok:!$("w_pros_resultado") || !!$("w_pros_resultado").value,
+     q:"Resultado de la visita (el ATO ya fue: hay que decir cómo salió)"},
     {ok:!conInst || !!o.direccion_obra,     q:"Dirección de obra (este presupuesto lleva instalación: la cuadrilla tiene que saber adónde ir)"},
     {ok:!conInst || m2col > 0,              q:"m² a colocar (lleva instalación: sin los metros reales no se puede planificar ni costear la obra)"},
     {ok:!noCerro || !!o.motivo_rechazo_id,  q:"Motivo de rechazo (el presupuesto quedó en «"+esc(o.estado)+"»: hay que decir por qué no se cerró)"}
@@ -5532,11 +5625,15 @@ async function guardarPresupuesto(){
       importe:          PRE.cab.total != null ? Number(PRE.cab.total) : null,
       moneda:           PRE.cab.moneda || null
     };
+    /* El resultado de la visita viaja con el resto, en la misma escritura. */
+    const elRes = $("w_pros_resultado");
+    if (elRes && elRes.value) up.resultado = elRes.value;
     const rp = await sb.from("prospectos").update(up).eq("id", PRE.cab.prospecto_id);
     avisoPros = rp.error
       ? ' <b>Ojo:</b> no se pudo actualizar la ficha del prospecto ('+esc(rp.error.message)+').'
       : ' La ficha del prospecto quedó actualizada con estos datos.';
-    if (PRE.pros){ PRE.pros.m2_cotizados = up.m2_cotizados; PRE.pros.m2_colocar = up.m2_colocar; }
+    if (PRE.pros){ PRE.pros.m2_cotizados = up.m2_cotizados; PRE.pros.m2_colocar = up.m2_colocar;
+                   if (up.resultado) PRE.pros.resultado = up.resultado; }
   }
   $("w_guardar").disabled = false;
   pintarFichaPre();
