@@ -23,6 +23,20 @@ button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid transparen
 .btn2:hover{background:#f4f0ea}
 .btn3{background:var(--oxido);color:#fff}
 .btn-sm{padding:5px 10px;font-size:13px;border-radius:6px}
+/* Calendario de visitas (pedido de Gustavo, 24/8): «un calendario igual que
+   tiene el programa de Pirka donde se ven las visitas». */
+.calcab{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.calcab h2{flex:1;min-width:180px}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--linea);border:1px solid var(--linea);border-radius:8px;overflow:hidden}
+.caldia{background:#fff;min-height:96px;padding:5px 6px}
+.caldia.fuera{background:#f3f0ea}
+.caldia.hoy{background:#eef3f3;box-shadow:inset 0 0 0 2px var(--petroleo)}
+.caldia .n{font-size:12px;font-weight:600;color:var(--suave);margin-bottom:3px}
+.caldia.hoy .n{color:var(--petroleo)}
+.calenc{background:var(--petroleo);color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:5px 6px;text-align:center}
+.calvis{display:block;width:100%;text-align:left;font-size:11.5px;line-height:1.25;padding:3px 5px;border-radius:5px;margin-bottom:3px;border:0;color:#fff;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.calvis b{font-weight:700}
+@media(max-width:760px){.caldia{min-height:70px}.calvis{font-size:10.5px}}
 input,select,textarea{font:inherit;padding:8px 10px;border:1px solid var(--linea);border-radius:8px;background:#fff;width:100%;color:var(--texto)}
 input:focus,select:focus,textarea:focus{outline:2px solid #b9c6c7;outline-offset:-1px}
 label{display:block;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--suave);margin-bottom:4px}
@@ -233,7 +247,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.24-138";
+const VERSION = "v2026.08.25-139";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -265,6 +279,33 @@ const nroSolo = x => [x.punto_venta, x.nro_comprobante].filter(function(v){ retu
 const nroComp = x => letraComp(x)+" "+nroSolo(x);
 const fmtF = d => d? String(d).slice(0,10).split("-").reverse().join("/") : "";
 const hoy  = () => new Date().toISOString().slice(0,10);
+/* Los colores de la marca, para las impresiones. Petróleo y rojo óxido. */
+const YAT_PETROLEO = "#24393C", YAT_OXIDO = "#7E2E18";
+/* El isotipo de Yaten en vectores. Usa currentColor: toma el color del contenedor,
+   así el mismo dibujo sirve en petróleo sobre blanco o en blanco sobre petróleo. */
+const ISOTIPO_YATEN = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90.41 90.41"><polygon points="8.000,13.705 27.000,13.705 27.000,57.705 14.330,76.705 8.000,76.705" fill="currentColor"/><polygon points="39.000,13.705 56.600,13.705 39.000,40.105" fill="currentColor"/><polygon points="71.500,13.705 82.410,13.705 40.410,76.705 29.500,76.705" fill="currentColor"/><polygon points="81.400,36.705 82.410,36.705 82.410,49.205 73.100,49.205" fill="currentColor"/><polygon points="53.900,76.705 82.410,76.705 82.410,61.705 63.900,61.705" fill="currentColor"/></svg>';
+/* Sumar días a una fecha AAAA-MM-DD. Se fija el mediodía UTC a propósito: si se usa
+   medianoche, el huso de Argentina corre el día para atrás. */
+/* ── Google Calendar ──────────────────────────────────────────────────────
+   El candado de la base encola sola cada visita que nace, cambia o se cae
+   (v73). Esto es el empujón para que la cola se procese ya, sin botón: se
+   llama después de guardar. Nunca rompe nada —si falla, la visita queda en la
+   cola y sale en el próximo empujón—, y no se espera el resultado para no
+   dejar al usuario mirando una pantalla trabada por algo que no es suyo. */
+let _CAL_YENDO = false;
+async function sincroCal(){
+  if (_CAL_YENDO) return;
+  _CAL_YENDO = true;
+  try{ await sb.functions.invoke("calendar-visitas", {body:{}}); }
+  catch(e){ /* a propósito en silencio: la cola no se pierde */ }
+  finally{ _CAL_YENDO = false; }
+}
+function fechaMas(fecha, dias){
+  if (!fecha) return "";
+  const d = new Date(String(fecha).slice(0,10) + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + Number(dias||0));
+  return d.toISOString().slice(0,10);
+}
 const nom  = (arr,id) => { const x=(arr||[]).find(o=>o.id==id); return x?x.nombre:""; };
 const nomP = id => { const x=EQUIPO.find(o=>o.id===id); return x?x.nombre:""; };
 
@@ -469,12 +510,21 @@ function cotizPara(fecha, propia, proms){
 }
 /* El membrete de todo lo que se imprime sale de Configuracion > Datos de impresion.
    Antes estaba escrito a mano adentro del codigo y no se podia cambiar. */
+/* 24/8, Gustavo: «en la impresión me gustaría sumarle un poco de color, para que sea
+   más agradable de ver, quizás el logo». Va con estilos escritos en la propia etiqueta
+   y no en la hoja de estilos, para que el membrete se vea igual en TODAS las
+   impresiones (presupuesto, remito, lo que venga) sin tener que tocar cada una. */
 function membrete(subtitulo){
   const linea = [cfg("direccion"), cfg("localidad"), cfg("telefono"), cfg("email"), cfg("web"),
                  cfg("cuit") ? "CUIT " + cfg("cuit") : "", cfg("cat_iva")].filter(Boolean).join(" · ");
-  return '<h1>' + esc(cfg("razon_social","YATEN REVESTIMIENTOS")) + '</h1>' +
-         (linea ? '<div class="sub">' + esc(linea) + '</div>' : '') +
-         '<div class="sub">' + subtitulo + '</div>';
+  return '<div style="display:flex;align-items:center;gap:14px;border-bottom:3px solid '+YAT_PETROLEO+';padding-bottom:11px">'+
+           '<div style="flex:0 0 46px;width:46px;color:'+YAT_PETROLEO+';line-height:0">'+ISOTIPO_YATEN+'</div>'+
+           '<div style="flex:1">'+
+             '<h1 style="margin:0;color:'+YAT_PETROLEO+';font-size:22px;letter-spacing:1px">'+esc(cfg("razon_social","YATEN REVESTIMIENTOS"))+'</h1>'+
+             (linea ? '<div style="color:#6b7679;font-size:11px;margin-top:3px">'+esc(linea)+'</div>' : '')+
+           '</div>'+
+         '</div>'+
+         '<div style="background:'+YAT_PETROLEO+';color:#fff;padding:7px 12px;border-radius:5px;font-size:12.5px;margin:12px 0 16px">'+subtitulo+'</div>';
 }
 async function cargarCatalogo(){
   if (!P("producto-consultar")) return;
@@ -1297,6 +1347,7 @@ async function descartarConfirmar(id){
   if (!act.error && contradiccionProspecto({estado:"DESCARTADO", resultado:act.data.resultado}))
     return err("Este prospecto figura como vendido: no se puede descartar. Si la venta se cayó, primero anulá la venta.");
   const r = await sb.from("prospectos").update({estado:"DESCARTADO", motivo_descarte_id:Number(mot)}).eq("id",id).select("id");
+  sincroCal();
   if (r.error) return err(r.error.message);
   if (!r.data || !r.data.length) return err("La base no guardó el descarte.");
   if (obs.trim()){
@@ -1808,7 +1859,8 @@ function verPresupDesdeProspecto(id){ try{ $("dlg").close(); }catch(e){} abrirPr
 
 /* Abre el formulario de Presupuestos precargado con los datos del prospecto. */
 async function nuevoPresupuestoDeProspecto(idPros){
-  const msg = t => { const e = $("dmsg"); if (e) e.innerHTML = t; };
+  /* El cartel puede ser el del diálogo (dmsg) o el de «Nuevo prospecto» (nmsg). */
+  const msg = t => { const e = $("dmsg") || $("nmsg"); if (e) e.innerHTML = t; };
   msg('<div class="msg">Preparando el presupuesto…</div>');
   const q = await sb.from("prospectos").select(COLS).eq("id",idPros).single();
   if (q.error) return msg('<div class="msg err">'+esc(q.error.message)+'</div>');
@@ -1897,28 +1949,61 @@ async function cerrarVentaDesdeProspecto(idPros){
 }
 
 /* ─────────── NUEVO ─────────── */
+/* 24/8, Gustavo: «cuando cargo uno nuevo que abajo tenga otro botón que diga
+   presupuestar, por si lo cargo y me pide un presupuesto directo, no tener que salir
+   de la pantalla, y que los botones tengan diferentes colores, para hacer más fácil
+   la lectura: entonces queda guardar prospecto, presupuesto, limpiar».
+   Los tres botones comparten el mismo guardado: «Presupuesto» no es un atajo que
+   saltea controles, es guardar y seguir de largo. */
 VISTAS.nuevo = function(){
   $("main").innerHTML = '<div class="panel"><h2>Nuevo prospecto</h2>'+
     '<div class="desc">El código PROS-'+new Date().getFullYear()+'-#### se genera solo al guardar.</div>'+
     '<div id="nmsg"></div>'+formHTML(null,false)+
-    '<div class="acciones"><button class="btn" id="nguardar">Guardar prospecto</button><button class="btn2" id="ncancel">Limpiar</button></div></div>';
+    '<div class="acciones">'+
+      '<button class="btn"  id="nguardar">Guardar prospecto</button>'+
+      '<button class="btn3" id="npresu">Guardar y presupuestar</button>'+
+      '<button class="btn2" id="ncancel">Limpiar</button>'+
+    '</div>'+
+    '<div class="muted" style="margin-top:6px;font-size:.85em">«Guardar y presupuestar» guarda el prospecto y abre el presupuesto sin salir de acá.</div>'+
+    '</div>';
   togglePorDerivacion();
   $("ncancel").onclick = VISTAS.nuevo;
-  $("nguardar").onclick = async function(){
+
+  /* Guarda y devuelve {id, codigo} si salió bien, o null si algo faltaba. */
+  async function guardar(){
     const o = leerForm();
     o.estado = estadoSegunEtapa(o);
     const ctr = contradiccionProspecto(o);
-    if (ctr){ $("nmsg").innerHTML = '<div class="msg err">'+ctr+'</div>'; return; }
+    if (ctr){ $("nmsg").innerHTML = '<div class="msg err">'+ctr+'</div>'; return null; }
     const f = faltan(reglasProspecto(o));
-    if (f.length){ avisoFaltan("nmsg", f, "el prospecto"); return; }
-    $("nguardar").disabled = true;
+    if (f.length){ avisoFaltan("nmsg", f, "el prospecto"); return null; }
+    $("nguardar").disabled = true; $("npresu").disabled = true;
     const {data,error} = await sb.from("prospectos").insert(o).select("id,codigo").single();
-    $("nguardar").disabled = false;
-    if (error){ $("nmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+    $("nguardar").disabled = false; $("npresu").disabled = false;
+    if (error){ $("nmsg").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return null; }
     const avCli = await clienteSiHayVisita(Object.assign({}, o, {id:data.id}));
-    $("nmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(data.codigo)+'</b>.'+avCli+'</div>';
+    sincroCal();
+    return {id:data.id, codigo:data.codigo, aviso:avCli};
+  }
+
+  function limpiarCampos(){
     CAMPOS.forEach(function(c){ const el=$("c_"+c); if(el && ["fecha","estado","resultado","moneda","vl_id"].indexOf(c)<0) el.value=""; });
+  }
+
+  $("nguardar").onclick = async function(){
+    const r = await guardar();
+    if (!r) return;
+    $("nmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(r.codigo)+'</b>.'+r.aviso+'</div>';
+    limpiarCampos();
     window.scrollTo({top:0,behavior:"smooth"});
+  };
+
+  $("npresu").onclick = async function(){
+    const r = await guardar();
+    if (!r) return;
+    $("nmsg").innerHTML = '<div class="msg ok">Guardado como <b>'+esc(r.codigo)+'</b>.'+r.aviso+' Abriendo el presupuesto…</div>';
+    limpiarCampos();
+    await nuevoPresupuestoDeProspecto(r.id);
   };
 };
 
@@ -1978,6 +2063,7 @@ async function abrir(id){
       return;
     }
     p.resultado = o.resultado;
+    sincroCal();
     let extra = await clienteSiHayVisita(Object.assign({}, o, {id:id}));
     let ventaDesdePros = null;
     /* 10/8: si quien marca «Vendido» no puede registrar ventas, antes quedaba
@@ -2067,6 +2153,72 @@ function botonCalendario(p, chico){
   return '<a class="btn2'+(chico?" btn-sm":"")+'" href="'+esc(u)+'" target="_blank" rel="noopener" '+
          'onclick="event.stopPropagation()" title="Abre Google Calendar con la visita ya cargada">📅 Agendar</a>';
 }
+/* ── Calendario de visitas ────────────────────────────────────────────────
+   24/8, Gustavo: «quisiera que arme un calendario igual que tiene el programa
+   de Pirka donde se ven las visitas». Es la misma información que la lista de
+   abajo, pero puesta sobre el mes: sirve para ver dónde queda un hueco y para
+   no pisar dos visitas a la misma hora, que en una lista no se ve. */
+const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio",
+               "agosto","septiembre","octubre","noviembre","diciembre"];
+const DIASEM = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+
+/* El color dice cómo salió la visita, sin tener que leer. */
+function colorVisita(p){
+  if (p.estado === "DESCARTADO")      return "#8b8b8b";
+  if (p.resultado === "Vendido")      return "#24393C";
+  if (p.resultado === "No Vendido")   return "#7E2E18";
+  if (p.resultado === "Sin Decision") return "#8A5F1B";
+  return "#4a5658";
+}
+
+function calGrilla(visitas, mes){
+  /* mes es "AAAA-MM". Se trabaja a mediodía UTC para que el huso no corra el día. */
+  const anio = Number(mes.slice(0,4)), m = Number(mes.slice(5,7)) - 1;
+  const primero = new Date(Date.UTC(anio, m, 1, 12));
+  /* la semana arranca el lunes, como se usa acá */
+  const corrimiento = (primero.getUTCDay() + 6) % 7;
+  const arranque = new Date(primero); arranque.setUTCDate(1 - corrimiento);
+
+  const porDia = {};
+  visitas.forEach(function(p){ (porDia[p.fecha_visita] = porDia[p.fecha_visita] || []).push(p); });
+  Object.keys(porDia).forEach(function(k){
+    porDia[k].sort(function(a,b){ return String(a.hora_visita||"").localeCompare(String(b.hora_visita||"")); });
+  });
+
+  const h = hoy();
+  let celdas = "";
+  for (let i = 0; i < 42; i++){
+    const d = new Date(arranque); d.setUTCDate(arranque.getUTCDate() + i);
+    const iso = d.toISOString().slice(0,10);
+    const deOtroMes = d.getUTCMonth() !== m;
+    const lista = porDia[iso] || [];
+    celdas += '<div class="caldia'+(deOtroMes?" fuera":"")+(iso===h?" hoy":"")+'">'+
+      '<div class="n">'+d.getUTCDate()+'</div>'+
+      lista.map(function(p){
+        const hora = p.hora_visita ? String(p.hora_visita).replace(/[.\s]/g,":").slice(0,5) : "";
+        return '<button class="calvis" style="background:'+colorVisita(p)+'" '+
+               'title="'+esc((hora?hora+" · ":"")+(p.nombre||"")+" · "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id))+'" '+
+               'onclick="abrir('+p.id+')">'+(hora?'<b>'+esc(hora)+'</b> ':'')+esc(p.nombre||"sin nombre")+'</button>';
+      }).join("")+
+      '</div>';
+    /* si la fila que viene ya es toda del mes siguiente, se corta: seis semanas
+       enteras dejan una fila vacía la mitad de los meses */
+    if (i % 7 === 6 && i >= 27){
+      const sig = new Date(arranque); sig.setUTCDate(arranque.getUTCDate() + i + 1);
+      if (sig.getUTCMonth() !== m) break;
+    }
+  }
+  return '<div class="calgrid">'+DIASEM.map(function(x){ return '<div class="calenc">'+x+'</div>'; }).join("")+celdas+'</div>';
+}
+
+function calMover(delta){
+  const mes = window.CALMES || hoy().slice(0,7);
+  const d = new Date(Date.UTC(Number(mes.slice(0,4)), Number(mes.slice(5,7)) - 1 + delta, 1, 12));
+  window.CALMES = d.toISOString().slice(0,7);
+  VISTAS.agenda();
+}
+function calHoy(){ window.CALMES = hoy().slice(0,7); VISTAS.agenda(); }
+
 VISTAS.agenda = async function(){
   $("main").innerHTML = '<div class="muted">Cargando…</div>';
   const d = (await traerProspectos()).filter(p=>p.fecha_visita);
@@ -2074,6 +2226,8 @@ VISTAS.agenda = async function(){
   const h = hoy();
   const futuras = d.filter(p=>p.fecha_visita>=h);
   const pasadas = d.filter(p=>p.fecha_visita<h).reverse();
+  const mes = window.CALMES || h.slice(0,7);
+  const delMes = d.filter(function(p){ return String(p.fecha_visita).slice(0,7) === mes; });
   const bloque = (t,rows) => '<div class="panel"><h2>'+t+'</h2>'+
     (rows.length?'<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Hora</th><th>Código</th><th>Cliente</th><th>Localidad</th><th>Dirección</th><th>Celular</th><th>ATO</th><th>Resultado</th><th></th></tr></thead><tbody>'+
     rows.map(p=>'<tr style="cursor:pointer" onclick="abrir('+p.id+')"><td><b>'+fmtF(p.fecha_visita)+'</b></td><td>'+esc(p.hora_visita)+'</td><td>'+esc(p.codigo)+'</td>'+
@@ -2081,7 +2235,22 @@ VISTAS.agenda = async function(){
       '<td>'+esc(p.celular||p.telefono||"")+'</td><td>'+esc(nomP(p.ato_id))+'</td><td>'+badge(p.resultado)+'</td>'+
       '<td style="white-space:nowrap">'+botonCalendario(p, true)+'</td></tr>').join("")+
     '</tbody></table></div>':'<div class="muted">Sin visitas.</div>')+'</div>';
-  $("main").innerHTML = bloque("Visitas de hoy en adelante", futuras) + bloque("Visitas anteriores", pasadas.slice(0,60));
+  const panelCal = '<div class="panel">'+
+    '<div class="calcab">'+
+      '<h2>'+MESES[Number(mes.slice(5,7))-1].replace(/^./,function(c){return c.toUpperCase();})+' '+mes.slice(0,4)+'</h2>'+
+      '<button class="btn2 btn-sm" onclick="calMover(-1)">‹ Mes anterior</button>'+
+      '<button class="btn2 btn-sm" onclick="calHoy()">Hoy</button>'+
+      '<button class="btn2 btn-sm" onclick="calMover(1)">Mes siguiente ›</button>'+
+    '</div>'+
+    '<div class="desc">'+(delMes.length? delMes.length+' visita'+(delMes.length===1?'':'s')+' este mes. Tocá una para abrir el prospecto.'
+                                       : 'No hay visitas cargadas en este mes.')+'</div>'+
+    calGrilla(delMes, mes)+
+    '<div class="muted" style="margin-top:8px;font-size:.85em">Colores: '+
+      '<b style="color:#24393C">Vendido</b> · <b style="color:#7E2E18">No vendido</b> · '+
+      '<b style="color:#8A5F1B">Sin decisión</b> · <b style="color:#4a5658">Pendiente</b> · '+
+      '<b style="color:#8b8b8b">Descartado</b></div>'+
+    '</div>';
+  $("main").innerHTML = panelCal + bloque("Visitas de hoy en adelante", futuras) + bloque("Visitas anteriores", pasadas.slice(0,60));
 };
 
 /* ─────────── SEGUIMIENTOS ─────────── */
@@ -5460,6 +5629,11 @@ async function guardarPresupuesto(){
     {ok:!!o.cliente_tel,                    q:"Teléfono del cliente"},
     {ok:!!o.localidad_id,                   q:"Localidad"},
     {ok:Number(o.validez_dias) > 0,         q:"Validez del presupuesto, en días (mayor a cero)"},
+    /* 24/8: si el presupuesto está en dólares hace falta la cotización, si no el papel
+       no puede mostrar el total en pesos —y en una venta, después no hay manera de
+       reconstruir a cuánto se cerró. */
+    {ok:o.moneda !== "USD" || Number(o.cotizacion_usd) > 0,
+     q:"Cotización del dólar (el presupuesto está en dólares: sin la cotización no sale el total en pesos)"},
     /* 11/8, Gustavo: «el N° de presupuesto de papel es obligatorio solo en un
        presupuesto que viene de visita, igual que el ATO asignado; si es suelto,
        no». Tiene lógica: el papel y el ATO existen porque alguien fue a la casa.
@@ -5629,6 +5803,7 @@ async function guardarPresupuesto(){
     const elRes = $("w_pros_resultado");
     if (elRes && elRes.value) up.resultado = elRes.value;
     const rp = await sb.from("prospectos").update(up).eq("id", PRE.cab.prospecto_id);
+    sincroCal();
     avisoPros = rp.error
       ? ' <b>Ojo:</b> no se pudo actualizar la ficha del prospecto ('+esc(rp.error.message)+').'
       : ' La ficha del prospecto quedó actualizada con estos datos.';
@@ -5649,19 +5824,31 @@ async function guardarPresupuesto(){
 
 function imprimirPresupuesto(){
   const c = PRE.cab, m = c.moneda||"ARS", t = calcTotales();
+  const dias = Number(c.validez_dias) || Number(cfg("validez_dias",15)) || 15;
+  /* 24/8, Gustavo: «a los clientes prefieren ver el total en pesos aunque sea el total».
+     Solo en los totales, no renglón por renglón. Y se usa la cotización de ESTE
+     presupuesto: si no tiene, no se inventa un número con la del sistema. */
+  const cot = Number(c.cotizacion_usd) || 0;
+  const enPesos = (m === "USD" && cot > 0);
   const fila = x => '<tr><td>'+esc(x.descripcion)+(x.con_instalacion?' <b>(instalado, todo incluido)</b>':'')+'</td><td class="r">'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
     '<td class="r">'+fmtM(x.precio_unit,m)+'</td><td class="r">'+(Number(x.descuento_pct)?fmtN(x.descuento_pct)+"%":"")+'</td>'+
     '<td class="r">'+fmtM(Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100),m)+'</td></tr>';
   const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(c.codigo)+'</title><style>'+
    'body{font:13px Georgia,serif;color:#1b2426;margin:34px;max-width:760px}'+
-   'h1{font-size:22px;color:#24393C;margin:0;letter-spacing:1px}.sub{color:#6b7679;font-size:12px;margin-bottom:18px}'+
-   'table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}'+
-   'th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#6b7679}.r{text-align:right}'+
-   '.tot td{border:0;padding:3px 8px}.tot .g td{font-size:17px;font-weight:bold;border-top:2px solid #24393C}'+
-   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;margin:14px 0;background:#faf8f4}'+
-   '.pie{margin-top:26px;font-size:11px;color:#6b7679;border-top:1px solid #ddd;padding-top:10px}'+
+   'h1{font-size:22px;margin:0;letter-spacing:1px}.sub{color:#6b7679;font-size:12px;margin-bottom:18px}'+
+   'table{width:100%;border-collapse:collapse;margin:10px 0}td{padding:6px 8px;border-bottom:1px solid #e4e0d9;text-align:left}'+
+   'th{padding:6px 8px;text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;'+
+     'color:#fff;background:'+YAT_PETROLEO+'}.r{text-align:right}'+
+   'tbody tr:nth-child(even) td{background:#f7f5f1}'+
+   '.tot td{border:0;padding:3px 8px}.tot .g td{font-size:18px;font-weight:bold;color:'+YAT_PETROLEO+';border-top:2px solid '+YAT_PETROLEO+'}'+
+   '.pesos td{border:0;padding:3px 8px;color:'+YAT_OXIDO+'}.pesos .b td{font-size:15px;font-weight:bold;border-top:1px solid '+YAT_OXIDO+'}'+
+   '.caja{border:1px solid #d9d2c8;border-left:4px solid '+YAT_PETROLEO+';border-radius:6px;padding:10px 12px;margin:14px 0;background:#faf8f4}'+
+   '.pie{margin-top:26px;font-size:11px;color:#6b7679;border-top:2px solid '+YAT_PETROLEO+';padding-top:10px}'+
    '</style></head><body>'+
-   membrete('Presupuesto '+esc(c.codigo)+' · '+fmtF(c.fecha)+' · válido por '+(c.validez_dias||cfg("validez_dias",15))+' días')+
+   /* 24/8, Gustavo: que se vea la caducidad. Antes decía «válido por 15 días» y el
+      cliente tenía que hacer la cuenta; ahora dice la fecha hasta la que vale. */
+   membrete('<b>PRESUPUESTO '+esc(c.codigo)+'</b> &nbsp;·&nbsp; '+fmtF(c.fecha)+
+            ' &nbsp;·&nbsp; válido hasta el '+fmtF(fechaMas(c.fecha, dias))+' ('+dias+' días)')+
    '<div class="caja"><b>'+esc(c.cliente_nombre)+'</b>'+
      (c.cliente_tel?' · '+esc(c.cliente_tel):'')+(c.cliente_email?' · '+esc(c.cliente_email):'')+
      ((c.direccion_obra||c.localidad_id)?'<br>Obra: '+esc(c.direccion_obra)+' '+esc(nom(M.loc,c.localidad_id)):'')+
@@ -5678,6 +5865,12 @@ function imprimirPresupuesto(){
      '<tr><td class="r">IVA</td><td class="r">'+fmtM(t.iva,m)+'</td></tr>'+
      '<tr class="g"><td class="r">TOTAL</td><td class="r">'+fmtM(t.total,m)+'</td></tr>'+
    '</tbody></table>'+
+   (enPesos?
+     '<table class="pesos"><tbody>'+
+       '<tr class="b"><td class="r">TOTAL EN PESOS</td><td class="r">'+fmtM(t.total*cot,"ARS")+'</td></tr>'+
+       '<tr><td class="r" colspan="2" style="font-size:11px">Al tipo de cambio de $ '+fmtN(cot)+' por dólar, del '+fmtF(c.fecha)+'.'+
+         ' El importe en pesos es orientativo: se factura en dólares al cambio del día de pago.</td></tr>'+
+     '</tbody></table>' : '')+
    (c.notas? '<div class="caja"><b>Notas</b><br>'+esc(c.notas).replace(/\n/g,"<br>")+'</div>' : '')+
    '<div class="pie">'+esc(c.condiciones||cfg("pie_presupuesto"))+'</div>'+
    '</body></html>';
@@ -9388,6 +9581,7 @@ async function guardarVentaDirecta(){
       if (vq.data && vq.data.presupuesto_id)
         await sb.from("presupuestos").update({prospecto_id:VTA.prospecto_id}).eq("id",vq.data.presupuesto_id);
       const pu = await sb.from("prospectos").update({resultado:"Vendido"}).eq("id",VTA.prospecto_id);
+      sincroCal();
       if (pu.error) avisoPros = pu.error.message;
       else avisoPros = "ok";
     }catch(e){ avisoPros = e.message; }
@@ -10507,10 +10701,22 @@ async function guardarCliente(id){
   await cargarClientes();
   /* si vinimos desde el formulario de venta, volvemos ahí con el cliente elegido */
   if (!id && _VOLVER_A_VENTA){ await volverAVenta(r.data ? r.data.id : null); return; }
-  $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>';
   if (VISTA==="clientes") VISTAS.clientes();
-  if (!id) $("dlg").close();
+  /* 24/8, Gustavo: «cuando creo un cliente que me dé opción de crear un presupuesto o
+     una venta, que no se cierre de inmediato, a lo sumo que le ponga cerrar».
+     Antes el diálogo se cerraba solo y había que volver a buscar al cliente. */
+  if (id){ $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>'; return; }
+  const nid = r.data ? r.data.id : null;
+  $("clmsg").innerHTML =
+    '<div class="msg ok">Cliente creado. ¿Seguís con algo más?</div>'+
+    '<div class="acciones" style="margin-top:6px">'+
+      ((nid && P("presupuesto-agregar"))? '<button class="btn"  onclick="presupuestoDesdeCliente('+nid+')">Hacerle un presupuesto</button>' : '')+
+      ((nid && P("venta-agregar"))?       '<button class="btn3" onclick="formVentaNueva('+nid+')">Registrarle una venta</button>' : '')+
+      '<button class="btn2" onclick="cerrarDialogo()">Cerrar</button>'+
+    '</div>';
 }
+/* Cerrar el diálogo grande desde un onclick, sin escribir el id a mano en cada botón. */
+function cerrarDialogo(){ try{ $("dlg").close(); }catch(e){} }
 async function anularCobranza(cobId, cliId){
   const m = prompt("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
   if (m === null) return;
