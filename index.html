@@ -272,7 +272,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.25-145";
+const VERSION = "v2026.08.25-147";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5208,7 +5208,8 @@ function pintarFichaPre(){
      (P("cliente-consultar")?'<div class="f"><label>Cliente registrado</label><select id="w_cliente_id" onchange="presClienteElegido()" '+(c.prospecto_id?"disabled":d)+'>'+selPer(CLIS, c.cliente_id?Number(c.cliente_id):null)+'</select>'+
        '<div class="muted" id="w_cli_nota" style="font-size:.85em;margin-top:4px">'+
        (c.prospecto_id ? 'Viene de un prospecto: el cliente es ese y no se cambia acá.' : '')+'</div></div>':'')+
-     '<div class="f"><label>Cliente '+AST+'</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'></div>'+
+     '<div class="f"><label>Cliente '+AST+'</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'>'+
+       (c.cliente_id? '<div style="margin-top:4px">'+botonFichaCliente(c.cliente_id)+'</div>' : '')+'</div>'+
      '<div class="f"><label>Teléfono '+AST+'</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
      '<div class="f"><label>Email</label><input id="w_cliente_email" value="'+esc(c.cliente_email)+'" '+d+'></div>'+
      '<div class="f"><label>Localidad '+AST+'</label><select id="w_localidad_id" '+d+'>'+selOpts(M.loc,c.localidad_id)+'</select></div>'+
@@ -9527,7 +9528,7 @@ function pintarFichaVenta(){
    '<div class="sec">Datos</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><div>'+fmtF(ve.fecha)+'</div></div>'+
      '<div class="f"><label>Cliente</label><div>'+esc(cli?cli.nombre:("#"+ve.cliente_id))+
-       (cli && P("cliente-consultar")?' <button class="btn2 btn-sm" onclick="fichaCliente('+cli.id+')" title="Ficha del cliente">ficha</button>':'')+'</div></div>'+
+       botonFichaCliente(cli?cli.id:null, ve.id)+'</div></div>'+
      '<div class="f"><label>Moneda</label><div>'+esc(ve.moneda)+(enPesos?' <span class="muted">· a $ '+fmtN(cot)+' por dólar</span>':'')+'</div></div>'+
      '<div class="f"><label>Estado</label><div>'+esc(ve.estado||"En curso")+'</div></div>'+
    '</div>'+
@@ -9841,7 +9842,10 @@ async function ventaCostos(){
 
   /* 1. Mercadería, renglón por renglón */
   const filas = [];
-  let costoMerc = 0, sinCosto = 0;
+  /* Dos causas distintas, dos contadores. Juntarlas en uno hacía que el aviso
+     nombrara siempre la primera y mandara a corregir el dato equivocado:
+     apareció el 25/8 con Gustavo mirando la pantalla. */
+  let costoMerc = 0, sinCostoProd = 0, sinCotiz = 0;
   items.forEach(function(x){
     const facturado = Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100);
     if (x.es_adicional){
@@ -9851,10 +9855,10 @@ async function ventaCostos(){
     const pr = PRODS.find(function(z){ return z.id === x.producto_id; });
     const cu = pr ? Number(pr.costo_usd||0) : 0;
     let c = null;
-    if (!cu) { sinCosto++; }
+    if (!cu) { sinCostoProd++; }
     else if (m === "USD") c = cu * Number(x.cantidad||0);
     else if (cot > 0)     c = cu * cot * Number(x.cantidad||0);
-    else { sinCosto++; }
+    else { sinCotiz++; }
     if (c != null) costoMerc += c;
     filas.push({desc:x.descripcion, cant:Number(x.cantidad||0)+" "+(x.unidad||""), fact:facturado, costo:c,
                 nota: c==null ? (cu ? "sin cotización del dólar" : "el producto no tiene «Costo USD» cargado") : ""});
@@ -9904,7 +9908,8 @@ async function ventaCostos(){
     }catch(e){}
   }
   if (!finan) avisos.push("sin forma de pago con «Costo %» cargado: la financiación se contó como si no costara nada");
-  if (sinCosto) avisos.push(sinCosto+" renglón(es) sin «Costo USD» en el producto: ese costo quedó en CERO y el margen se lee de más");
+  if (sinCostoProd) avisos.push(sinCostoProd+" renglón(es) cuyo producto no tiene «Costo USD» cargado en su ficha: ese costo quedó en CERO y el margen se lee de más");
+  if (sinCotiz)     avisos.push(sinCotiz+" renglón(es) con «Costo USD» cargado pero sin cotización del dólar para pasarlo a pesos: cargala en la venta o en Configuración. Ese costo quedó en CERO y el margen se lee de más");
 
   const neto = Number(ve.neto||0);
   const bruto = neto - costoMerc;
@@ -9913,6 +9918,9 @@ async function ventaCostos(){
   const r = function(rot, val, estilo){
     return '<tr><td'+(estilo||'')+'>'+rot+'</td><td style="text-align:right'+(estilo?';font-weight:700':'')+'">'+val+'</td></tr>';
   };
+  /* En esta cuenta el CERO es un dato: «cuadrilla $ 0» dice que no se descontó
+     nada, el guión suelto no dice nada. fmtM esconde el cero; fmtM0 lo muestra,
+     y ya existe en el sistema para la cuenta corriente, por lo mismo. */
 
   $("dbody").innerHTML =
     '<div class="desc">Lo que cuesta <b>'+esc(ve.codigo||"")+'</b>, con la misma cascada del Estado de resultado. '+
@@ -9928,13 +9936,13 @@ async function ventaCostos(){
     '</tbody></table></div>'+
     '<div class="sec">La cuenta</div>'+
     '<div class="tablewrap"><table><tbody>'+
-      r('Venta neta', fmtM(neto,m))+
-      r('Costo de la mercadería', '− '+fmtM(costoMerc,m)+pc(costoMerc))+
-      r('<b>Margen bruto</b>', '<b>'+fmtM(bruto,m)+'</b>'+pc(bruto), ' style="border-top:1px solid var(--linea)"')+
-      r('Cuadrilla'+(m2Inst>0?' <span class="muted">('+fmtN(Math.round(m2Inst*100)/100)+' m²'+(cm2?' × '+fmtM(cm2,"ARS")+'/m²':'')+')</span>':''), '− '+fmtM(costoInst,m))+
-      r('Comisiones'+(pcTot?' <span class="muted">('+fmtN(pcTot)+'%)</span>':''), '− '+fmtM(comis,m))+
-      r('Financiación'+(mpNom?' <span class="muted">('+esc(mpNom)+')</span>':''), '− '+fmtM(finan,m))+
-      r('<b>Contribución</b>', '<b>'+fmtM(contrib,m)+'</b>'+pc(contrib), ' style="border-top:2px solid var(--petroleo)"')+
+      r('Venta neta', fmtM0(neto,m))+
+      r('Costo de la mercadería', '− '+fmtM0(costoMerc,m)+pc(costoMerc))+
+      r('<b>Margen bruto</b>', '<b>'+fmtM0(bruto,m)+'</b>'+pc(bruto), ' style="border-top:1px solid var(--linea)"')+
+      r('Cuadrilla'+(m2Inst>0?' <span class="muted">('+fmtN(Math.round(m2Inst*100)/100)+' m²'+(cm2?' × '+fmtM(cm2,"ARS")+'/m²':'')+')</span>':''), '− '+fmtM0(costoInst,m))+
+      r('Comisiones'+(pcTot?' <span class="muted">('+fmtN(pcTot)+'%)</span>':''), '− '+fmtM0(comis,m))+
+      r('Financiación'+(mpNom?' <span class="muted">('+esc(mpNom)+')</span>':''), '− '+fmtM0(finan,m))+
+      r('<b>Contribución</b>', '<b>'+fmtM0(contrib,m)+'</b>'+pc(contrib), ' style="border-top:2px solid var(--petroleo)"')+
     '</tbody></table></div>'+
     '<div class="muted" style="margin-top:6px">No se restan los gastos del negocio: eso es del mes, no de una venta. Están en el reporte <b>Estado de resultado</b>.</div>'+
     (avisos.length? '<div class="msg err" style="line-height:1.5;margin-top:10px"><b>Ojo, esto no está completo:</b><br>· '+avisos.join('<br>· ')+'</div>' : '')+
@@ -11162,9 +11170,31 @@ async function fichaCliente(id, pre){
    mezclarlas con las novedades de las ventas, que son otra cosa.
    ══════════════════════════════════════════════════════════════════════════ */
 let CLI = null, CLITAB = "datos", _VOLVER_CLI = null;
+/* De dónde se entró a la ficha del cliente, para poder volver ahí. Si se entró
+   desde una venta, el «Volver» vuelve a la venta y no al listado de clientes:
+   el que está mirando una venta y se va a la cuenta corriente del cliente
+   quiere volver a la venta, no empezar de nuevo. */
+let _CLI_DESDE_VENTA = null;
+
+/* El botón con el muñequito que en Pirka está al lado del nombre del cliente,
+   en el presupuesto y en la venta. Pedido de Gustavo (25/8): «tiene que haber un
+   iconito de un muñequito, que eso me lleva al cliente y a todas las solapas».
+   Lleva ícono Y texto: un ícono solo obliga a pasar el mouse por arriba para
+   saber qué hace. */
+function botonFichaCliente(cliId, desdeVenta){
+  if (!cliId || !P("cliente-consultar")) return '';
+  const svg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px">'+
+    '<circle cx="12" cy="7.5" r="4.2"/><path d="M3.5 21c0-4.4 3.8-6.8 8.5-6.8s8.5 2.4 8.5 6.8z"/></svg>';
+  return ' <button class="btn2 btn-sm" title="Abrir la ficha del cliente: visitas, presupuestos, ventas, remitos, cuenta corriente y novedades" '+
+    'onclick="verFichaCliente('+cliId+','+(desdeVenta||'null')+')">'+svg+' Ver cliente</button>';
+}
+function verFichaCliente(cliId, desdeVenta){
+  _CLI_DESDE_VENTA = desdeVenta || null;
+  fichaCliente(cliId);
+}
 
 VISTAS.cli_ficha = function(){ if (CLI) pintarFichaCli(); else ir("clientes"); };
-function volverDeCliente(){ CLI = null; CLITAB = "datos"; ir("clientes"); }
+function volverDeCliente(){ CLI = null; CLITAB = "datos"; _CLI_DESDE_VENTA = null; ir("clientes"); }
 function irTabCli(tab){ CLITAB = tab; pintarFichaCli(); }
 
 const TABS_CLI = [
@@ -11310,8 +11340,15 @@ function tarjetaAccionesCli(){
   h += '<div class="sep"></div>';
   if (P("cliente-historial")) h += '<button class="b-neutro" onclick="imprimirCCCli('+c.id+')">Resumen de cuenta</button>';
   if ((CLI.cheques||[]).length) h += '<button class="b-neutro" onclick="comprobanteCheques('+c.id+')">Comprobante Cheque</button>';
-  h += '<div class="sep"></div><button class="b-volver" onclick="volverDeCliente()">Volver</button>';
+  h += '<div class="sep"></div>'+
+    (_CLI_DESDE_VENTA
+      ? '<button class="b-volver" onclick="volverALaVentaDesdeCli()">Volver a la venta</button>'
+      : '<button class="b-volver" onclick="volverDeCliente()">Volver</button>');
   return h + '</div></div>';
+}
+function volverALaVentaDesdeCli(){
+  const v = _CLI_DESDE_VENTA; _CLI_DESDE_VENTA = null; CLI = null; CLITAB = "datos";
+  fichaVenta(v);
 }
 
 function tarjetaAuditoriaCli(){
@@ -11472,8 +11509,16 @@ async function presupuestoDesdeCliente(cliId){
   PRE.cab.cliente_email = c.email || "";
   if (c.localidad_id) PRE.cab.localidad_id = c.localidad_id;
   if (c.lista_id) PRE.cab.lista_id = c.lista_id;
+  /* 25/8: dibujaba la ficha del presupuesto pero dejaba VISTA en la pantalla
+     anterior, así que el menú marcaba la sección equivocada y cualquier
+     repintado volvía atrás. Desde la ficha del cliente a pantalla completa se
+     nota de una. Mismo tratamiento que abrirPresupuesto. */
+  VISTA = "pre_ficha"; SUBVISTA = "";
+  try{ $("dlg").close(); }catch(e){}
+  pintarNav();
   pintarFichaPre();
   sugerirDescuentoPorTipo(c);
+  window.scrollTo({top:0,behavior:"instant"});
 }
 let _CCANUL = {ARS:false, USD:false};   /* «ver anulados» de la cuenta corriente */
 function ccToggleAnul(m, cliId, chk){ _CCANUL[m] = !!chk.checked; fichaCliente(cliId); }
@@ -11969,6 +12014,17 @@ async function formCobranza(cliId){
     if (_VOLVER_VEN){ const w = _VOLVER_VEN; _VOLVER_VEN = null; return volverAFichaVenta(w); }
     fichaCliente(cliId);
   };
+  /* ══ 25/8: acá faltaba abrir la ventana ══
+     El camino normal de esta función llenaba el diálogo y NUNCA lo mostraba: el
+     único showModal estaba en la rama de «no hay cuentas». Andaba de casualidad
+     porque siempre se entraba desde la ficha del cliente, que ya lo tenía abierto
+     y le prestaba la ventana. Cuando la venta y el cliente pasaron a pantalla
+     completa el diálogo quedó cerrado y el botón «Registrar cobranza» dejó de
+     hacer nada — sin error en la consola, porque no hay error: se arma el
+     formulario y no se ve. Lo encontró Gustavo probando la v145.
+     La regla que deja: una función que dibuja no puede depender de la ventana que
+     le dejó abierta quien la llamó. La abre ella. */
+  try{ $("dlg").showModal(); }catch(e){}
 }
 
 /* ─────────── FORMAS DE PAGO DE LA COBRANZA ───────────
