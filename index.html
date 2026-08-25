@@ -57,6 +57,7 @@ button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid transparen
 .b-plata{background:var(--ocre);color:#fff}
 .b-neutro{background:#fff;color:var(--petroleo);border-color:var(--linea)}
 .b-deshacer{background:var(--oxido);color:#fff}
+.b-avanzar{background:#1d5b2c;color:#fff}
 .b-volver{background:var(--grafito);color:#fff}
 .paud{font-size:12px;color:var(--suave);line-height:1.7}
 .calvis b{font-weight:700}
@@ -271,7 +272,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.25-142";
+const VERSION = "v2026.08.25-145";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -750,7 +751,7 @@ function pintarNav(){
     const subs = (SUBMENU[m.id]||[]).filter(x=>!x.perm||tieneAlguno(x.perm));
     /* La ficha del presupuesto es una vista propia («pre_ficha») pero sigue
        siendo Presupuestos: el menú tiene que decir dónde estás. */
-    const acaEstoy = (m.id===VISTA) || (VISTA==="pre_ficha" && m.id==="presup");
+    const acaEstoy = (m.id===VISTA) || (VISTA==="pre_ficha" && m.id==="presup") || (VISTA==="ven_ficha" && m.id==="ventas") || (VISTA==="cli_ficha" && m.id==="clientes");
     if (!subs.length){
       return '<button class="sec-btn '+(acaEstoy?"on":"")+'" data-v="'+m.id+'">'+esc(m.t)+'</button>';
     }
@@ -3446,6 +3447,7 @@ const TABLAS_COPIA = ["asesores","bancos","canales_contacto","cc_movimientos","c
 "facturas_compra","franjas_horarias","gastos","instaladores","leads","listas_precios","localidades",
 "motivos","motivos_anulacion","motivos_stock","movimientos_cuenta","nota_impuestos","notas_cliente",
 "notas_proveedor","objeciones","oc_items","ordenes_compra","origenes","pago_imputaciones","pagos_compra",
+"venta_novedades",
 "perfiles","permisos","precios_por_lista","presupuesto_adicionales","presupuesto_items","presupuestos",
 "productos","prospectos","proveedor_precios","proveedores","pv_movimientos","remito_items","remitos",
 "retiros","rol_permisos","roles","seguimientos","stock_movimientos","sucursales","tags","tipos_cliente",
@@ -4519,25 +4521,31 @@ const REPORTES = [
    /* ── 2. Comisiones de la VL y del ATO ──
       El porcentaje sale del perfil de cada persona. Si está en cero, no suma:
       no se inventa una comisión que nadie acordó. */
-   let sinComis = 0;
+   /* 25/8: la comisión se leía de EQUIPO, que sale de `equipo_visible` y NO
+      trae `comision_pct`: daba SIEMPRE cero y el aviso culpaba a los perfiles.
+      Ahora se lee de `perfiles`, que es donde vive. */
+   let sinComis = 0, sinPermisoComis = false;
+   const idsCom = [];
+   v.forEach(function(x){ if (x.vl_id) idsCom.push(x.vl_id); if (x.ato_id) idsCom.push(x.ato_id); });
+   const mapaCom = await comisionPorPersona(Array.from(new Set(idsCom.map(String))));
+   if (mapaCom === null) sinPermisoComis = true;
    v.forEach(function(x){
      const k = mes(x.fecha)+"|"+(x.moneda||"ARS");
      const neto = Number(x.neto||0);
      let pc = 0, hubo = false;
-     [x.vl_id, x.ato_id].forEach(function(pid){
+     if (mapaCom) [x.vl_id, x.ato_id].forEach(function(pid){
        if (!pid) return;
-       const per = (EQUIPO||[]).find(function(z){ return String(z.id)===String(pid); });
-       const c = per ? Number(per.comision_pct||0) : 0;
+       const c = Number(mapaCom[String(pid)]||0);
        if (c > 0){ pc += c; hubo = true; }
      });
-     if (!hubo && (x.vl_id||x.ato_id)) sinComis++;
+     if (mapaCom && !hubo && (x.vl_id||x.ato_id)) sinComis++;
      tocar(k).comis += neto * pc/100;
    });
 
    /* ── 3. Costo de la mercadería y de la instalación ──
       La instalación se cuenta SOLO en los renglones marcados «con instalación»,
       como pidió Gustavo, y sale del costo por m² del instalador de esa venta. */
-   let sinCosto = 0, sinInstalador = 0;
+   let sinCosto = 0, sinInstalador = 0, sinM2 = 0;
    if (v.length){
      const [it, ins] = await Promise.all([
        sb.from("venta_items").select("venta_id,producto_id,cantidad,unidad,con_instalacion,es_adicional").in("venta_id", v.map(function(x){return x.id;})).limit(5000),
@@ -4563,13 +4571,21 @@ const REPORTES = [
          const cm2 = ins0 ? Number(ins0.costo_m2||0) : 0;
          /* 11/8: el costo del instalador está en pesos. En una venta en USD
             antes se restaba sin convertir — pesos como si fueran dólares. */
-         if (!cm2) sinInstalador++;
+         /* 25/8: y acá estaba el otro error, que venía anotado como pendiente.
+            La cuadrilla cobra por m², y se multiplicaba por la CANTIDAD del
+            renglón, que puede estar en cajas o en unidades: una caja de 2,20 m²
+            pagaba un m². Ahora se convierte con el m² por caja de la ficha
+            (convDe). El renglón que no se puede pasar a m² no se estima: se
+            cuenta aparte y el aviso lo dice. */
+         const m2r = m2DeRenglon(y);
+         if (m2r == null) sinM2++;
+         else if (!cm2) sinInstalador++;
          else if (m === "USD"){
            const c2 = cotizPara(ven.fecha, null, proms) || cot || null;
            if (!c2) sinInstalador++;
-           else acc[k].instal += (cm2 / c2) * Number(y.cantidad||0);
+           else acc[k].instal += (cm2 / c2) * m2r;
          }
-         else acc[k].instal += cm2 * Number(y.cantidad||0);
+         else acc[k].instal += cm2 * m2r;
        }
      });
    }
@@ -4612,8 +4628,10 @@ const REPORTES = [
 
    if (sinCosto)       avisos.push(sinCosto+" renglón(es) de venta sin «Costo USD» en el producto, o sin cotización del dólar en Configuración: ese costo quedó en CERO, así que el margen se lee de más");
    if (sinInstalador)  avisos.push(sinInstalador+" renglón(es) marcados «con instalación» sin costo por m² del instalador o sin cotización para convertirlo: la cuadrilla no se descontó");
+   if (sinM2)          avisos.push(sinM2+" renglón(es) con instalación que no se pueden pasar a m² (el producto no tiene «m² por caja» y no se vende por m²): esa mano de obra no se descontó");
    if (sinFormaPago)   avisos.push(sinFormaPago+" venta(s) sin forma de pago con «Costo %» cargado: se contaron como si la cobranza no costara nada");
    if (sinComis)       avisos.push(sinComis+" venta(s) con vendedora o ATO asignado pero sin comisión cargada en su perfil");
+   if (sinPermisoComis) avisos.push("tu rol no puede leer las comisiones de los perfiles (permiso usuario-consultar): TODAS las comisiones se contaron en cero");
 
    return {cols:[{t:"Mes"},{t:"Moneda"},{t:"Ventas netas",tipo:"m"},{t:"Costo mercadería",tipo:"m"},
                  {t:"Margen bruto",tipo:"m"},{t:"Comisiones",tipo:"m"},{t:"Instalación",tipo:"m"},
@@ -6163,9 +6181,9 @@ async function formRemito(ventaId){
      '<div id="rm_tot" style="margin-top:8px;border:1px solid #d9d2c8;border-radius:8px;padding:10px 12px;background:#faf8f4"></div>'+
      '<div class="f" style="margin-top:8px"><label>Observaciones</label><input id="rm_obs"></div>'+
      '<div class="acciones"><button class="btn" onclick="guardarRemito('+ventaId+')">Registrar remito</button>'+
-     '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>'
+     '<button class="btn2" onclick="volverAFichaVenta('+ventaId+')">Volver a la venta</button></div>'
     : '<div class="muted">Está todo entregado. No queda nada pendiente de esta venta.</div>'+
-      '<div class="acciones"><button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cerrar</button></div>');
+      '<div class="acciones"><button class="btn2" onclick="volverAFichaVenta('+ventaId+')">Volver a la venta</button></div>');
   try{ $("dlg").showModal(); }catch(e){}
   remCalc();
 }
@@ -9394,28 +9412,128 @@ VISTAS.ventas = async function(){
      '</tbody></table></div>' : '<div class="muted">No hay ventas con esos filtros. La primera se genera pasando un presupuesto a estado «Vendido», o con «Nueva».</div>')+'</div>';
   $("vf_btn").onclick = function(){ FVEN={texto:$("vf_txt").value.trim(), desde:$("vf_desde").value, hasta:$("vf_hasta").value, anulados:$("vf_anul").value==="1"}; VISTAS.ventas(); };
 };
+/* ══════════════════════════════════════════════════════════════════════════
+   LA VENTA A PANTALLA COMPLETA (25/8/2026)
+   Pedido de Gustavo: «en Pirka desde el presupuesto o venta en el margen
+   derecho tengo todo para acceder al cliente, a los documentos, a la venta, a
+   los remitos, a todo». Y la razón de fondo: la misma persona usa los dos
+   sistemas, así que si navegan distinto se equivoca en los dos.
+   Relevado pantalla por pantalla en Pirka el 25/8. Estructura de ventas-ver.php:
+   izquierda los datos, derecha Novedades · Totales · Documentos · Acciones ·
+   Auditoría, siempre en el mismo orden, y los nombres de Pirka se respetan.
+   El color significa siempre lo mismo:
+     petróleo = guardar · ocre = plata · verde = avanzar el circuito de ESTA
+     venta · blanco = consultar, imprimir o ir a otro lado · óxido = deshacer ·
+     grafito = volver.
+   ══════════════════════════════════════════════════════════════════════════ */
+let VEN = null;
+let _VOLVER_VEN = null;   /* documento cargado desde la venta: se vuelve a la venta */
+
+/* ¿la base ya tiene el estado de instalado? (migración v76) */
+async function db76(){
+  if (window._db76 !== undefined) return window._db76;
+  const t = await sb.from("ventas").select("instalado").limit(1);
+  window._db76 = !t.error;
+  return window._db76;
+}
+/* ¿la base ya tiene las novedades de la venta? (migración v77) */
+async function db77(){
+  if (window._db77 !== undefined) return window._db77;
+  const t = await sb.from("venta_novedades").select("id").limit(1);
+  window._db77 = !t.error;
+  return window._db77;
+}
+
 async function fichaVenta(id){
   const [v,i] = await Promise.all([
     sb.from("ventas").select("*").eq("id",id).single(),
     sb.from("venta_items").select("*").eq("venta_id",id).order("id")
   ]);
   if (v.error) return alert(v.error.message);
-  const ve = v.data, items = i.data||[];
   await db56();
+  await db76();
   if (P("cliente-consultar") && !CLIS.length) await cargarClientes();
   /* Las medidas salen de la ficha del producto: si el catálogo no está cargado,
      la venta mostraría unidades sin metros. */
   if (!PRODS.length) await cargarCatalogo();
-  const cli = CLIS.find(x=>x.id===ve.cliente_id);
-  $("dtit").textContent = ve.codigo + " · " + (cli?cli.nombre:"");
-  $("dbody").innerHTML = '<div id="vnmsg"></div>'+
+
+  /* El SALDO de esta venta sale de v_saldos_venta, que es lo que calcula la
+     base cruzando la deuda con lo imputado de cada cobranza. No se suma acá:
+     un dato se calcula en un solo lugar. */
+  let saldo = null;
+  try{
+    const s = await sb.from("v_saldos_venta").select("saldo").eq("venta_id",id).limit(1);
+    if (!s.error && (s.data||[]).length) saldo = Number(s.data[0].saldo||0);
+  }catch(e){}
+
+  let novedades = [];
+  if (await db77()){
+    const n = await sb.from("venta_novedades").select("*").eq("venta_id",id)
+                      .order("fecha",{ascending:false}).order("id",{ascending:false});
+    novedades = n.data||[];
+  }
+
+  let docs = [];
+  try{
+    if (await db27()){
+      if (!DOCS.length) await cargarDocs();
+      docs = DOCS.filter(function(x){ return String(x.venta_id)===String(id) && !x.anulado; });
+    }
+  }catch(e){}
+
+  let remitos = [];
+  try{
+    const r = await sb.from("remitos").select("id,codigo,anulado").eq("venta_id",id);
+    remitos = (r.data||[]).filter(function(x){ return !x.anulado; });
+  }catch(e){}
+
+  VEN = {cab:v.data, items:i.data||[], saldo:saldo, novedades:novedades, docs:docs, remitos:remitos};
+  /* Pantalla completa, no ventana modal. VISTA propia, igual que el presupuesto:
+     así el listado no se repinta por encima de la ficha. */
+  VISTA = "ven_ficha"; SUBVISTA = "";
+  try{ $("dlg").close(); }catch(e){}
+  pintarNav();
+  pintarFichaVenta();
+  window.scrollTo({top:0,behavior:"instant"});
+}
+VISTAS.ven_ficha = function(){ if (VEN) pintarFichaVenta(); else ir("ventas"); };
+
+/* Volver desde la ficha de la venta. No hay nada sin guardar que se pueda
+   perder —la venta ya existe— así que no pregunta. */
+function volverDeVenta(){ VEN = null; ir("ventas"); }
+
+/* Un modal abierto encima de la venta (remito, cobranza, documento) que se
+   cierra tiene que dejar la ficha al día: lo que se hizo adentro cambió el
+   entregado, el saldo o los papeles. */
+function volverAFichaVenta(id){
+  try{ $("dlg").close(); }catch(e){}
+  if (VISTA === "ven_ficha") fichaVenta(id);
+}
+
+function pintarFichaVenta(){
+  const ve = VEN.cab, items = VEN.items, m = ve.moneda || "ARS";
+  const cli = CLIS.find(function(x){ return x.id === ve.cliente_id; });
+  const puede = P("venta-agregar") && !ve.anulado;
+  const d = puede ? "" : "disabled";
+  const cot = Number(ve.cotizacion_usd||0) || Number(cfg("cotizacion_usd",0)) || 0;
+  const enPesos = (m === "USD" && cot > 0);
+  const instalado = !!(window._db76 && ve.instalado);
+  const cerrada = String(ve.estado||"") === "Cerrada";
+
+  /* ── La columna de la izquierda: los datos, sin un solo botón de acción ── */
+  const cuerpo = '<div id="vnmsg"></div>'+
    (ve.anulado?'<div class="msg err">Venta <b>anulada</b> el '+fmtF(ve.anulado_en)+'. Motivo: '+esc(ve.motivo_anulacion)+'. La deuda en cuenta corriente quedó revertida.</div>':'')+
+   (instalado?'<div class="msg ok">Marcada como <b>instalada</b> el '+fmtF(ve.instalado_en)+(ve.instalado_por?' por '+esc(quienEs(ve.instalado_por)):'')+'.</div>':'')+
    '<div class="sec">Datos</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><div>'+fmtF(ve.fecha)+'</div></div>'+
-     '<div class="f"><label>Cliente</label><div>'+esc(cli?cli.nombre:("#"+ve.cliente_id))+'</div></div>'+
-     '<div class="f"><label>Moneda</label><div>'+esc(ve.moneda)+'</div></div>'+
-     '<div class="f"><label>Total</label><div><b>'+fmtM(ve.total,ve.moneda)+'</b> (neto '+fmtM(ve.neto,ve.moneda)+' + IVA '+fmtM(ve.iva,ve.moneda)+')</div></div>'+
+     '<div class="f"><label>Cliente</label><div>'+esc(cli?cli.nombre:("#"+ve.cliente_id))+
+       (cli && P("cliente-consultar")?' <button class="btn2 btn-sm" onclick="fichaCliente('+cli.id+')" title="Ficha del cliente">ficha</button>':'')+'</div></div>'+
+     '<div class="f"><label>Moneda</label><div>'+esc(ve.moneda)+(enPesos?' <span class="muted">· a $ '+fmtN(cot)+' por dólar</span>':'')+'</div></div>'+
+     '<div class="f"><label>Estado</label><div>'+esc(ve.estado||"En curso")+'</div></div>'+
    '</div>'+
+   (ve.presupuesto_id && P("presupuesto-consultar")
+     ? '<div class="muted" style="margin:2px 0 10px">Proviene del presupuesto <a href="#" onclick="abrirPresupuesto('+ve.presupuesto_id+');return false;"><b>#'+esc(ve.presupuesto_id)+'</b></a>.</div>'
+     : '')+
    '<div class="sec">Renglones</div>'+
    '<div class="tablewrap"><table><thead><tr><th>Descripción</th><th>Cant.</th><th>Un.</th><th>Medida</th><th>Precio</th><th>IVA %</th><th>Entregado</th></tr></thead><tbody>'+
    items.map(function(x){
@@ -9423,7 +9541,7 @@ async function fichaVenta(id){
      return '<tr'+(x.es_adicional?' style="background:#f8f6f2"':'')+'><td style="white-space:normal;min-width:220px">'+esc(x.descripcion)+(x.es_adicional?' <span class="muted">(adicional)</span>':'')+(x.con_instalacion?' <span class="pill ok">Instalado</span>':'')+'</td>'+
      '<td>'+fmtN(x.cantidad)+'</td><td>'+esc(x.unidad)+'</td>'+
      '<td>'+(mr?'<b>'+mr+'</b>':'<span class="muted">—</span>')+'</td>'+
-     '<td>'+fmtM(x.precio_unit,ve.moneda)+'</td><td>'+fmtN(x.iva_pct)+'</td>'+
+     '<td>'+fmtM(x.precio_unit,m)+'</td><td>'+fmtN(x.iva_pct)+'</td>'+
      '<td>'+(x.es_adicional?'<span class="muted">—</span>':
         '<b>'+fmtN(x.entregado)+'</b> de '+fmtN(x.cantidad)+' '+esc(x.unidad)+
         (mr? '<div class="muted" style="font-size:11px">'+me+' de '+mr+'</div>':''))+'</td></tr>';
@@ -9437,35 +9555,499 @@ async function fichaVenta(id){
    '</tbody></table></div>'+
    '<div class="muted" style="margin-top:6px">«Entregado» lo llevan los remitos: cada remito parcial suma acá, y anular un remito lo resta.</div>'+
    '<div class="sec">Entrega e instalación</div>'+
-   '<div class="muted" style="margin-bottom:8px">De acá sale el reporte de entregas e instalaciones planificadas que usa el depósito y la cuadrilla.</div>'+
+   '<div class="muted" style="margin-bottom:8px">De acá sale el reporte de entregas e instalaciones planificadas que usa el depósito y la cuadrilla. El botón para guardarlo está en la columna de la derecha.</div>'+
    '<div class="grid">'+
-     '<div class="f"><label>Fecha de entrega</label><input type="date" id="ve_entrega" value="'+(ve.fecha_entrega||"")+'" '+(P("venta-agregar")?"":"disabled")+'></div>'+
-     '<div class="f"><label>Horario de entrega</label><input id="ve_horario" value="'+esc(ve.horario_entrega)+'" placeholder="9 a 12" '+(P("venta-agregar")?"":"disabled")+'></div>'+
-     '<div class="f"><label>Fecha de instalación</label><input type="date" id="ve_instalacion" value="'+(ve.fecha_instalacion||"")+'" '+(P("venta-agregar")?"":"disabled")+'></div>'+
+     '<div class="f"><label>Fecha de entrega</label><input type="date" id="ve_entrega" value="'+(ve.fecha_entrega||"")+'" '+d+'></div>'+
+     '<div class="f"><label>Horario de entrega</label><input id="ve_horario" value="'+esc(ve.horario_entrega)+'" placeholder="9 a 12" '+d+'></div>'+
+     '<div class="f"><label>Fecha de instalación</label><input type="date" id="ve_instalacion" value="'+(ve.fecha_instalacion||"")+'" '+d+'></div>'+
      /* 16/8, v66: el instalador sale de la MAESTRA de instaladores, que es donde
       vive la cuadrilla con su costo por m2. Antes salia del equipo de usuarios
       del sistema: los instaladores reales no son usuarios, asi que no aparecian
       en la lista y el campo quedaba vacio siempre — y el Estado de resultado
       buscaba el costo cruzando un uuid contra un bigint, asi que el costo de la
       mano de obra nunca se restaba. */
-     '<div class="f"><label>Instalador</label><select id="ve_instalador" '+(P("venta-agregar")?"":"disabled")+'>'+selOpts(M.ins||[], ve.instalador_id)+'</select></div>'+
-     '<div class="f"><label>Colocador avisado</label><select id="ve_notificado" '+(P("venta-agregar")?"":"disabled")+'><option value="0" '+(ve.notificado_colocador?"":"selected")+'>No</option><option value="1" '+(ve.notificado_colocador?"selected":"")+'>Sí</option></select></div>'+
-     '<div class="f"><label>Estado de la venta</label><select id="ve_estado" '+(P("venta-cerrar")?"":"disabled")+'>'+selTxt(["En curso","Pendiente a cerrar","Cerrada"], ve.estado)+'</select></div>'+
+     '<div class="f"><label>Instalador</label><select id="ve_instalador" '+d+'>'+selOpts(M.ins||[], ve.instalador_id)+'</select></div>'+
+     '<div class="f"><label>Colocador avisado</label><select id="ve_notificado" '+d+'><option value="0" '+(ve.notificado_colocador?"":"selected")+'>No</option><option value="1" '+(ve.notificado_colocador?"selected":"")+'>Sí</option></select></div>'+
+     '<div class="f"><label>Estado de la venta</label><select id="ve_estado" '+(P("venta-cerrar")&&!ve.anulado?"":"disabled")+'>'+selTxt(["En curso","Pendiente a cerrar","Cerrada"], ve.estado)+'</select></div>'+
    '</div>'+
    /* 11/8, Gustavo: nota interna en la venta, que NO sale en la impresión. */
    (window._db56
      ? '<div class="f"><label>Nota interna <span class="muted" style="font-size:.85em">(no sale en la impresión ni en el PDF)</span></label>'+
-       '<textarea id="ve_nota_interna" rows="2" '+(P("venta-agregar")?"":"disabled")+'>'+esc(ve.nota_interna)+'</textarea></div>'
+       '<textarea id="ve_nota_interna" rows="2" '+d+'>'+esc(ve.nota_interna)+'</textarea></div>'
      : '')+
-   (P("venta-agregar")?'<div class="acciones" style="margin-bottom:6px"><button class="btn2 btn-sm" onclick="guardarEntrega('+ve.id+')">Guardar entrega, instalación y estado</button></div>':'')+
-   '<div class="acciones">'+
-     (ve.presupuesto_id?'<button class="btn2" onclick="abrirPresupuesto('+ve.presupuesto_id+')">Ver el presupuesto</button>':'')+
-     (cli?'<button class="btn2" onclick="fichaCliente('+cli.id+')">Ver el cliente</button>':'')+
-     '<button class="btn2" onclick="imprimirVenta('+ve.id+')">Imprimir / PDF</button>'+
-     (!ve.anulado && P("venta-remito")?'<button class="btn2" onclick="formRemito('+ve.id+')">Remito de entrega</button>':'')+
-     (!ve.anulado && P("venta-anular")?'<button class="btn2" onclick="anularVenta('+ve.id+')">Anular venta</button>':'')+
-   '</div>';
+   (ve.anulado?'':(puede?'':'<div class="muted" style="margin-top:10px">Tu rol consulta las ventas y no las modifica.</div>'));
+
+  /* ── La columna de la derecha ── */
+  const lateral = tarjetaNovedadesVen() + tarjetaTotalesVen() + tarjetaDocsVen() +
+    tarjetaAccionesVen() + tarjetaAuditoriaVen();
+
+  $("main").innerHTML =
+    '<div class="panel" style="margin-bottom:12px"><h2>'+
+      esc((ve.codigo||"Venta")+(cli?" · "+cli.nombre:""))+'</h2>'+
+      '<div class="desc">'+(ve.anulado?'Venta anulada.':'Venta '+esc(ve.estado||"En curso")+'.')+
+      ' Los botones están en la columna de la derecha.</div></div>'+
+    '<div class="prewrap"><div class="panel" style="margin:0">'+cuerpo+'</div>'+
+    '<div class="preside">'+lateral+'</div></div>';
+}
+
+/* ── Tarjeta: Novedades ── */
+function tarjetaNovedadesVen(){
+  const ve = VEN.cab;
+  if (!window._db77){
+    return '<div class="pcard"><h3>Novedades</h3><div class="in"><div class="muted" style="font-size:12px">'+
+      'Falta correr la migración <b>v77</b> (la tabla «venta_novedades»). Hasta entonces la bitácora de la venta no se puede cargar.'+
+      '</div></div></div>';
+  }
+  const lista = (VEN.novedades||[]);
+  return '<div class="pcard"><h3>Novedades</h3><div class="in">'+
+    (lista.length
+      ? '<div style="max-height:190px;overflow:auto;margin-bottom:8px">'+lista.map(function(x){
+          return '<div style="border-bottom:1px solid var(--linea);padding:5px 0;font-size:12.5px;line-height:1.45">'+
+            '<div class="muted" style="font-size:11px">'+fmtF(x.fecha)+' · '+esc(quienEs(x.creado_por))+'</div>'+
+            esc(x.texto).replace(/\n/g,"<br>")+'</div>';
+        }).join("")+'</div>'
+      : '<div class="muted" style="font-size:12px;margin-bottom:8px">Sin novedades todavía.</div>')+
+    (P("venta-agregar") ? '<div class="pacc"><button class="b-neutro" onclick="novedadAgregar()">Agregar novedad</button></div>' : '')+
+    '</div></div>';
+}
+
+/* La novedad no se edita ni se borra: es la bitácora de la obra. Si algo se
+   escribió mal, se escribe otra novedad que lo aclare. */
+async function novedadAgregar(){
+  if (!VEN) return;
+  const t = prompt("Novedad de "+(VEN.cab.codigo||"la venta")+":\n\nQueda con la fecha y tu nombre, y no se borra.");
+  if (t === null) return;
+  const txt = String(t).trim();
+  if (!txt) return;
+  const r = await sb.from("venta_novedades").insert({venta_id:VEN.cab.id, texto:txt, fecha:hoy()}).select("id");
+  if (r.error) return alert(r.error.message);
+  await fichaVenta(VEN.cab.id);
+}
+
+/* ── Tarjeta: Totales, con el SALDO ── */
+function tarjetaTotalesVen(){
+  const ve = VEN.cab, m = ve.moneda||"ARS";
+  const cot = Number(ve.cotizacion_usd||0) || Number(cfg("cotizacion_usd",0)) || 0;
+  const enPesos = (m === "USD" && cot > 0);
+  const fila = function(rot, val){ return '<div class="ptot"><span>'+rot+'</span><span>'+val+'</span></div>'; };
+  let saldoHtml = '';
+  if (VEN.saldo != null){
+    const s = Number(VEN.saldo||0);
+    const col = s > 0.009 ? 'var(--oxido)' : '#1d5b2c';
+    saldoHtml = '<div class="ptot" style="border-top:1px solid '+col+';margin-top:6px;padding-top:7px;color:'+col+';font-weight:700">'+
+      '<span>Saldo</span><span>'+(s > 0.009 ? fmtM(s,m) : (s < -0.009 ? "a favor "+fmtM(-s,m) : "cobrada"))+'</span></div>';
+  }
+  return '<div class="pcard"><h3>Totales</h3><div class="in">'+
+    fila('Neto', fmtM(ve.neto,m))+
+    fila('IVA', fmtM(ve.iva,m))+
+    '<div class="ptot big"><span>TOTAL</span><span>'+fmtM(ve.total,m)+'</span></div>'+
+    (enPesos? '<div class="ptot pesos"><span>En pesos</span><span>'+fmtM(Number(ve.total||0)*cot,"ARS")+'</span></div>' : '')+
+    saldoHtml+
+    '</div></div>';
+}
+
+/* ── Tarjeta: Documentos ──
+   A diferencia del presupuesto, acá SÍ se puede: `documentos.venta_id` existe
+   desde el bloque C del 16/8. */
+function tarjetaDocsVen(){
+  const ve = VEN.cab;
+  const lista = VEN.docs||[];
+  return '<div class="pcard"><h3>Documentos</h3><div class="in">'+
+    (lista.length
+      ? '<div style="margin-bottom:8px">'+lista.map(function(x){
+          return '<div style="font-size:12.5px;padding:3px 0;border-bottom:1px solid var(--linea)">'+
+            '<a href="#" onclick="abrirDocumento('+x.id+');return false;">'+esc(x.nombre||x.codigo)+'</a></div>';
+        }).join("")+'</div>'
+      : '<div class="muted" style="font-size:12px;margin-bottom:8px">Sin papeles colgados de esta venta.</div>')+
+    (P("documento-agregar")
+      ? '<div class="pacc"><button class="b-neutro" onclick="docDesdeVenta()">Agregar documento</button></div>'
+      : '')+
+    '</div></div>';
+}
+function docDesdeVenta(){
+  if (!VEN) return;
+  _VOLVER_VEN = VEN.cab.id;
+  formDocumento(null, {venta_id: VEN.cab.id});
+}
+
+/* ── Tarjeta: Acciones. El orden y los nombres son los de Pirka ── */
+function tarjetaAccionesVen(){
+  const ve = VEN.cab, id = ve.id;
+  const puede = P("venta-agregar") && !ve.anulado;
+  const cli = CLIS.find(function(x){ return x.id === ve.cliente_id; });
+  const instalado = !!(window._db76 && ve.instalado);
+  const cerrada = String(ve.estado||"") === "Cerrada";
+  let h = '<div class="pcard"><h3>Acciones</h3><div class="in pacc">';
+  /* Guardar: en Pirka la venta se edita en otra pantalla y acá dice «Editar».
+     En Yaten los campos de entrega se editan en la misma pantalla, así que el
+     equivalente es Guardar — y va arriba, donde en Pirka está Editar. */
+  if (puede || (P("venta-cerrar") && !ve.anulado))
+    h += '<button class="b-guardar" onclick="guardarEntrega('+id+')">Guardar entrega, instalación y estado</button>';
+  h += '<button class="b-neutro" onclick="ventaCostos()">Costos</button>';
+  h += '<button class="b-neutro" onclick="imprimirVenta('+id+')">Imprimir</button>';
+  h += '<button class="b-neutro" onclick="formMailVenta()">Enviar por Email</button>';
+  if (cli && P("venta-cobranza") && !ve.anulado){
+    h += '<div class="sep"></div>';
+    h += '<button class="b-plata" onclick="credDebDesdeVenta()">Registrar crédito/débito</button>';
+    h += '<button class="b-plata" onclick="cobranzaDesdeVenta()">Registrar cobranza</button>';
+  }
+  if (!ve.anulado && P("venta-anular"))
+    h += '<div class="sep"></div><button class="b-deshacer" onclick="anularVenta('+id+')">Anular venta</button>';
+  if (!ve.anulado && P("venta-remito"))
+    h += '<div class="sep"></div><button class="b-avanzar" onclick="formRemito('+id+')">Remito</button>';
+  if (!ve.anulado && P("venta-cerrar")){
+    h += (window._db76
+      ? (instalado
+          ? '<button class="b-neutro" onclick="marcarInstalado(false)">Deshacer «instalado»</button>'
+          : '<button class="b-avanzar" onclick="marcarInstalado(true)">Marcar como instalado</button>')
+      : '<button class="b-neutro" disabled title="Falta correr la migración v76">Marcar como instalado</button>');
+    if (!cerrada) h += '<button class="b-avanzar" onclick="cerrarVenta()">Cerrar</button>';
+  }
+  if (cli){
+    h += '<div class="sep"></div>';
+    if (P("presupuesto-agregar")) h += '<button class="b-neutro" onclick="presupuestoDesdeCliente('+cli.id+')">Nuevo Presupuesto</button>';
+    if (P("venta-agregar"))       h += '<button class="b-neutro" onclick="formVentaNueva('+cli.id+')">Nueva Venta</button>';
+  }
+  h += '<div class="sep"></div><button class="b-volver" onclick="volverDeVenta()">Volver</button>';
+  return h + '</div></div>';
+}
+
+/* ── Tarjeta: Auditoría ── */
+function tarjetaAuditoriaVen(){
+  const ve = VEN.cab;
+  if (ve.creado_en === undefined && ve.creado_por === undefined) return "";
+  return '<div class="pcard"><h3>Auditoría</h3><div class="in paud">'+
+    'Creado el '+fmtF(ve.creado_en)+(ve.creado_por?' por '+esc(quienEs(ve.creado_por)):'')+
+    (ve.anulado? '<br>Anulada el '+fmtF(ve.anulado_en)+(ve.anulado_por?' por '+esc(quienEs(ve.anulado_por)):'') : '')+
+    (window._db76 && ve.instalado? '<br>Instalada el '+fmtF(ve.instalado_en)+(ve.instalado_por?' por '+esc(quienEs(ve.instalado_por)):'') : '')+
+    '</div></div>';
+}
+
+/* ── Marcar como instalado (migración v76) ──
+   Es un hecho del mundo con fecha y responsable, no la fecha planificada de
+   instalación: por eso es una columna propia y no se deduce de fecha_instalacion.
+   Y toda operación tiene que poder deshacerse. */
+async function marcarInstalado(valor){
+  if (!VEN) return;
+  if (!window._db76) return alert("Falta correr la migración v76 en la base.");
+  if (valor && !confirm("¿Marcar "+(VEN.cab.codigo||"esta venta")+" como INSTALADA?\n\nQueda con la fecha de hoy y tu nombre. Se puede deshacer."))
+    return;
+  if (!valor && !confirm("¿Deshacer la marca de instalada?")) return;
+  const r = await sb.rpc("marcar_instalado_venta", {p_id: VEN.cab.id, p_valor: !!valor});
+  if (r.error) return alert(r.error.message);
+  await fichaVenta(VEN.cab.id);
+}
+
+/* ── Cerrar la venta ──
+   Mismo camino que el desplegable de estado: una sola forma de hacer la misma
+   operación. El botón existe porque en Pirka está, y porque un estado que hay
+   que ir a buscar en un desplegable no se usa. */
+async function cerrarVenta(){
+  if (!VEN) return;
+  const ve = VEN.cab;
+  const pend = (VEN.items||[]).filter(function(x){
+    return !x.es_adicional && Number(x.entregado||0) < Number(x.cantidad||0);
+  });
+  let aviso = "¿Cerrar "+(ve.codigo||"esta venta")+"?";
+  if (pend.length) aviso += "\n\nOJO: quedan "+pend.length+" renglón(es) sin entregar del todo.";
+  if (VEN.saldo != null && Number(VEN.saldo) > 0.009)
+    aviso += "\n\nOJO: la venta todavía tiene saldo de "+fmtM(VEN.saldo, ve.moneda||"ARS")+".";
+  aviso += "\n\nSe puede volver a abrir cambiando el estado.";
+  if (!confirm(aviso)) return;
+  const r = await sb.rpc("cambiar_estado_venta", {p_id: ve.id, p_estado: "Cerrada"});
+  if (r.error) return alert(r.error.message);
+  await fichaVenta(ve.id);
+}
+
+/* ── Registrar cobranza y crédito/débito desde la venta ──
+   Las dos operaciones viven en la cuenta corriente, que es del cliente. Desde
+   acá se abren con el cliente cargado y ESTA venta ya elegida.
+   25/8, v78: el crédito/débito ahora sí puede imputarse a la venta —decisión de
+   Gustavo— y el desplegable deja elegir «ninguna», que es lo que hacía antes. */
+function cobranzaDesdeVenta(){
+  if (!VEN || !VEN.cab.cliente_id) return;
+  _VOLVER_VEN = VEN.cab.id;
+  formCobranza(VEN.cab.cliente_id);
+}
+function credDebDesdeVenta(){
+  if (!VEN || !VEN.cab.cliente_id) return;
+  _VOLVER_VEN = VEN.cab.id;
+  /* se le pasa la VENTA, no su código: el formulario la preselecciona en el
+     desplegable de imputación (v78). */
+  formCredDeb(VEN.cab.cliente_id, VEN.cab.id);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COSTOS DE LA VENTA (25/8/2026)
+   El botón «Costos» de Pirka. Muestra lo que cuesta ESTA venta, con la misma
+   cascada del Estado de resultado: mercadería, cuadrilla, comisiones y
+   financiación. Lo que no se puede calcular queda en CERO y se avisa — no se
+   estima.
+   Acá se arregla el pendiente del hilo anterior: el costo de la cuadrilla se
+   cobra por m² y se venía multiplicando por la CANTIDAD del renglón, que puede
+   estar en cajas o en unidades. Ahora se convierte con el m² por caja de la
+   ficha (convDe), y el renglón que no se puede convertir a m² se cuenta aparte
+   en vez de inventar un número.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── La comisión de cada persona ──
+   25/8: apareció armando los costos de la venta. `EQUIPO` sale de la vista
+   `equipo_visible`, que trae id, nombre, usuario, rol y activo — NO trae
+   `comision_pct`. El Estado de resultado la buscaba ahí, así que la comisión
+   daba SIEMPRE cero y el aviso culpaba a los perfiles por no tenerla cargada.
+   La comisión vive en `perfiles` y se lee con usuario-consultar. Si el rol no
+   lo tiene, devuelve null y quien llama lo avisa en vez de contar cero. */
+async function comisionPorPersona(ids){
+  const limpios = (ids||[]).filter(Boolean).map(String);
+  if (!limpios.length) return {};
+  try{
+    const r = await sb.from("perfiles").select("id,comision_pct").in("id", limpios);
+    if (r.error) return null;
+    const m = {};
+    (r.data||[]).forEach(function(x){ m[String(x.id)] = Number(x.comision_pct||0); });
+    return m;
+  }catch(e){ return null; }
+}
+
+/* Los m² de un renglón. Si el renglón ya se vende por m², la cantidad ES la
+   medida. Si no, se convierte con el m² por caja. Lo que no se puede convertir
+   devuelve null: el que llama tiene que avisarlo, no redondearlo a cero. */
+function m2DeRenglon(x){
+  const cant = Number(x.cantidad||0);
+  if (!cant) return 0;
+  if (unidadMedida(x.unidad) === "m²") return cant;
+  const c = convDe(PRODS.find(function(y){ return String(y.id)===String(x.producto_id); }));
+  if (c && c.um === "m²") return cant * c.factor;
+  return null;
+}
+
+async function ventaCostos(){
+  if (!VEN) return;
+  const ve = VEN.cab, items = VEN.items, m = ve.moneda||"ARS";
+  $("dtit").textContent = "Costos · " + (ve.codigo||"");
+  $("dbody").innerHTML = '<div class="muted">Calculando…</div>';
   try{ $("dlg").showModal(); }catch(e){}
+
+  if (!PRODS.length) await cargarCatalogo();
+  const cot = Number(ve.cotizacion_usd||0) || Number(cfg("cotizacion_usd",0)) || 0;
+  const avisos = [];
+
+  /* la maestra de instaladores, que es donde vive el costo por m² */
+  let inst = null;
+  try{
+    const q = await sb.from("instaladores").select("id,nombre,costo_m2").eq("id", ve.instalador_id||-1).limit(1);
+    if (!q.error && (q.data||[]).length) inst = q.data[0];
+  }catch(e){}
+
+  /* 1. Mercadería, renglón por renglón */
+  const filas = [];
+  let costoMerc = 0, sinCosto = 0;
+  items.forEach(function(x){
+    const facturado = Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100);
+    if (x.es_adicional){
+      filas.push({desc:x.descripcion+" (adicional)", cant:null, fact:facturado, costo:null, nota:"adicional: no tiene costo de mercadería"});
+      return;
+    }
+    const pr = PRODS.find(function(z){ return z.id === x.producto_id; });
+    const cu = pr ? Number(pr.costo_usd||0) : 0;
+    let c = null;
+    if (!cu) { sinCosto++; }
+    else if (m === "USD") c = cu * Number(x.cantidad||0);
+    else if (cot > 0)     c = cu * cot * Number(x.cantidad||0);
+    else { sinCosto++; }
+    if (c != null) costoMerc += c;
+    filas.push({desc:x.descripcion, cant:Number(x.cantidad||0)+" "+(x.unidad||""), fact:facturado, costo:c,
+                nota: c==null ? (cu ? "sin cotización del dólar" : "el producto no tiene «Costo USD» cargado") : ""});
+  });
+
+  /* 2. Cuadrilla: por m², convertidos de verdad */
+  let costoInst = 0, m2Inst = 0, sinConvertir = [];
+  const cm2 = inst ? Number(inst.costo_m2||0) : 0;
+  items.filter(function(x){ return x.con_instalacion; }).forEach(function(x){
+    const m2 = m2DeRenglon(x);
+    if (m2 == null){ sinConvertir.push(x.descripcion); return; }
+    m2Inst += m2;
+  });
+  if (m2Inst > 0){
+    if (!inst) avisos.push("la venta no tiene instalador cargado, así que la mano de obra no se descontó");
+    else if (!cm2) avisos.push("el instalador «"+esc(inst.nombre)+"» no tiene costo por m² cargado: la cuadrilla no se descontó");
+    else if (m === "USD" && !(cot > 0)) avisos.push("el costo del instalador está en pesos y no hay cotización para pasarlo a dólares: la cuadrilla no se descontó");
+    else costoInst = (m === "USD") ? (cm2 / cot) * m2Inst : cm2 * m2Inst;
+  }
+  if (sinConvertir.length)
+    avisos.push(sinConvertir.length+" renglón(es) con instalación no se pueden pasar a m² (el producto no tiene «m² por caja» y no se vende por m²): "+
+      esc(sinConvertir.slice(0,3).join(" · "))+(sinConvertir.length>3?" …":""));
+
+  /* 3. Comisiones de la VL y del ATO, del perfil de cada una */
+  let comis = 0, pcTot = 0;
+  const mapaCom = await comisionPorPersona([ve.vl_id, ve.ato_id]);
+  if (mapaCom === null){
+    avisos.push("tu rol no puede leer las comisiones de los perfiles (permiso usuario-consultar): la comisión se contó CERO");
+  } else {
+    [ve.vl_id, ve.ato_id].forEach(function(pid){
+      if (!pid) return;
+      const c = Number(mapaCom[String(pid)]||0);
+      if (c > 0) pcTot += c;
+    });
+    if (!pcTot && (ve.vl_id || ve.ato_id)) avisos.push("la vendedora o el ATO de esta venta no tienen comisión cargada en su perfil: se contó cero");
+  }
+  comis = Number(ve.neto||0) * pcTot/100;
+
+  /* 4. Financiación: del «Costo %» de la forma de pago del presupuesto */
+  let finan = 0, mpNom = "";
+  if (ve.presupuesto_id && M.mpg){
+    try{
+      const p = await sb.from("presupuestos").select("medio_pago_pref_id").eq("id", ve.presupuesto_id).limit(1);
+      const mpid = (p.data||[]).length ? p.data[0].medio_pago_pref_id : null;
+      const mp = (M.mpg||[]).find(function(z){ return String(z.id)===String(mpid); });
+      if (mp){ mpNom = mp.nombre; finan = Number(ve.neto||0) * Number(mp.costo_pct||0)/100; }
+    }catch(e){}
+  }
+  if (!finan) avisos.push("sin forma de pago con «Costo %» cargado: la financiación se contó como si no costara nada");
+  if (sinCosto) avisos.push(sinCosto+" renglón(es) sin «Costo USD» en el producto: ese costo quedó en CERO y el margen se lee de más");
+
+  const neto = Number(ve.neto||0);
+  const bruto = neto - costoMerc;
+  const contrib = bruto - costoInst - comis - finan;
+  const pc = function(v){ return neto>0 ? " <span class='muted'>("+fmtN(Math.round(v/neto*1000)/10)+"%)</span>" : ""; };
+  const r = function(rot, val, estilo){
+    return '<tr><td'+(estilo||'')+'>'+rot+'</td><td style="text-align:right'+(estilo?';font-weight:700':'')+'">'+val+'</td></tr>';
+  };
+
+  $("dbody").innerHTML =
+    '<div class="desc">Lo que cuesta <b>'+esc(ve.codigo||"")+'</b>, con la misma cascada del Estado de resultado. '+
+      'Lo que no se puede calcular queda en cero y se avisa: no se estima.</div>'+
+    '<div class="sec">Renglón por renglón</div>'+
+    '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Descripción</th><th>Cantidad</th><th style="text-align:right">Facturado</th><th style="text-align:right">Costo</th><th></th></tr></thead><tbody>'+
+      filas.map(function(f){
+        return '<tr><td style="white-space:normal">'+esc(f.desc)+'</td><td>'+(f.cant||"—")+'</td>'+
+          '<td style="text-align:right">'+fmtM(f.fact,m)+'</td>'+
+          '<td style="text-align:right">'+(f.costo==null?'<span class="muted">—</span>':fmtM(f.costo,m))+'</td>'+
+          '<td class="muted" style="white-space:normal;font-size:11px">'+esc(f.nota||"")+'</td></tr>';
+      }).join("")+
+    '</tbody></table></div>'+
+    '<div class="sec">La cuenta</div>'+
+    '<div class="tablewrap"><table><tbody>'+
+      r('Venta neta', fmtM(neto,m))+
+      r('Costo de la mercadería', '− '+fmtM(costoMerc,m)+pc(costoMerc))+
+      r('<b>Margen bruto</b>', '<b>'+fmtM(bruto,m)+'</b>'+pc(bruto), ' style="border-top:1px solid var(--linea)"')+
+      r('Cuadrilla'+(m2Inst>0?' <span class="muted">('+fmtN(Math.round(m2Inst*100)/100)+' m²'+(cm2?' × '+fmtM(cm2,"ARS")+'/m²':'')+')</span>':''), '− '+fmtM(costoInst,m))+
+      r('Comisiones'+(pcTot?' <span class="muted">('+fmtN(pcTot)+'%)</span>':''), '− '+fmtM(comis,m))+
+      r('Financiación'+(mpNom?' <span class="muted">('+esc(mpNom)+')</span>':''), '− '+fmtM(finan,m))+
+      r('<b>Contribución</b>', '<b>'+fmtM(contrib,m)+'</b>'+pc(contrib), ' style="border-top:2px solid var(--petroleo)"')+
+    '</tbody></table></div>'+
+    '<div class="muted" style="margin-top:6px">No se restan los gastos del negocio: eso es del mes, no de una venta. Están en el reporte <b>Estado de resultado</b>.</div>'+
+    (avisos.length? '<div class="msg err" style="line-height:1.5;margin-top:10px"><b>Ojo, esto no está completo:</b><br>· '+avisos.join('<br>· ')+'</div>' : '')+
+    '<div class="acciones"><button class="btn2" onclick="volverAFichaVenta('+ve.id+')">Volver a la venta</button></div>';
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ENVIAR LA VENTA POR EMAIL
+   Mismo camino que el presupuesto (Edge Function «enviar-mail» desde
+   ventas@): el comprobante va adentro del cuerpo, con el mismo formato que la
+   impresión, y si el envío falla se ofrece abrir el programa de correo.
+   ══════════════════════════════════════════════════════════════════════════ */
+function ventaParaMail(){
+  const ve = VEN.cab, items = VEN.items, m = ve.moneda||"ARS";
+  const cot = Number(ve.cotizacion_usd||0) || Number(cfg("cotizacion_usd",0)) || 0;
+  const enPesos = (m === "USD" && cot > 0);
+  const cli = CLIS.find(function(x){ return x.id === ve.cliente_id; });
+  const bordeCel = 'padding:6px 8px;border-bottom:1px solid #e4e0d9';
+  const th = 'background:'+YAT_PETROLEO+';color:#fff;padding:6px 8px;font-size:10.5px;letter-spacing:.06em;';
+  const linea = [cfg("direccion"), cfg("localidad"), cfg("telefono"), cfg("email"), cfg("web")].filter(Boolean).join(" · ");
+  const totFila = function(rot, val, estilo){
+    return '<tr><td style="text-align:right;padding:3px 8px;'+(estilo||'')+'">'+rot+'</td>'+
+           '<td style="text-align:right;padding:3px 8px;width:140px;'+(estilo||'')+'">'+val+'</td></tr>';
+  };
+  const grande = 'font-size:17px;font-weight:bold;color:'+YAT_PETROLEO+';border-top:2px solid '+YAT_PETROLEO+';padding-top:6px';
+  const pesos  = 'font-weight:bold;color:'+YAT_OXIDO+';border-top:1px solid '+YAT_OXIDO+';padding-top:6px';
+  return '<div style="font:14px/1.5 Georgia,serif;color:#1b2426;max-width:640px;margin:0 auto;padding:18px">'+
+    '<div style="border-bottom:3px solid '+YAT_PETROLEO+';padding-bottom:10px">'+
+      isotipoMail(YAT_PETROLEO)+
+      '<div style="font-size:20px;color:'+YAT_PETROLEO+';letter-spacing:1px;font-weight:bold">'+esc(cfg("razon_social","YATEN REVESTIMIENTOS"))+'</div>'+
+      (linea? '<div style="color:#6b7679;font-size:11px;margin-top:2px">'+esc(linea)+'</div>' : '')+
+    '</div>'+
+    '<div style="background:'+YAT_PETROLEO+';color:#fff;padding:7px 12px;border-radius:5px;font-size:12.5px;margin:12px 0 14px">'+
+      '<b>VENTA '+esc(ve.codigo||"")+'</b> &nbsp;·&nbsp; '+fmtF(ve.fecha)+'</div>'+
+    '<p>Hola '+esc(((cli?cli.nombre:"")||"").split(" ")[0]||"")+', te paso el detalle de tu compra.</p>'+
+    '<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px"><thead><tr>'+
+      '<th style="'+th+'text-align:left">DETALLE</th>'+
+      '<th style="'+th+'text-align:right">CANT.</th>'+
+      '<th style="'+th+'text-align:right">SUBTOTAL</th></tr></thead><tbody>'+
+      items.map(function(x,k){
+        const sub = Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100);
+        return '<tr'+(k%2===1?' style="background:#f7f5f1"':'')+'>'+
+          '<td style="'+bordeCel+'">'+esc(x.descripcion)+(x.con_instalacion?' <b>(instalado)</b>':'')+'</td>'+
+          '<td style="'+bordeCel+';text-align:right">'+fmtN(x.cantidad)+' '+esc(x.unidad||"")+'</td>'+
+          '<td style="'+bordeCel+';text-align:right">'+fmtM(sub,m)+'</td></tr>';
+      }).join("")+
+    '</tbody></table>'+
+    '<table style="width:100%;font-size:14px"><tbody>'+
+      totFila('Neto', fmtM(ve.neto,m))+
+      totFila('IVA', fmtM(ve.iva,m))+
+      totFila('TOTAL', fmtM(ve.total,m), grande)+
+      (enPesos? totFila('TOTAL EN PESOS', fmtM(Number(ve.total||0)*cot,"ARS"), pesos) : '')+
+    '</tbody></table>'+
+    (enPesos? '<p style="font-size:11px;color:#6b7679">Al tipo de cambio de $ '+fmtN(cot)+' por dólar.</p>' : '')+
+    (ve.observaciones? '<p style="font-size:13px">'+esc(ve.observaciones).replace(/\n/g,"<br>")+'</p>' : '')+
+    '<div style="margin-top:20px;padding-top:10px;border-top:2px solid '+YAT_PETROLEO+';font-size:11px;color:#6b7679">'+
+      esc(cfg("pie_presupuesto",""))+'</div>'+
+  '</div>';
+}
+
+function formMailVenta(){
+  if (!VEN) return;
+  const ve = VEN.cab;
+  const cli = CLIS.find(function(x){ return x.id === ve.cliente_id; });
+  $("dtit").textContent = "Enviar por Email · " + (ve.codigo||"");
+  $("dbody").innerHTML =
+    '<div id="mlmsg"></div>'+
+    '<div class="desc">Sale de <b>'+esc(cfg("email","ventas@yatenrevestimientos.com.ar"))+'</b>, no de tu casilla personal. '+
+      'La venta va adentro del mensaje, con el mismo formato que la impresión.</div>'+
+    '<div class="f"><label>Para</label><input id="ml_para" value="'+esc(cli?(cli.email||""):"")+'" placeholder="cliente@ejemplo.com"></div>'+
+    '<div class="f"><label>Copia <span class="muted" style="font-size:.85em">(opcional)</span></label><input id="ml_copia" placeholder="para que le llegue a alguien más"></div>'+
+    '<div class="f"><label>Asunto</label><input id="ml_asunto" value="'+esc((ve.codigo||"Venta")+" — "+cfg("razon_social","Yaten Revestimientos"))+'"></div>'+
+    '<div class="acciones"><button class="btn" id="ml_enviar">Enviar</button>'+
+    '<button class="btn2" onclick="volverAFichaVenta('+ve.id+')">Cancelar</button></div>';
+  $("ml_enviar").onclick = mandarMailVenta;
+  try{ $("dlg").showModal(); }catch(e){}
+}
+
+async function mandarMailVenta(){
+  const para = ($("ml_para").value||"").trim();
+  const copia = ($("ml_copia").value||"").trim();
+  const asunto = ($("ml_asunto").value||"").trim();
+  const msg = function(t){ $("mlmsg").innerHTML = t; };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)){
+    msg('<div class="msg err">Falta la dirección del cliente, o está mal escrita.</div>'); return;
+  }
+  if (!asunto){ msg('<div class="msg err">Poné un asunto.</div>'); return; }
+  const html = ventaParaMail();
+  $("ml_enviar").disabled = true;
+  msg('<div class="msg">Mandando…</div>');
+  let error = null;
+  try{
+    const r = await sb.functions.invoke("enviar-mail", {body:{para:para, copia:copia||null, asunto:asunto, html:html}});
+    if (r.error){
+      error = r.error.message || "no se pudo enviar";
+      if (r.error.context && typeof r.error.context.text === "function"){
+        try{ const t = await r.error.context.text(); const j = JSON.parse(t); if (j && j.error) error = j.error; }catch(e){}
+      }
+    }
+  }catch(e){ error = String(e); }
+  $("ml_enviar").disabled = false;
+  if (!error){
+    msg('<div class="msg ok">Enviado a <b>'+esc(para)+'</b>'+(copia?' con copia a '+esc(copia):'')+'.</div>');
+    return;
+  }
+  const cuerpoTexto = "Te paso el detalle de la venta "+((VEN&&VEN.cab.codigo)||"")+".\n\n(El sistema no pudo mandarlo solo; va desde acá.)";
+  const enlace = "mailto:"+encodeURIComponent(para)+
+    "?subject="+encodeURIComponent(asunto)+
+    (copia? "&cc="+encodeURIComponent(copia) : "")+
+    "&body="+encodeURIComponent(cuerpoTexto);
+  msg('<div class="msg err" style="line-height:1.5"><b>No se pudo enviar desde el sistema.</b><br>'+esc(error)+
+      '<br><br>Podés mandarlo desde tu programa de correo: '+
+      '<a href="'+enlace+'"><b>abrir el correo con el mensaje empezado</b></a>.</div>');
 }
 /* ── Imprimir la venta / hacer el PDF (11/8, Gustavo) ──
    Mismo formato que el presupuesto, para que el cliente reciba siempre la misma
@@ -9551,6 +10133,14 @@ async function guardarEntrega(id){
   }
   const e = await sb.rpc("cambiar_estado_venta",{p_id:id, p_estado:est});
   if (e.error){ $("vnmsg").innerHTML='<div class="msg err">Se guardó la entrega, pero el estado no: '+esc(e.error.message)+'</div>'; return; }
+  /* 25/8: la ficha es una pantalla propia. Se relee la venta de la base —no se
+     confía en lo que quedó en pantalla— y recién después se dice «Guardado».
+     La fila se pide de vuelta, siempre. */
+  if (VISTA==="ven_ficha"){
+    await fichaVenta(id);
+    if ($("vnmsg")) $("vnmsg").innerHTML='<div class="msg ok">Guardado.</div>';
+    return;
+  }
   $("vnmsg").innerHTML='<div class="msg ok">Guardado.</div>';
   if (VISTA==="ventas") VISTAS.ventas();
 }
@@ -10012,9 +10602,10 @@ async function abrirDocumento(id){
 }
 
 let VENTASDOC = [], EMBDOC = [], _VOLVER_EMB = null;
-async function formDocumento(id){
+async function formDocumento(id, pre){
   const d = id ? DOCS.find(x=>x.id===id) : null;
-  const v = k => d ? (d[k]==null?"":d[k]) : "";
+  /* «pre»: papel cargado desde otra ficha (la venta). Solo precarga el vinculo. */
+  const v = k => d ? (d[k]==null?"":d[k]) : ((pre && pre[k]!=null) ? pre[k] : "");
   if (!CLIS.length) await cargarClientes();
   if (!PROVS.length && typeof cargarProveedores === "function") { try{ await cargarProveedores(); }catch(e){} }
   /* Las ventas para poder colgarle un papel a una: se piden solo cuando se abre
@@ -10122,6 +10713,9 @@ async function guardarDocumento(id){
      listado de documentos: el que está armando la carpeta de la importación
      sigue en la importación. */
   if (_VOLVER_EMB){ const e = _VOLVER_EMB; _VOLVER_EMB = null; await fichaEmbarque(e); return; }
+  /* lo mismo desde la venta: el que esta armando la carpeta de la obra sigue en la obra */
+  if (_VOLVER_VEN){ const w = _VOLVER_VEN; _VOLVER_VEN = null; await fichaVenta(w); return; }
+  if (_VOLVER_CLI){ const k = _VOLVER_CLI; _VOLVER_CLI = null; await fichaCliente(k); return; }
   $("dlg").close();
   if (VISTA === "docs") VISTAS.docs();
 }
@@ -10460,15 +11054,51 @@ async function fichaCliente(id, pre){
   let ventasCli = [], remitosCli = [], saldoVenta = {};
   if (c && (await db12()) && P("venta-consultar")){
     const [vv, rr, sv] = await Promise.all([
-      sb.from("ventas").select("id,codigo,fecha,total,moneda,anulado,estado,fecha_entrega").eq("cliente_id",c.id).order("id",{ascending:false}),
+      /* se pide la venta entera: la solapa Ventas muestra «Instalado» (v76) y
+         antes había que acordarse de agregar cada columna nueva acá */
+      sb.from("ventas").select("*").eq("cliente_id",c.id).order("id",{ascending:false}),
       sb.from("remitos").select("*").eq("cliente_id",c.id).order("id",{ascending:false}),
       sb.from("v_saldos_venta").select("venta_id,saldo").eq("cliente_id",c.id)
     ]);
     ventasCli = vv.data||[]; remitosCli = rr.data||[];
+    /* para que la cuenta corriente pueda nombrar la venta a la que se imputó un
+       ajuste sin volver a pedirla */
+    window._VTAS_CLI = ventasCli;
     (sv.data||[]).forEach(x=>{ saldoVenta[x.venta_id] = Number(x.saldo||0); });
   }
+  /* ── Las tres listas que faltaban para «ver todo lo que pasó con el cliente» ──
+     Visitas: hasta la v79 no había forma de llegar del cliente a sus visitas
+     —`prospectos` no tenía `cliente_id`— y la lista habría mostrado solo las que
+     llegaron a presupuesto, sin avisar cuáles faltaban.
+     Novedades: son las de las ventas del cliente, juntas, como en Pirka.
+     Cheques: para el comprobante. Si el rol no los puede ver, la lista queda
+     vacía y el botón no se ofrece; no se rompe nada. */
+  let visitasCli = [], novedadesCli = [], chequesCli = [];
+  if (c){
+    try{
+      const q = await sb.from("prospectos")
+        .select("id,codigo,fecha,estado,resultado,vl_id,ato_id,fecha_visita,hora_visita,direccion,m2_cotizados")
+        .eq("cliente_id", c.id).order("fecha_visita",{ascending:false}).order("id",{ascending:false});
+      if (!q.error) visitasCli = q.data||[];
+    }catch(e){}
+    if (ventasCli.length && (await db77())){
+      try{
+        const q = await sb.from("venta_novedades").select("*").in("venta_id", ventasCli.map(function(x){ return x.id; }))
+                          .order("fecha",{ascending:false}).order("id",{ascending:false});
+        if (!q.error) novedadesCli = q.data||[];
+      }catch(e){}
+    }
+    try{
+      const q = await sb.from("cheques").select("*").eq("cliente_id", c.id).order("vencimiento");
+      if (!q.error) chequesCli = (q.data||[]).filter(function(x){ return !x.anulado; });
+    }catch(e){}
+  }
   $("dtit").textContent = c ? (c.codigo+" · "+c.nombre) : "Cliente nuevo";
-  $("dbody").innerHTML = '<div id="clmsg"></div>'+
+  /* 25/8: el formulario de datos deja de ser TODA la ficha y pasa a ser una
+     solapa. Se arma en una variable y después se decide dónde va: en la ventana
+     modal si el cliente es nuevo (el alta rápida desde la venta sigue igual), o
+     en la solapa «Datos del cliente» de la pantalla completa si ya existe. */
+  const datosHtml = '<div id="clmsg"></div>'+
    '<div class="sec">Datos del cliente</div><div class="grid">'+
      '<div class="f"><label>Nombre o razón social *</label><input id="y_nombre" value="'+esc(v("nombre"))+'" '+d+'></div>'+
      '<div class="f"><label>Tipo de documento</label><select id="y_tipo_doc" '+d+'>'+selTxt(TIPOS_DOC,v("tipo_doc"))+'</select></div>'+
@@ -10493,17 +11123,249 @@ async function fichaCliente(id, pre){
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="y_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
    (puede?'<div class="acciones"><button class="btn" id="y_guardar">'+(c?"Guardar cambios":"Crear cliente")+'</button></div>':'')+
-   (c? seccionPresCli(c, pres) : '') +
-   (c? seccionVentasCli(c, ventasCli, saldoVenta) : '') +
-   (c? seccionRemitosCli(c, remitosCli) : '') +
-   (c && P("cliente-historial") ? seccionCC(c, seg) : '') +
-   (c? seccionNotas(c, notas, tnotas) : '')+
-   (c? seccionDocsCli(c, docsCli) : '');
-  if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
-  if (c) armarAccionesCC(c);
-  if (c && P("cliente-historial")) engancharCCCli(c.id);
-  $("dlg").showModal();
+   '';
+
+  /* ── Cliente nuevo: la ventana modal de siempre ──
+     El alta no tiene solapas porque no hay historial que mostrar, y así el
+     «+ Cargar cliente nuevo» desde la venta sigue funcionando igual. */
+  if (!c){
+    $("dbody").innerHTML = datosHtml;
+    if (puede) $("y_guardar").onclick = function(){ guardarCliente(id); };
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
+
+  /* ── Cliente que ya existe: pantalla completa con solapas ──
+     Pedido de Gustavo (25/8): «para poder ver todo lo que sucedió con el
+     cliente». Relevado en Pirka: 8 solapas y tres tarjetas a la derecha.
+     Yaten queda con NUEVE: tiene además las Notas del cliente con su tipo, que
+     Pirka no tiene y que no se van a mezclar con las novedades de las ventas. */
+  CLI = {c:c, datos:datosHtml, puede:puede, seg:seg, notas:notas, tnotas:tnotas,
+         pres:pres, ventas:ventasCli, remitos:remitosCli, saldoVenta:saldoVenta,
+         docs:docsCli, visitas:visitasCli, novedades:novedadesCli, cheques:chequesCli};
+  VISTA = "cli_ficha"; SUBVISTA = "";
+  try{ $("dlg").close(); }catch(e){}
+  pintarNav();
+  pintarFichaCli();
+  window.scrollTo({top:0,behavior:"instant"});
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   LA FICHA DEL CLIENTE A PANTALLA COMPLETA, CON SOLAPAS (25/8/2026)
+   Pedido de Gustavo: «cuando entrás al cliente quiero que se replique igual que
+   Pirka: tenés todas las solapas, cuenta corriente en pesos, en dólares,
+   visitas… para poder ver todo lo que sucedió con el cliente». Y la observación
+   que lo explica: «decíamos para proveedores, pero nunca copiamos la parte de
+   clientes» — la ficha del proveedor ya tenía solapas (tabsProv) desde antes.
+   Relevado en Pirka el 25/8: 8 solapas y tres tarjetas a la derecha.
+   Yaten queda con NUEVE solapas: tiene además las Notas del cliente con su
+   tipo, que Pirka no tiene. Decisión de Gustavo: cada una en su solapa, sin
+   mezclarlas con las novedades de las ventas, que son otra cosa.
+   ══════════════════════════════════════════════════════════════════════════ */
+let CLI = null, CLITAB = "datos", _VOLVER_CLI = null;
+
+VISTAS.cli_ficha = function(){ if (CLI) pintarFichaCli(); else ir("clientes"); };
+function volverDeCliente(){ CLI = null; CLITAB = "datos"; ir("clientes"); }
+function irTabCli(tab){ CLITAB = tab; pintarFichaCli(); }
+
+const TABS_CLI = [
+  ["datos",    "Datos del cliente"],
+  ["visitas",  "Visitas"],
+  ["pres",     "Presupuestos"],
+  ["ventas",   "Ventas"],
+  ["remitos",  "Remitos"],
+  ["ccars",    "Cuenta corriente ARS"],
+  ["ccusd",    "Cuenta corriente USD"],
+  ["novedades","Novedades"],
+  ["notas",    "Notas"]
+];
+
+function tabsCli(){
+  return '<div class="acciones" style="gap:4px;margin:2px 0 12px;flex-wrap:wrap">'+
+    TABS_CLI.filter(function(t){
+      /* lo que el rol no puede ver, no se ofrece: no tiene sentido una solapa
+         que solo puede mostrar el cartel de «no tenés permiso» */
+      if ((t[0]==="ccars" || t[0]==="ccusd") && !P("cliente-historial")) return false;
+      if ((t[0]==="ventas" || t[0]==="remitos") && !P("venta-consultar")) return false;
+      if (t[0]==="novedades" && !window._db77) return false;
+      return true;
+    }).map(function(t){
+      const act = CLITAB === t[0];
+      return '<button class="'+(act?"btn":"btn2")+' btn-sm" onclick="irTabCli(\''+t[0]+'\')">'+esc(t[1])+'</button>';
+    }).join("")+'</div>';
+}
+
+function pintarFichaCli(){
+  const c = CLI.c;
+  const cuerpo =
+    CLITAB === "visitas"   ? seccionVisitasCli(c, CLI.visitas) :
+    CLITAB === "pres"      ? seccionPresCli(c, CLI.pres) :
+    CLITAB === "ventas"    ? seccionVentasCli(c, CLI.ventas, CLI.saldoVenta) :
+    CLITAB === "remitos"   ? seccionRemitosCli(c, CLI.remitos) :
+    CLITAB === "ccars"     ? seccionCC(c, CLI.seg, "ARS") :
+    CLITAB === "ccusd"     ? seccionCC(c, CLI.seg, "USD") :
+    CLITAB === "novedades" ? seccionNovedadesCli(c, CLI.novedades) :
+    CLITAB === "notas"     ? seccionNotas(c, CLI.notas, CLI.tnotas) :
+                             CLI.datos;
+
+  const lateral = tarjetaDocsCli() + tarjetaAccionesCli() + tarjetaAuditoriaCli();
+
+  $("main").innerHTML =
+    '<div class="panel" style="margin-bottom:12px"><h2>'+esc((c.codigo?c.codigo+" · ":"")+c.nombre)+'</h2>'+
+      '<div class="desc">Todo lo que pasó con este cliente, solapa por solapa. Los botones están en la columna de la derecha.</div></div>'+
+    '<div class="prewrap"><div class="panel" style="margin:0">'+tabsCli()+cuerpo+'</div>'+
+    '<div class="preside">'+lateral+'</div></div>';
+
+  /* cada solapa engancha lo suyo después de dibujarse */
+  if (CLITAB === "datos" && CLI.puede && $("y_guardar"))
+    $("y_guardar").onclick = function(){ guardarCliente(c.id); };
+  if ((CLITAB === "ccars" || CLITAB === "ccusd") && P("cliente-historial")) engancharCCCli(c.id);
+}
+
+/* ── Solapa Visitas ──
+   Existe gracias a la v79: hasta entonces `prospectos` no tenía `cliente_id` y
+   no había forma de llegar del cliente a sus visitas. Se dice cuántas hay y no
+   se esconde nada: si la lista está vacía, es que no tuvo, no que no se puede. */
+function seccionVisitasCli(c, visitas){
+  visitas = visitas || [];
+  const quien = function(x){
+    const n = [x.vl_id, x.ato_id].map(function(p){ return p ? quienEs(p) : null; })
+                .filter(function(y){ return y && y !== "—"; });
+    return n.length ? n.join(" · ") : "—";
+  };
+  return '<div class="sec">Visitas</div>'+
+   '<div class="muted" style="margin-bottom:8px">Cada visita a este cliente, de la más nueva a la más vieja. Tocá una para abrir el prospecto.</div>'+
+   (visitas.length
+     ? '<div class="tablewrap"><table><thead><tr><th>#</th><th>Estado</th><th>Resultado</th><th>Asesor/a</th><th>Fecha de visita</th><th>Horario</th><th>m² cotizados</th></tr></thead><tbody>'+
+       visitas.map(function(x){
+         return '<tr style="cursor:pointer" onclick="abrir('+x.id+')">'+
+           '<td><b>'+esc(x.codigo)+'</b></td>'+
+           '<td>'+esc(x.estado||"—")+'</td>'+
+           '<td>'+esc(x.resultado||"—")+'</td>'+
+           '<td>'+esc(quien(x))+'</td>'+
+           '<td>'+(x.fecha_visita?fmtF(x.fecha_visita):'<span class="muted">sin fecha</span>')+'</td>'+
+           '<td>'+esc(x.hora_visita||"—")+'</td>'+
+           '<td>'+(x.m2_cotizados?fmtN(x.m2_cotizados):'<span class="muted">—</span>')+'</td></tr>';
+       }).join("")+'</tbody></table></div>'+
+       '<div class="muted" style="margin-top:6px">'+visitas.length+' visita'+(visitas.length===1?'':'s')+'.</div>'
+     : '<div class="muted">Este cliente todavía no tiene visitas cargadas a su nombre.</div>');
+}
+
+/* ── Solapa Novedades ──
+   Son las novedades de las VENTAS de este cliente, juntas, como en Pirka: la
+   columna «Venta» dice de cuál es cada una. La novedad no se edita ni se borra
+   (la RLS de la v77 no tiene políticas de update ni de delete), así que acá
+   tampoco se ofrece. */
+function seccionNovedadesCli(c, novedades){
+  novedades = novedades || [];
+  const cod = function(vid){
+    const v = (CLI && CLI.ventas || []).find(function(y){ return String(y.id)===String(vid); });
+    return v ? v.codigo : ("venta #"+vid);
+  };
+  return '<div class="sec">Novedades</div>'+
+   '<div class="muted" style="margin-bottom:8px">Lo que se fue anotando en las ventas de este cliente. Se cargan desde cada venta y no se borran: si algo se escribió mal, se escribe otra que lo aclare.</div>'+
+   (novedades.length
+     ? '<div class="tablewrap"><table><thead><tr><th>Fecha</th><th>Venta</th><th>Contenido</th><th>Quién</th></tr></thead><tbody>'+
+       novedades.map(function(x){
+         return '<tr><td>'+fmtF(x.fecha)+'</td>'+
+           '<td><button class="btn2 btn-sm" onclick="fichaVenta('+x.venta_id+')">'+esc(cod(x.venta_id))+'</button></td>'+
+           '<td style="white-space:normal;min-width:280px">'+esc(x.texto).replace(/\n/g,"<br>")+'</td>'+
+           '<td class="muted">'+esc(quienEs(x.creado_por))+'</td></tr>';
+       }).join("")+'</tbody></table></div>'
+     : '<div class="muted">Sin novedades. Se cargan desde la ficha de cada venta.</div>');
+}
+
+/* ── La columna de la derecha: Documentos · Acciones · Auditoría ── */
+function tarjetaDocsCli(){
+  const c = CLI.c, docs = CLI.docs||[];
+  if (!window._db27) return '';
+  return '<div class="pcard"><h3>Documentos</h3><div class="in">'+
+    (docs.length
+      ? '<div style="margin-bottom:8px;max-height:180px;overflow:auto">'+docs.map(function(d){
+          return '<div style="font-size:12.5px;padding:3px 0;border-bottom:1px solid var(--linea)">'+
+            '<a href="#" onclick="abrirDocumento('+d.id+');return false;">'+esc(d.nombre||d.codigo)+'</a></div>';
+        }).join("")+'</div>'
+      : '<div class="muted" style="font-size:12px;margin-bottom:8px">Sin documentos de este cliente.</div>')+
+    (P("documento-agregar")? '<div class="pacc"><button class="b-neutro" onclick="formDocDeCliente('+c.id+')">Agregar documento</button></div>' : '')+
+    '</div></div>';
+}
+
+function tarjetaAccionesCli(){
+  const c = CLI.c;
+  let h = '<div class="pcard"><h3>Acciones</h3><div class="in pacc">';
+  /* En Pirka acá dice «Editar» porque los datos se editan en otra pantalla. En
+     Yaten se editan en la solapa Datos, así que el equivalente es Guardar — y
+     solo aparece cuando esa solapa está abierta: un botón que no puede hacer lo
+     que dice es peor que no tenerlo. */
+  if (CLI.puede && CLITAB === "datos")
+    h += '<button class="b-guardar" onclick="guardarCliente('+c.id+')">Guardar cambios</button>';
+  else if (CLI.puede)
+    h += '<button class="b-neutro" onclick="irTabCli(\'datos\')">Editar los datos</button>';
+  if (P("presupuesto-agregar")) h += '<button class="b-avanzar" onclick="presupuestoDesdeCliente('+c.id+')">+ Presupuesto</button>';
+  if (P("venta-agregar"))       h += '<button class="b-avanzar" onclick="formVentaNueva('+c.id+')">+ Venta</button>';
+  if (P("venta-cobranza")){
+    h += '<div class="sep"></div>';
+    h += '<button class="b-plata" onclick="formCredDeb('+c.id+')">Registrar crédito/débito</button>';
+    h += '<button class="b-plata" onclick="formCobranza('+c.id+')">Registrar cobranza</button>';
+  }
+  h += '<div class="sep"></div>';
+  if (P("cliente-historial")) h += '<button class="b-neutro" onclick="imprimirCCCli('+c.id+')">Resumen de cuenta</button>';
+  if ((CLI.cheques||[]).length) h += '<button class="b-neutro" onclick="comprobanteCheques('+c.id+')">Comprobante Cheque</button>';
+  h += '<div class="sep"></div><button class="b-volver" onclick="volverDeCliente()">Volver</button>';
+  return h + '</div></div>';
+}
+
+function tarjetaAuditoriaCli(){
+  const c = CLI.c;
+  if (c.creado_en === undefined && c.creado_por === undefined) return '';
+  return '<div class="pcard"><h3>Auditoría</h3><div class="in paud">'+
+    'Creado el '+fmtF(c.creado_en)+(c.creado_por?' por '+esc(quienEs(c.creado_por)):'')+
+    '</div></div>';
+}
+
+/* ── Comprobante de los cheques del cliente ──
+   El botón gris de Pirka. Sale con lo que ya hay: `cheques.cliente_id` existe
+   desde siempre. Es el papel que se le deja al cliente cuando entrega cheques:
+   qué cheques son y en qué estado están. No dice en qué cuenta nuestra
+   entraron — eso es de adentro, como el recibo. */
+async function comprobanteCheques(cliId){
+  const cli = CLIS.find(function(x){ return String(x.id)===String(cliId); }) || {};
+  const q = await sb.from("cheques").select("*").eq("cliente_id", cliId).order("vencimiento");
+  if (q.error) return alert("No pude leer los cheques: "+q.error.message);
+  const chs = (q.data||[]).filter(function(x){ return !x.anulado; });
+  if (!chs.length) return alert("Este cliente no tiene cheques cargados.");
+  const porMon = {};
+  chs.forEach(function(x){ const m = x.moneda||"ARS"; porMon[m] = (porMon[m]||0) + Number(x.importe||0); });
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Cheques '+esc(cli.nombre||"")+'</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:28px;max-width:820px}'+
+   'table{width:100%;border-collapse:collapse;margin:8px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}.r{text-align:right}'+
+   '.tot td{border-top:2px solid #24393C;font-size:13px}'+
+   '.caja{border:1px solid #d9d2c8;border-radius:8px;padding:9px 11px;margin:12px 0;background:#faf8f4}'+
+   '.pie{margin-top:22px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '.firma{display:flex;gap:40px;margin-top:34px;font-size:10px;color:#6b7679}'+
+   '.firma>div{flex:1;border-top:1px solid #999;padding-top:5px;text-align:center}'+
+   '</style></head><body>'+
+   membrete('Comprobante de cheques · '+esc(cli.nombre||""))+
+   '<div class="caja"><b>'+esc(cli.nombre||"")+'</b>'+(cli.nro_doc?' · '+esc(cli.nro_doc):'')+'</div>'+
+   '<table><thead><tr><th>N°</th><th>Librador</th><th>Fecha</th><th>Vencimiento</th><th>Estado</th><th class="r">Importe</th></tr></thead><tbody>'+
+   chs.map(function(x){
+     return '<tr><td><b>'+esc(x.numero||"s/n")+'</b></td><td>'+esc(x.librador||"—")+'</td>'+
+       '<td>'+(x.fecha?fmtF(x.fecha):'—')+'</td><td>'+(x.vencimiento?fmtF(x.vencimiento):'—')+'</td>'+
+       '<td>'+esc(x.estado||"—")+'</td><td class="r">'+fmtM(x.importe, x.moneda||"ARS")+'</td></tr>';
+   }).join("")+
+   Object.keys(porMon).map(function(m){
+     return '<tr class="tot"><td colspan="5" class="r"><b>TOTAL '+esc(m)+'</b></td><td class="r"><b>'+fmtM(porMon[m],m)+'</b></td></tr>';
+   }).join("")+
+   '</tbody></table>'+
+   '<div class="firma"><div>Firma y sello</div><div>Recibí conforme</div></div>'+
+   '<div class="pie">Emitido el '+fmtF(hoy())+'. '+chs.length+' cheque'+(chs.length===1?'':'s')+'. Los cheques anulados no se listan.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
+
 /* Los archivos colgados de este cliente: contrato firmado, foto de la obra, plano que mandó. */
 function seccionDocsCli(c, docs){
   if (!window._db27) return '';
@@ -10517,8 +11379,10 @@ function seccionDocsCli(c, docs){
    ((P("documento-agregar"))?'<div style="margin-top:8px"><button class="btn2 btn-sm" onclick="formDocDeCliente('+c.id+')">+ Subir un documento de este cliente</button></div>':'');
 }
 async function formDocDeCliente(cliId){
-  await formDocumento(null);
-  const s = $("d_cli"); if (s) s.value = String(cliId);
+  /* cargado desde la ficha del cliente: al guardar se vuelve ahí, no al listado
+     de documentos. Mismo criterio que el papel del embarque y el de la venta. */
+  _VOLVER_CLI = cliId;
+  await formDocumento(null, {cliente_id: cliId});
 }
 function seccionPresCli(c, pres){
   if (!window._db9) return '<div class="sec">Presupuestos, ventas y notas</div><div class="muted">Falta correr la actualización de la base para ver acá los presupuestos y el historial de notas de este cliente.</div>';
@@ -10533,7 +11397,7 @@ function seccionVentasCli(c, ventas, saldoVenta){
   if (!window._db12 || !P("venta-consultar")) return '';
   saldoVenta = saldoVenta || {};
   return '<div class="sec">Ventas</div>'+
-   (ventas.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Fecha</th><th>Entrega</th><th>Total</th><th>Saldo</th><th>Estado</th><th></th></tr></thead><tbody>'+
+   (ventas.length? '<div class="tablewrap" style="max-height:220px;overflow:auto"><table><thead><tr><th>Código</th><th>Fecha</th><th>Entrega</th><th>Total</th><th>Saldo</th><th>Estado</th><th>Instalado</th><th></th></tr></thead><tbody>'+
      ventas.map(function(v){ const sal = saldoVenta[v.id];
        return '<tr style="cursor:pointer;'+(v.anulado?'opacity:.45;text-decoration:line-through':'')+'" onclick="fichaVenta('+v.id+')">'+
        '<td><b>'+esc(v.codigo)+'</b></td><td>'+fmtF(v.fecha)+'</td>'+
@@ -10541,6 +11405,8 @@ function seccionVentasCli(c, ventas, saldoVenta){
        '<td><b>'+fmtM(v.total,v.moneda)+'</b></td>'+
        '<td style="'+(sal>0?'color:#7a2415;font-weight:600':'color:#1d5b2c')+'">'+(sal==null?'—':(sal>0?fmtM(sal,v.moneda):'Pagada'))+'</td>'+
        '<td>'+esc(v.estado)+'</td>'+
+       /* v76: el estado de instalado, que en Pirka es columna de esta misma lista */
+       '<td>'+(window._db76 ? (v.instalado?'<span class="pill ok">Sí</span>':'<span class="muted">No</span>') : '<span class="muted">—</span>')+'</td>'+
        '<td>'+(v.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>';
      }).join("")+
      '</tbody></table></div>'
@@ -10660,7 +11526,15 @@ function accionesCC(c){
     '<button class="btn" onclick="formCobranza('+c.id+')">Registrar cobranza</button>'+
     '<button class="btn2" onclick="formCredDeb('+c.id+')">Crédito / débito</button></div>';
 }
-function seccionCC(c, seg){
+/* v78: el ajuste manual puede estar imputado a una venta. Que se vea en el
+   renglón: si no, el saldo de esa venta cambia y en la cuenta corriente no hay
+   forma de saber por qué. */
+function codVentaCC(x){
+  if (!x.venta_id) return '';
+  const v = (window._VTAS_CLI||[]).find(function(y){ return String(y.id)===String(x.venta_id); });
+  return ' <span class="pill">imputado a '+esc(v?v.codigo:("venta #"+x.venta_id))+'</span>';
+}
+function seccionCC(c, seg, mon){
   const bloque = function(m){
     /* El saldo del título sale de v_saldos_cliente —todo el historial y lo que
        calcula la base—, no de esta suma. Si el rango de fechas está puesto, se
@@ -10689,7 +11563,7 @@ function seccionCC(c, seg){
       visibles.map(function(f){
         const x = f.mov;
         return '<tr><td>'+fmtF(x.fecha)+'</td>'+
-          '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+'</td>'+
+          '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+codVentaCC(x)+'</td>'+
           '<td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td><td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td>'+
           '<td><b>'+fmtM0(f.saldo,m)+'</b></td>'+
           '<td style="white-space:nowrap">'+(x.ref_id && String(x.origen||"").toLowerCase()==="cobranza"
@@ -10712,7 +11586,7 @@ function seccionCC(c, seg){
         'Quedan <b>'+recortadas+'</b> sin mostrar — el saldo de arriba los cuenta igual. Subí la cantidad de filas o achicá el rango de fechas.</div>' : '')+
       (!_CCANUL[m] && cc.anulados.length ? '<div class="muted" style="margin-top:4px">'+cc.anulados.length+' movimiento(s) anulado(s) en el período. Tildá «ver anulados» para verlos; no suman.</div>' : '');
   };
-  return '<div class="sec">Cuenta corriente</div>'+
+  return '<div class="sec">Cuenta corriente'+(mon?' '+mon:'')+'</div>'+
    '<div class="muted" style="margin-bottom:8px">Una venta le suma deuda, una cobranza se la baja. El <b>saldo</b> de cada renglón es el acumulado hasta ese movimiento. Los anulados no suman.</div>'+
    '<div class="filtros">'+
      '<div><label>Desde</label><input type="date" id="ccc_desde" value="'+esc(FCCC.desde)+'"></div>'+
@@ -10723,8 +11597,14 @@ function seccionCC(c, seg){
      '<div style="min-width:auto"><button class="btn" id="ccc_btn">Aplicar</button></div>'+
      '<div style="min-width:auto"><button class="btn2" onclick="imprimirCCCli('+c.id+')">Imprimir / PDF</button></div>'+
    '</div>'+
-   accionesCC(c)+
-   bloque('ARS') + bloque('USD');
+   /* Los botones de cobranza y crédito/débito viven en la columna de acciones
+      cuando la ficha es a pantalla completa: ahí están siempre a la vista, que
+      es lo que pidió Gilda el 14/8, y no repetidos en dos lugares. */
+   (mon ? '' : accionesCC(c))+
+   /* 25/8: en Pirka la cuenta corriente en pesos y la de dólares son DOS
+      solapas, no dos bloques uno debajo del otro. Con la moneda puesta se
+      dibuja una sola; sin moneda, las dos, que es como se usaba antes. */
+   (mon ? bloque(mon) : (bloque('ARS') + bloque('USD')));
 }
 
 /* 14/8, Gilda: «colocar botón imprimir recibo». Es el papel que se le entrega
@@ -10932,7 +11812,16 @@ async function guardarCliente(id){
   /* 24/8, Gustavo: «cuando creo un cliente que me dé opción de crear un presupuesto o
      una venta, que no se cierre de inmediato, a lo sumo que le ponga cerrar».
      Antes el diálogo se cerraba solo y había que volver a buscar al cliente. */
-  if (id){ $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>'; return; }
+  if (id){
+    /* la ficha es una pantalla propia: se relee el cliente de la base y se
+       vuelve a dibujar en la misma solapa, y recién ahí se dice «Guardado» */
+    if (VISTA==="cli_ficha"){
+      await fichaCliente(id);
+      if ($("clmsg")) $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>';
+      return;
+    }
+    $("clmsg").innerHTML='<div class="msg ok">Guardado.</div>'; return;
+  }
   const nid = r.data ? r.data.id : null;
   $("clmsg").innerHTML =
     '<div class="msg ok">Cliente creado. ¿Seguís con algo más?</div>'+
@@ -11025,7 +11914,8 @@ async function formCobranza(cliId){
    '<div class="muted" style="margin-bottom:8px">A qué ventas se aplica este cobro. Si dejás todo en cero, el cobro igual baja la deuda general del cliente.</div>'+
    '<div id="k_ventas"><div class="muted">Cargando ventas…</div></div>'+
    '<div class="muted" id="k_nota" style="margin-top:8px">El cobro va a bajar la deuda del cliente y subir el saldo de la cuenta elegida, en una sola operación.</div>'+
-   '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+   '<div class="acciones"><button class="btn" id="k_guardar">Registrar cobranza</button>'+
+   (_VOLVER_VEN?'<button class="btn2" onclick="volverAFichaVenta('+_VOLVER_VEN+')">Volver a la venta</button>':'<button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button>')+'</div>';
   window._CTAS_COB = cuentas;
   KMED = [];
   medioCobAgregar();
@@ -11076,6 +11966,7 @@ async function formCobranza(cliId){
     if (r.error){ $("cbmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
     await cargarClientes();
     try{ if (typeof cargarCheques === "function") await cargarCheques(); }catch(e){}
+    if (_VOLVER_VEN){ const w = _VOLVER_VEN; _VOLVER_VEN = null; return volverAFichaVenta(w); }
     fichaCliente(cliId);
   };
 }
@@ -11187,7 +12078,8 @@ async function pintarVentasCobranza(cliId){
   window._VTAS_COB = pend;
   el.innerHTML = !pend.length ? '<div class="muted">Este cliente no tiene ventas pendientes en '+mon+'.</div>' :
    '<div class="tablewrap"><table><thead><tr><th># Venta</th><th>Fecha</th><th>Total</th><th>Saldo</th><th>Monto a imputar</th><th></th></tr></thead><tbody>'+
-   pend.map((x,k)=>'<tr><td><b>'+esc(x.codigo)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+fmtM(x.total,x.moneda)+'</td>'+
+   pend.map((x,k)=>'<tr'+(_VOLVER_VEN && String(x.venta_id)===String(_VOLVER_VEN)?' style="background:#eef4ea"':'')+'><td><b>'+esc(x.codigo)+'</b>'+
+     (_VOLVER_VEN && String(x.venta_id)===String(_VOLVER_VEN)?' <span class="pill ok">esta venta</span>':'')+'</td><td>'+fmtF(x.fecha)+'</td><td>'+fmtM(x.total,x.moneda)+'</td>'+
      '<td><b>'+fmtM(x.saldo,x.moneda)+'</b></td>'+
      '<td><input type="number" step="0.01" min="0" max="'+Number(x.saldo)+'" style="width:130px" id="kv_'+k+'" oninput="calcImputadoCob()"></td>'+
      '<td><button class="btn2 btn-sm" onclick="imputarTodoCob('+k+')">Todo</button></td></tr>').join("")+
@@ -11230,26 +12122,110 @@ async function concCobAgregar(cliId){
   if (error) return alert(error.message);
   formCobranza(cliId);
 }
-function formCredDeb(cliId){
+/* ══════════════════════════════════════════════════════════════════════════
+   CRÉDITO / DÉBITO DE CUENTA CORRIENTE — con imputación a la venta (v78, 25/8)
+   Pedido de Gustavo: «que débito y crédito imputen la venta. Puedo poner
+   cuando quiero que imputen la venta y cuando no».
+   Por eso el desplegable tiene siempre la opción de NO imputar, que es
+   exactamente lo que hacía antes: mover la deuda general del cliente.
+   El saldo por venta lo sigue calculando la base (`v_saldos_venta`), que desde
+   la v78 suma los ajustes vivos: un débito le sube el saldo a esa venta, un
+   crédito se lo baja. Acá no se calcula ningún saldo: se muestra el de la base.
+   ══════════════════════════════════════════════════════════════════════════ */
+async function formCredDeb(cliId, ventaId){
   const cli = CLIS.find(x=>x.id===cliId);
-  $("dtit").textContent = "Crédito / débito · " + cli.nombre;
+  $("dtit").textContent = "Crédito / débito · " + (cli?cli.nombre:"");
+  $("dbody").innerHTML = '<div class="muted">Cargando las ventas del cliente…</div>';
+  try{ $("dlg").showModal(); }catch(e){}
+  /* Las ventas vivas del cliente con su saldo de hoy: es lo que se puede
+     imputar. Salen de la vista, no de una suma hecha en la pantalla. */
+  let vtas = [];
+  try{
+    const r = await sb.from("v_saldos_venta").select("venta_id,codigo,fecha,moneda,total,saldo")
+                      .eq("cliente_id", cliId).order("fecha");
+    if (!r.error) vtas = r.data||[];
+  }catch(e){}
+  const elegida = vtas.find(function(v){ return String(v.venta_id)===String(ventaId); });
+  window._CD = {cliId:cliId, vtas:vtas, ref:(elegida?ventaId:null)};
+
   $("dbody").innerHTML = '<div id="cdmsg"></div>'+
    '<div class="sec">Ajuste manual de cuenta corriente</div><div class="grid">'+
-     '<div class="f"><label>Moneda</label><select id="j_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
-     '<div class="f"><label>Tipo</label><select id="j_tipo"><option>Debito</option><option>Credito</option></select></div>'+
-     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="j_importe"></div>'+
+     '<div class="f"><label>Moneda</label><select id="j_moneda" onchange="cdMoneda()">'+
+        selTxt(["ARS","USD"], elegida?elegida.moneda:"ARS")+'</select></div>'+
+     '<div class="f"><label>Tipo</label><select id="j_tipo" onchange="cdAviso()"><option>Debito</option><option>Credito</option></select></div>'+
+     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="j_importe" oninput="cdAviso()"></div>'+
    '</div>'+
-   '<div class="f"><label>Detalle *</label><input id="j_detalle" placeholder="Por qué se ajusta"></div>'+
-   '<div class="muted">Débito le suma deuda al cliente. Crédito se la baja. Este ajuste no toca ninguna caja: es solo la cuenta corriente.</div>'+
-   '<div class="acciones"><button class="btn" id="j_guardar">Guardar</button><button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button></div>';
+   '<div class="f"><label>¿A qué venta se imputa?</label>'+
+     '<select id="j_venta" onchange="cdAviso()">'+cdOpcionesVenta(elegida?elegida.moneda:"ARS")+'</select>'+
+     '<div class="muted" style="font-size:.85em;margin-top:4px">Elegí la venta y el ajuste le cambia el saldo a <b>esa</b> venta. Dejalo sin elegir y mueve la deuda general del cliente, sin tocar ninguna venta. Solo aparecen las ventas de la misma moneda: no se mezclan.</div>'+
+   '</div>'+
+   '<div id="j_aviso"></div>'+
+   '<div class="f" style="margin-top:8px"><label>Detalle '+AST+'</label><input id="j_detalle" value="'+
+     esc(elegida?("Ajuste de "+elegida.codigo):"")+'" placeholder="Por qué se ajusta"></div>'+
+   '<div class="muted">Débito le suma deuda al cliente. Crédito se la baja. Este ajuste <b>no toca ninguna caja</b>: es solo la cuenta corriente.</div>'+
+   '<div class="acciones"><button class="btn" id="j_guardar">Guardar</button>'+
+   (_VOLVER_VEN?'<button class="btn2" onclick="volverAFichaVenta('+_VOLVER_VEN+')">Volver a la venta</button>':'<button class="btn2" onclick="fichaCliente('+cliId+')">Volver al cliente</button>')+'</div>';
+  cdAviso();
   $("j_guardar").onclick = async function(){
     const imp = Number($("j_importe").value||0);
-    if (!(imp>0)){ $("cdmsg").innerHTML='<div class="msg err">Importe mayor a cero.</div>'; return; }
-    const {error} = await sb.rpc("registrar_cc_manual",{p_cliente:cliId,p_moneda:$("j_moneda").value,p_tipo:$("j_tipo").value,p_importe:imp,p_detalle:$("j_detalle").value||"Ajuste"});
+    const det = ($("j_detalle").value||"").trim();
+    if (!(imp>0)){ $("cdmsg").innerHTML='<div class="msg err">El importe tiene que ser mayor a cero.</div>'; return; }
+    /* El detalle es obligatorio: un movimiento de cuenta corriente sin motivo,
+       dentro de seis meses, no lo entiende nadie. */
+    if (!det){ $("cdmsg").innerHTML='<div class="msg err">Escribí el detalle: por qué se ajusta.</div>'; return; }
+    const vid = $("j_venta").value || null;
+    $("j_guardar").disabled = true;
+    const {error} = await sb.rpc("registrar_cc_manual", {
+      p_cliente:cliId, p_moneda:$("j_moneda").value, p_tipo:$("j_tipo").value,
+      p_importe:imp, p_detalle:det, p_venta: vid ? Number(vid) : null});
+    $("j_guardar").disabled = false;
     if (error){ $("cdmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     await cargarClientes();
+    if (_VOLVER_VEN){ const w = _VOLVER_VEN; _VOLVER_VEN = null; return volverAFichaVenta(w); }
     fichaCliente(cliId);
   };
+}
+
+/* Solo las ventas de la misma moneda: la base lo rechaza si se mezclan, así que
+   la pantalla no las ofrece. La pantalla esconde y la base también. */
+function cdOpcionesVenta(mon){
+  const st = window._CD; if (!st) return '';
+  const m = mon || (($("j_moneda")||{}).value) || "ARS";
+  const lista = st.vtas.filter(function(v){ return v.moneda === m; });
+  return '<option value="">— no se imputa a ninguna venta —</option>'+
+    lista.map(function(v){
+      return '<option value="'+v.venta_id+'" '+(String(st.ref)===String(v.venta_id)?"selected":"")+'>'+
+        esc(v.codigo)+' · '+fmtF(v.fecha)+' · saldo '+fmtM(v.saldo, v.moneda)+'</option>';
+    }).join("")+
+    (lista.length? '' : '');
+}
+function cdMoneda(){
+  const s = $("j_venta"); if (s) s.innerHTML = cdOpcionesVenta();
+  cdAviso();
+}
+/* Decisión de Gustavo (25/8): el crédito PUEDE dejar la venta con saldo a favor.
+   Se permite y se avisa antes de guardar; no se pone tope. */
+function cdAviso(){
+  const st = window._CD, el = $("j_aviso"); if (!el || !st) return;
+  const vid = ($("j_venta")||{}).value || "";
+  const tipo = ($("j_tipo")||{}).value || "Debito";
+  const imp = Number((($("j_importe")||{}).value) || 0);
+  if (!vid){
+    el.innerHTML = '<div class="muted" style="margin-top:6px">Sin venta elegida: el ajuste baja o sube la <b>deuda general</b> del cliente y no cambia el saldo de ninguna venta.</div>';
+    return;
+  }
+  const v = st.vtas.find(function(x){ return String(x.venta_id)===String(vid); });
+  if (!v){ el.innerHTML = ''; return; }
+  const s = Number(v.saldo||0);
+  const queda = tipo === "Credito" ? s - imp : s + imp;
+  if (tipo === "Credito" && imp > s + 0.009){
+    el.innerHTML = '<div class="msg err" style="margin-top:6px;line-height:1.5">'+esc(v.codigo)+' debe <b>'+fmtM(s,v.moneda)+
+      '</b> y le estás acreditando <b>'+fmtM(imp,v.moneda)+'</b>. Va a quedar <b>a favor del cliente</b> por '+
+      fmtM(imp-s,v.moneda)+'. Se puede, pero que sea a propósito.</div>';
+  } else {
+    el.innerHTML = '<div class="muted" style="margin-top:6px">'+esc(v.codigo)+' debe hoy <b>'+fmtM(s,v.moneda)+
+      '</b>'+(imp>0? '. Con este ajuste queda en <b>'+fmtM(queda,v.moneda)+'</b>' : '')+'.</div>';
+  }
 }
 
 /* ═══════════ FINANZAS ═══════════ */
