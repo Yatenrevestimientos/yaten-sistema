@@ -271,7 +271,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.25-141";
+const VERSION = "v2026.08.25-142";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -5310,6 +5310,7 @@ function pintarFichaPre(){
     '<div class="pcard"><h3>Acciones</h3><div class="in pacc">'+
       (puede?'<button class="b-guardar" id="w_guardar">Guardar</button>':'')+
       (c.id?'<button class="b-neutro" onclick="imprimirPresupuesto()">Imprimir o PDF</button>':'')+
+      (c.id?'<button class="b-neutro" onclick="formMailPresupuesto()">Enviar por Email</button>':'')+
       ((cliLig && P("cliente-consultar"))
         ? '<div class="sep"></div><button class="b-neutro" onclick="fichaCliente('+cliLig.id+')">Ficha del cliente</button>' : '')+
       ((c.prospecto_id && P("prospecto-consultar"))
@@ -5915,6 +5916,137 @@ async function guardarPresupuesto(){
   if (ventaNueva){
     try{ await fichaVenta(Number(ventaNueva)); }catch(e){}
   }
+}
+
+/* ── Enviar el presupuesto por mail ───────────────────────────────────────
+   25/8, Gustavo: «tengo que poder mandar los presupuestos o las ventas por mail».
+   El correo sale del sistema, desde ventas@yatenrevestimientos.com.ar, con el
+   presupuesto adentro del cuerpo. No va como archivo adjunto a propósito: un
+   adjunto hay que abrirlo, y la mitad de la gente no lo abre.
+
+   Los estilos van escritos en cada etiqueta, no en una hoja de estilos: los
+   programas de correo borran el <style> y el presupuesto llegaría en blanco y
+   negro. El logo va dibujado en vectores por el mismo motivo —una imagen
+   adjunta queda bloqueada hasta que el que lo recibe apreta «mostrar
+   imágenes»— aunque algunos clientes viejos no dibujan vectores y ahí
+   simplemente no se ve el isotipo; el resto del presupuesto llega igual. */
+function isotipoMail(color){
+  return ISOTIPO_YATEN.replace('<svg ', '<svg width="42" height="42" ')
+                      .replace(/currentColor/g, color);
+}
+
+function presupuestoParaMail(){
+  const c = PRE.cab, m = c.moneda||"ARS", t = calcTotales();
+  const dias = Number(c.validez_dias) || Number(cfg("validez_dias",15)) || 15;
+  const cot = Number(c.cotizacion_usd) || 0;
+  const enPesos = (m === "USD" && cot > 0);
+  const bordeCel = 'padding:6px 8px;border-bottom:1px solid #e4e0d9';
+  const th = 'background:'+YAT_PETROLEO+';color:#fff;padding:6px 8px;font-size:10.5px;letter-spacing:.06em;';
+  const linea = [cfg("direccion"), cfg("localidad"), cfg("telefono"), cfg("email"), cfg("web")].filter(Boolean).join(" · ");
+
+  const fila = function(x, par){
+    const sub = Number(x.cantidad||0)*Number(x.precio_unit||0)*(1-Number(x.descuento_pct||0)/100);
+    return '<tr'+(par?' style="background:#f7f5f1"':'')+'>'+
+      '<td style="'+bordeCel+'">'+esc(x.descripcion)+(x.con_instalacion?' <b>(instalado)</b>':'')+'</td>'+
+      '<td style="'+bordeCel+';text-align:right">'+fmtN(x.cantidad)+' '+esc(x.unidad||"")+'</td>'+
+      '<td style="'+bordeCel+';text-align:right">'+fmtM(sub,m)+'</td></tr>';
+  };
+  const totFila = function(rot, val, estilo){
+    return '<tr><td style="text-align:right;padding:3px 8px;'+(estilo||'')+'">'+rot+'</td>'+
+           '<td style="text-align:right;padding:3px 8px;width:140px;'+(estilo||'')+'">'+val+'</td></tr>';
+  };
+  const grande = 'font-size:17px;font-weight:bold;color:'+YAT_PETROLEO+';border-top:2px solid '+YAT_PETROLEO+';padding-top:6px';
+  const pesos  = 'font-weight:bold;color:'+YAT_OXIDO+';border-top:1px solid '+YAT_OXIDO+';padding-top:6px';
+
+  return '<div style="font:14px/1.5 Georgia,serif;color:#1b2426;max-width:640px;margin:0 auto;padding:18px">'+
+    '<div style="border-bottom:3px solid '+YAT_PETROLEO+';padding-bottom:10px">'+
+      isotipoMail(YAT_PETROLEO)+
+      '<div style="font-size:20px;color:'+YAT_PETROLEO+';letter-spacing:1px;font-weight:bold">'+esc(cfg("razon_social","YATEN REVESTIMIENTOS"))+'</div>'+
+      (linea? '<div style="color:#6b7679;font-size:11px;margin-top:2px">'+esc(linea)+'</div>' : '')+
+    '</div>'+
+    '<div style="background:'+YAT_PETROLEO+';color:#fff;padding:7px 12px;border-radius:5px;font-size:12.5px;margin:12px 0 14px">'+
+      '<b>PRESUPUESTO '+esc(c.codigo)+'</b> &nbsp;·&nbsp; '+fmtF(c.fecha)+' &nbsp;·&nbsp; válido hasta el '+fmtF(fechaMas(c.fecha, dias))+'</div>'+
+    '<p>Hola '+esc((c.cliente_nombre||"").split(" ")[0]||"")+', te paso el presupuesto'+
+      (c.direccion_obra? ' por la obra de '+esc(c.direccion_obra)+(c.localidad_id? ', '+esc(nom(M.loc,c.localidad_id)) : '') : '')+'.</p>'+
+    '<table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px"><thead><tr>'+
+      '<th style="'+th+'text-align:left">DETALLE</th>'+
+      '<th style="'+th+'text-align:right">CANT.</th>'+
+      '<th style="'+th+'text-align:right">SUBTOTAL</th></tr></thead><tbody>'+
+      PRE.items.map(function(x,k){ return fila(x, k%2===1); }).join("")+
+      PRE.adic.map(function(x,k){
+        return '<tr'+((PRE.items.length+k)%2===1?' style="background:#f7f5f1"':'')+'>'+
+          '<td style="'+bordeCel+'">'+esc(x.concepto)+'</td><td style="'+bordeCel+'"></td>'+
+          '<td style="'+bordeCel+';text-align:right">'+fmtM(x.importe,m)+'</td></tr>'; }).join("")+
+    '</tbody></table>'+
+    '<table style="width:100%;font-size:14px"><tbody>'+
+      totFila('Neto', fmtM(t.neto,m))+
+      totFila('IVA', fmtM(t.iva,m))+
+      totFila('TOTAL', fmtM(t.total,m), grande)+
+      (enPesos? totFila('TOTAL EN PESOS', fmtM(t.total*cot,"ARS"), pesos) : '')+
+    '</tbody></table>'+
+    (enPesos? '<p style="font-size:11px;color:#6b7679">Al tipo de cambio de $ '+fmtN(cot)+' por dólar. '+
+      'El importe en pesos es orientativo: se factura en dólares al cambio del día de pago.</p>' : '')+
+    (c.notas? '<p style="font-size:13px">'+esc(c.notas).replace(/\n/g,"<br>")+'</p>' : '')+
+    '<div style="margin-top:20px;padding-top:10px;border-top:2px solid '+YAT_PETROLEO+';font-size:11px;color:#6b7679">'+
+      esc(c.condiciones||cfg("pie_presupuesto",""))+'</div>'+
+  '</div>';
+}
+
+function formMailPresupuesto(){
+  const c = PRE.cab;
+  $("dtit").textContent = "Enviar por Email · " + (c.codigo||"");
+  $("dbody").innerHTML =
+    '<div id="mlmsg"></div>'+
+    '<div class="desc">Sale de <b>'+esc(cfg("email","ventas@yatenrevestimientos.com.ar"))+'</b>, no de tu casilla personal. '+
+      'El presupuesto va adentro del mensaje, con el mismo formato que la impresión.</div>'+
+    '<div class="f"><label>Para</label><input id="ml_para" value="'+esc(c.cliente_email||"")+'" placeholder="cliente@ejemplo.com"></div>'+
+    '<div class="f"><label>Copia <span class="muted" style="font-size:.85em">(opcional)</span></label><input id="ml_copia" placeholder="para que le llegue a alguien más"></div>'+
+    '<div class="f"><label>Asunto</label><input id="ml_asunto" value="'+esc("Presupuesto "+(c.codigo||"")+" — "+cfg("razon_social","Yaten Revestimientos"))+'"></div>'+
+    '<div class="acciones"><button class="btn" id="ml_enviar">Enviar</button>'+
+    '<button class="btn2" onclick="cerrarDialogo()">Cancelar</button></div>';
+  $("ml_enviar").onclick = mandarMailPresupuesto;
+  $("dlg").showModal();
+}
+
+async function mandarMailPresupuesto(){
+  const para = ($("ml_para").value||"").trim();
+  const copia = ($("ml_copia").value||"").trim();
+  const asunto = ($("ml_asunto").value||"").trim();
+  const msg = t => { $("mlmsg").innerHTML = t; };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(para)){
+    msg('<div class="msg err">Falta la dirección del cliente, o está mal escrita.</div>'); return;
+  }
+  if (!asunto){ msg('<div class="msg err">Poné un asunto.</div>'); return; }
+  const html = presupuestoParaMail();
+  $("ml_enviar").disabled = true;
+  msg('<div class="msg">Mandando…</div>');
+  let error = null;
+  try{
+    const r = await sb.functions.invoke("enviar-mail", {body:{para:para, copia:copia||null, asunto:asunto, html:html}});
+    if (r.error){
+      error = r.error.message || "no se pudo enviar";
+      /* la función devuelve el motivo en el cuerpo: sirve más que «non-2xx» */
+      if (r.error.context && typeof r.error.context.text === "function"){
+        try{ const t = await r.error.context.text(); const j = JSON.parse(t); if (j && j.error) error = j.error; }catch(e){}
+      }
+    }
+  }catch(e){ error = String(e); }
+  $("ml_enviar").disabled = false;
+  if (!error){
+    msg('<div class="msg ok">Enviado a <b>'+esc(para)+'</b>'+(copia?' con copia a '+esc(copia):'')+'.</div>');
+    return;
+  }
+  /* Respaldo: si el envío falla, no se pierde el trabajo. Se abre el programa de
+     correo de la máquina con el asunto ya escrito, para mandarlo a mano. */
+  const cuerpoTexto = "Te paso el presupuesto "+(PRE.cab.codigo||"")+".\n\n(El sistema no pudo mandarlo solo; va desde acá.)";
+  const enlace = "mailto:"+encodeURIComponent(para)+
+    "?subject="+encodeURIComponent(asunto)+
+    (copia? "&cc="+encodeURIComponent(copia) : "")+
+    "&body="+encodeURIComponent(cuerpoTexto);
+  msg('<div class="msg err" style="line-height:1.5"><b>No se pudo enviar desde el sistema.</b><br>'+esc(error)+
+      '<br><br>Podés mandarlo desde tu programa de correo: '+
+      '<a href="'+enlace+'"><b>abrir el correo con el mensaje empezado</b></a>. '+
+      'Después imprimí el presupuesto en PDF y adjuntalo.</div>');
 }
 
 function imprimirPresupuesto(){
