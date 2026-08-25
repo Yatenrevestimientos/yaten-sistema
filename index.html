@@ -35,6 +35,7 @@ button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid transparen
 .caldia.hoy .n{color:var(--petroleo)}
 .calenc{background:var(--petroleo);color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:5px 6px;text-align:center}
 .calvis{display:block;width:100%;text-align:left;font-size:11.5px;line-height:1.25;padding:3px 5px;border-radius:5px;margin-bottom:3px;border:0;color:#fff;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.calvis span{font-size:10.5px}
 .calvis b{font-weight:700}
 @media(max-width:760px){.caldia{min-height:70px}.calvis{font-size:10.5px}}
 input,select,textarea{font:inherit;padding:8px 10px;border:1px solid var(--linea);border-radius:8px;background:#fff;width:100%;color:var(--texto)}
@@ -247,7 +248,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.25-139";
+const VERSION = "v2026.08.25-140";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2196,9 +2197,14 @@ function calGrilla(visitas, mes){
       '<div class="n">'+d.getUTCDate()+'</div>'+
       lista.map(function(p){
         const hora = p.hora_visita ? String(p.hora_visita).replace(/[.\s]/g,":").slice(0,5) : "";
+        /* 25/8: el código va SIEMPRE, en el globito y en el propio botón. Hay
+           clientes que se llaman igual —en las pruebas hay cuatro «Rocio Ale»— y
+           con la hora y el nombre no hay manera de saber cuál es cuál. Sin el
+           código uno carga el presupuesto en un prospecto y lo busca en otro. */
         return '<button class="calvis" style="background:'+colorVisita(p)+'" '+
-               'title="'+esc((hora?hora+" · ":"")+(p.nombre||"")+" · "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id))+'" '+
-               'onclick="abrir('+p.id+')">'+(hora?'<b>'+esc(hora)+'</b> ':'')+esc(p.nombre||"sin nombre")+'</button>';
+               'title="'+esc((p.codigo||"")+" · "+(hora?hora+" · ":"")+(p.nombre||"")+" · "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id))+'" '+
+               'onclick="abrir('+p.id+')">'+(hora?'<b>'+esc(hora)+'</b> ':'')+esc(p.nombre||"sin nombre")+
+               '<span style="opacity:.72"> · '+esc(String(p.codigo||"").replace(/^PROS-\d{4}-/,"#"))+'</span></button>';
       }).join("")+
       '</div>';
     /* si la fila que viene ya es toda del mes siguiente, se corta: seis semanas
