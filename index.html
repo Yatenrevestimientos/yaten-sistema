@@ -42,7 +42,11 @@ button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid transparen
 .prewrap{display:grid;grid-template-columns:minmax(0,1fr) 262px;gap:16px;align-items:start}
 @media(max-width:980px){.prewrap{grid-template-columns:1fr}}
 .preside{position:sticky;top:57px}
-@media(max-width:980px){.preside{position:static}}
+/* 25/8, auditoría: en el teléfono la columna se apilaba DESPUÉS del formulario
+   y los botones quedaban a cuatro pantallas de scroll — la queja de Gilda del
+   14/8, entera, en el teléfono de Rocío. En pantalla angosta la columna de
+   acciones va ARRIBA del formulario. */
+@media(max-width:980px){.preside{position:static;order:-1}}
 .pcard{background:#fff;border:1px solid var(--linea);border-radius:10px;margin-bottom:12px;overflow:hidden}
 .pcard>h3{margin:0;font:600 11.5px/1 system-ui;text-transform:uppercase;letter-spacing:.07em;
   color:#fff;background:var(--petroleo);padding:9px 12px}
@@ -272,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.25-147";
+const VERSION = "v2026.08.26-149";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -447,7 +451,16 @@ $("dcerrar").onclick = () => $("dlg").close();
    venta o de un prospecto, las banderas quedaban prendidas y el próximo alta
    de cliente —de cualquier pantalla— saltaba a la venta vieja y enganchaba un
    prospecto ajeno. Al cerrar, se apagan siempre. */
-$("dlg").addEventListener("close", function(){ _VOLVER_A_VENTA = false; _PROS_CLI = null; _VOLVER_EMB = null; });
+/* 25/8, auditoría: acá faltaban las tres banderas nuevas. Cerrar con la X
+   las dejaba prendidas y la próxima cobranza de OTRO cliente mostraba «Volver
+   a la venta» de una venta ajena. Los guardados las leen ANTES de cerrar, así
+   que apagarlas acá no rompe ningún camino bueno. */
+$("dlg").addEventListener("close", function(){
+  _VOLVER_A_VENTA = false; _PROS_CLI = null; _VOLVER_EMB = null;
+  try{ _VOLVER_VEN = null; }catch(e){}
+  try{ _VOLVER_CLI = null; }catch(e){}
+  try{ _VOLVER_PROV = null; }catch(e){}
+});
 
 sb.auth.onAuthStateChange((_e, session) => { if (session) arrancar(); });
 sb.auth.getSession().then(({data}) => { if (data.session) arrancar(); });
@@ -3440,7 +3453,13 @@ async function togglePermiso(rolId, codigo, on, el){
    la baja el dueño a mano desde acá. No es un lujo: sin esto, si se pierde la
    base se pierde todo, sin vuelta atrás. */
 
-const TABLAS_COPIA = ["asesores","bancos","canales_contacto","cc_movimientos","chequeras","cheques",
+/* 25/8, auditoría: faltaban ocho tablas y la pantalla decía que bajaba TODO.
+   Las tres de medios (con qué se cobró, se pagó y se gastó), los hitos y
+   estados del embarque, la foto del costo anterior al cierre, y dos maestras
+   que otros datos referencian por id. Un respaldo que respalda el 90% y dice
+   100% es el candado escrito y nunca enchufado, del otro lado. */
+const TABLAS_COPIA = ["areas_gasto","asesores","bancos","canales_contacto","cc_movimientos","chequeras","cheques",
+"cobranza_medios","pago_medios","gasto_medios","embarque_hitos","estados_embarque","embarque_cierre_costos","medios_pago",
 "clientes","cobranza_imputaciones","cobranzas","conceptos_cobranza","conceptos_embarque","conceptos_gasto",
 "conceptos_ingreso","conceptos_pago","conceptos_transferencia","config","cuentas","documento_tags",
 "documentos","embarque_costos","embarque_items","embarques","factura_impuestos","factura_items",
@@ -4622,7 +4641,10 @@ const REPORTES = [
      const p = k.split("|"), a = acc[k];
      const bruto = a.ventas - a.costo;
      const contrib = bruto - a.comis - a.instal - a.finan;
-     return [p[0], p[1], a.ventas, a.costo||null, bruto, a.comis||null, a.instal||null, a.finan||null,
+     /* 25/8, auditoría: los ceros iban como null y se pintaban «—», justo
+        cuando el aviso de abajo dice que lo que falta «queda en cero». Ahora el
+        cero se ve: cero es un dato. */
+     return [p[0], p[1], a.ventas, a.costo, bruto, a.comis, a.instal, a.finan,
              contrib, a.gastos, contrib - a.gastos];
    });
 
@@ -4814,7 +4836,9 @@ async function correrReporte(){
     if (v==null || v==="") return "—";
     if (c.tipo==="f") return fmtF(v);
     if (c.tipo==="n") return fmtN(v);
-    if (c.tipo==="m") return fmtM(v, iMon>=0 ? fila[iMon] : "ARS");
+    /* 25/8: la columna de plata muestra el cero. El «—» queda para el null,
+       que significa «no aplica» o «no se pudo calcular» — son cosas distintas. */
+    if (c.tipo==="m") return fmtM0(v, iMon>=0 ? fila[iMon] : "ARS");
     return esc(String(v));
   };
   /* totales: por moneda, de cada columna de plata */
@@ -5209,7 +5233,7 @@ function pintarFichaPre(){
        '<div class="muted" id="w_cli_nota" style="font-size:.85em;margin-top:4px">'+
        (c.prospecto_id ? 'Viene de un prospecto: el cliente es ese y no se cambia acá.' : '')+'</div></div>':'')+
      '<div class="f"><label>Cliente '+AST+'</label><input id="w_cliente_nombre" value="'+esc(c.cliente_nombre)+'" '+d+'>'+
-       (c.cliente_id? '<div style="margin-top:4px">'+botonFichaCliente(c.cliente_id)+'</div>' : '')+'</div>'+
+       (c.cliente_id? '<div style="margin-top:4px">'+botonFichaCliente(c.cliente_id, (c.id?{tipo:"presupuesto", id:c.id}:null))+'</div>' : '')+'</div>'+
      '<div class="f"><label>Teléfono '+AST+'</label><input id="w_cliente_tel" value="'+esc(c.cliente_tel)+'" '+d+'></div>'+
      '<div class="f"><label>Email</label><input id="w_cliente_email" value="'+esc(c.cliente_email)+'" '+d+'></div>'+
      '<div class="f"><label>Localidad '+AST+'</label><select id="w_localidad_id" '+d+'>'+selOpts(M.loc,c.localidad_id)+'</select></div>'+
@@ -5228,7 +5252,7 @@ function pintarFichaPre(){
          : '<div class="muted" style="font-size:.85em;margin-top:4px">Para venderlo usá el botón «Pasar a venta», al pie.</div>')+
      '</div>'+
      '<div class="f"><label>Lista de precios</label><select id="w_lista_id" '+d+'>'+selOpts(LISTAS,c.lista_id)+'</select></div>'+
-     '<div class="f"><label>Moneda</label><select id="w_moneda" '+d+' onchange="sincro()">'+selTxt(["ARS","USD"],c.moneda||"ARS")+'</select></div>'+
+     '<div class="f"><label>Moneda</label><select id="w_moneda" '+d+' onchange="preMoneda()">'+selTxt(["ARS","USD"],c.moneda||"ARS")+'</select></div>'+
      '<div class="f"><label>Cotización USD</label><input type="number" step="0.01" id="w_cotizacion_usd" value="'+(c.cotizacion_usd==null?"":c.cotizacion_usd)+'" '+d+'></div>'+
      '<div class="f"><label>N° de presupuesto en papel <span class="muted" style="font-size:.85em">(obligatorio si viene de una visita)</span></label><input id="w_nro_papel" value="'+esc(c.nro_papel)+'" '+d+' placeholder="el que escribió el ATO a mano">'+
        '<div class="muted" style="font-size:.85em;margin-top:4px">Se carga acá, no en la ficha del prospecto. En un presupuesto suelto, de mostrador, no hace falta.</div></div>'+
@@ -5331,7 +5355,7 @@ function pintarFichaPre(){
       (c.id?'<button class="b-neutro" onclick="imprimirPresupuesto()">Imprimir o PDF</button>':'')+
       (c.id?'<button class="b-neutro" onclick="formMailPresupuesto()">Enviar por Email</button>':'')+
       ((cliLig && P("cliente-consultar"))
-        ? '<div class="sep"></div><button class="b-neutro" onclick="fichaCliente('+cliLig.id+')">Ficha del cliente</button>' : '')+
+        ? '<div class="sep"></div><button class="b-neutro" onclick="verFichaCliente('+cliLig.id+','+(c.id?("'presupuesto',"+c.id):"null,null")+')">Ficha del cliente</button>' : '')+
       ((c.prospecto_id && P("prospecto-consultar"))
         ? '<button class="b-neutro" onclick="abrir('+c.prospecto_id+')">Prospecto de origen</button>' : '')+
       ((c.id && puede && !vendido && c.estado !== "Anulado" && P("venta-agregar"))
@@ -5349,7 +5373,7 @@ function pintarFichaPre(){
     '<div class="panel" style="margin-bottom:12px"><h2>'+
       esc(c.codigo ? (c.codigo+" · "+(c.cliente_nombre||"")) : "Presupuesto nuevo")+'</h2>'+
       '<div class="desc">'+(c.id? 'Presupuesto '+esc(c.estado||"Abierto")+'.' : 'El número se genera solo al guardar.')+
-      ' Los botones están en la columna de la derecha.</div></div>'+
+      ' Los botones están en la columna de la derecha; en el teléfono, arriba de todo.</div></div>'+
     '<div class="prewrap"><div class="panel" style="margin:0">'+cuerpo+'</div>'+
     '<div class="preside">'+lateral+'</div></div>';
 
@@ -5456,9 +5480,11 @@ function pintarTotales(){
       '</td><td style="text-align:right;color:#7a2415">− '+(fmtM(t.descItems,m)||"")+'</td></tr>':'')+
     (t.exceso>0?'<tr><td colspan="2" style="color:#7a2415;white-space:normal">El descuento en plata es mayor que el total de productos. Se descontó '+(fmtM(t.brutoItems,m)||"")+', que es todo. Revisá el importe.</td></tr>':'')+
     (t.adic>0?'<tr><td>Adicionales</td><td style="text-align:right">'+(fmtM(t.adic,m)||"")+'</td></tr>':'')+
-    '<tr><td><b>Neto</b></td><td style="text-align:right"><b>'+(fmtM(t.neto,m)||"—")+'</b></td></tr>'+
-    '<tr><td>IVA</td><td style="text-align:right">'+(fmtM(t.iva,m)||"—")+'</td></tr>'+
-    '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(t.total,m)||"—")+'</b></td></tr>'+
+    /* 25/8: en la cascada el cero es un dato — «IVA $ 0» dice «todo exento»,
+       el guión dice «no calculé». */
+    '<tr><td><b>Neto</b></td><td style="text-align:right"><b>'+fmtM0(t.neto,m)+'</b></td></tr>'+
+    '<tr><td>IVA</td><td style="text-align:right">'+fmtM0(t.iva,m)+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+fmtM0(t.total,m)+'</b></td></tr>'+
   '</tbody></table></div>';
   /* La misma cuenta, resumida, en la tarjeta de la derecha: es la que se mira
      mientras se cargan los renglones, sin tener que bajar hasta el final. */
@@ -5500,6 +5526,29 @@ function sincro(){
 }
 function itemAgregar(){ sincro(); PRE.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"m2", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, con_instalacion:false}); pintarItems(); pintarTotales(); }
 function itemQuitar(k){ sincro(); const x = PRE.items[k]; if (x.id) PRE.borrarItems.push(x.id); PRE.items.splice(k,1); pintarItems(); pintarTotales(); }
+/* 25/8, auditoría: cambiar la moneda del presupuesto cambiaba la etiqueta y
+   dejaba los números — el mismo error que la venta. Cada renglón con producto
+   vuelve a buscar su precio en la moneda nueva; el cargado a mano se avisa. */
+function preMoneda(){
+  sincro();
+  const m = ($("w_moneda")||{}).value || "ARS";
+  let aMano = 0;
+  PRE.items.forEach(function(x){
+    if (!x.producto_id){ if (Number(x.precio_unit||0) > 0) aMano++; return; }
+    const pr = PRODS.find(function(z){ return String(z.id)===String(x.producto_id); });
+    if (!pr){ aMano++; return; }
+    const nuevo = Number(precioDe(pr, $("w_lista_id") ? $("w_lista_id").value : null, m, !!x.con_instalacion) || 0);
+    if (nuevo > 0) x.precio_unit = nuevo;
+    else if (Number(x.precio_unit||0) > 0) aMano++;
+  });
+  pintarItems(); pintarTotales();
+  const box = $("qmsg");
+  if (box){
+    box.innerHTML = aMano
+      ? '<div class="msg err" style="line-height:1.5"><b>Cambiaste la moneda a '+esc(m)+'.</b> Los renglones con producto se repreciaron con la lista. Hay <b>'+aMano+'</b> renglón(es) con importe a mano (o sin precio en '+esc(m)+') que quedaron con el número de la otra moneda: revisalos. Los adicionales y el descuento en plata tampoco se convierten solos.</div>'
+      : (PRE.items.length ? '<div class="msg ok">Moneda cambiada a '+esc(m)+': los precios se volvieron a buscar de la lista. Los adicionales y el descuento en plata no se convierten solos: revisalos.</div>' : '');
+  }
+}
 function itemProducto(k){
   sincro();
   const x = PRE.items[k], p = PRODS.find(y=>String(y.id)===String(x.producto_id));
@@ -6425,7 +6474,7 @@ async function guardarRecepcion(ordenId){
   if (!items.length){ $("rcpmsg").innerHTML='<div class="msg err">Poné al menos un renglón con cantidad.</div>'; return; }
   const {error} = await sb.rpc("registrar_recepcion_oc",{p_orden:ordenId, p_items:items});
   if (error){ $("rcpmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
-  $("dlg").close(); VISTAS.compras();
+  await volverDeCompras();
 }
 
 
@@ -6526,7 +6575,17 @@ function pintarEmbarque(){
   const land = {}; EMB.landed.forEach(y=>{ land[y.item_id] = y; });
   const totFob = EMB.landed.reduce((a,y)=>a+Number(y.fob_total||0),0);
   const totCost = EMB.landed.reduce((a,y)=>a+Number(y.costos_asignados||0),0);
-  const recup = EMB.costos.filter(y=>y.recuperable).reduce((a,y)=>a+(y.moneda==="USD"?Number(y.importe||0):Number(y.importe||0)/(Number(x.cotizacion_usd)||1)),0);
+  /* 25/8, auditoría: sin cotización se dividía por 1, y un IVA recuperable de
+     $18.000.000 aparecía como US$ 18.000.000. Lo que no se puede convertir no
+     se estima: queda afuera y se dice cuánto quedó afuera. */
+  const cotEmb = Number(x.cotizacion_usd)||0;
+  let recupSin = 0;
+  const recup = EMB.costos.filter(y=>y.recuperable).reduce(function(a,y){
+    if (y.moneda === "USD") return a + Number(y.importe||0);
+    if (cotEmb > 0) return a + Number(y.importe||0)/cotEmb;
+    recupSin += Number(y.importe||0);
+    return a;
+  },0);
   const totM3 = EMB.items.reduce((a,y)=>a+Number(y.cantidad||0)*Number(y.m3_unit||0),0);
   $("dtit").textContent = x.codigo + (x.anulado?" · ANULADO":(x.estado==="Cerrado"?" · CERRADO":" · "+(x.estado||"Abierto")));
   $("dbody").innerHTML = '<div id="embmsg"></div>'+
@@ -6541,7 +6600,8 @@ function pintarEmbarque(){
    '<div class="kpis" style="margin:10px 0">'+
      '<div class="kpi"><div class="t">FOB de la mercadería</div><div class="n">'+fmtM(totFob,"USD")+'</div></div>'+
      '<div class="kpi"><div class="t">Costos que van al producto</div><div class="n">'+fmtM(totCost,"USD")+'</div><div class="muted">flete, seguro, derechos, despachante</div></div>'+
-     '<div class="kpi" style="border-left-color:#1d5b2c"><div class="t">Recuperable, no va al costo</div><div class="n">'+fmtM(recup,"USD")+'</div><div class="muted">IVA y percepciones</div></div>'+
+     '<div class="kpi" style="border-left-color:#1d5b2c"><div class="t">Recuperable, no va al costo</div><div class="n">'+fmtM0(recup,"USD")+'</div><div class="muted">'+
+       (recupSin>0 ? '<b style="color:#7a2415">Ojo:</b> hay '+fmtM0(recupSin,"ARS")+' recuperables en pesos que NO se sumaron porque el embarque no tiene cotización cargada.' : 'IVA y percepciones')+'</div></div>'+
      '<div class="kpi"><div class="t">Volumen total</div><div class="n">'+fmtN(totM3)+' m³</div></div>'+
    '</div>'+
    '<div class="sec">Por dónde va</div>'+
@@ -7064,10 +7124,18 @@ function formAjusteStock(prodId){
   try{ $("dlg").showModal(); }catch(e){}
 }
 async function motivoStockAgregar(prodId){
+  /* 25/8: redibujaba el formulario y se perdían la cantidad y el detalle. */
   const n = $("as_mot_nuevo").value.trim(); if (!n) return;
   const {error} = await sb.from("motivos_stock").insert({nombre:n, activo:true});
   if (error){ $("ajsmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
-  await cargarStock(); formAjusteStock(prodId);
+  const mo = await sb.from("motivos_stock").select("*").order("id");
+  const sel = $("as_motivo");
+  if (sel && !mo.error){
+    const nuevo = (mo.data||[]).find(function(x){ return x.nombre === n; });
+    sel.innerHTML = selOpts(mo.data||[], nuevo ? nuevo.id : null);
+  }
+  $("as_mot_nuevo").value = "";
+  if ($("ajsmsg")) $("ajsmsg").innerHTML = '<div class="msg ok">Motivo «'+esc(n)+'» agregado y elegido. La cantidad y el detalle siguen ahí.</div>';
 }
 async function guardarAjusteStock(prodId){
   const c = Number($("as_cant").value||0);
@@ -7235,8 +7303,17 @@ function accionCheque(x){
      depositado para siempre y el recibo que lo trajo tampoco se puede anular. */
   if (x.tipo === "Terceros" && x.estado === "Depositado" && P("finanzas-anular"))
     return '<button class="btn2 btn-sm" onclick="anularDeposito('+x.id+')">Deshacer depósito</button>';
-  if (esDueno() && x.estado !== "Cobrado")
+  /* 25/8, auditoría: el cambio de estado a mano NO se ofrece si el cheque ya
+     salió en una orden de pago o entró con un recibo. Devolver a «Disponible»
+     un cheque Entregado lo hacía reaparecer en la cartera, y el mismo papel
+     quedaba comprometido con dos proveedores. Si hay que dar marcha atrás, se
+     anula la operación entera, no el cheque suelto. */
+  if (esDueno() && x.estado !== "Cobrado"){
+    if (x.pago_id)     return '<span class="muted" title="Salió en una orden de pago. Anulá esa orden y el cheque vuelve solo.">salió en un pago</span>'+btnAnular;
+    if (x.cobranza_id && x.estado !== "Disponible")
+                       return '<span class="muted" title="Entró con un recibo. Anulá la cobranza y se revierte todo junto.">vino de un recibo</span>'+btnAnular;
     return '<button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Cambiar estado</button>'+btnAnular;
+  }
   return btnAnular;
 }
 /* Depositar el cheque: sale de la cuenta «Cheques de terceros» y entra al banco.
@@ -7563,7 +7640,11 @@ VISTAS.provee = async function(){
   const puede = P("compra-modificar");
   const t = FPROV.toLowerCase();
   let rows = PROVS.filter(p => !t || (p.nombre+" "+(p.dni_cuit||"")+" "+(p.telefono||"")+" "+(p.celular||"")+" "+(p.email||"")+" "+(p.direccion||"")+" "+nom(M.loc,p.localidad_id)).toLowerCase().indexOf(t)>=0);
-  const debemos = p => Math.max(saldoProv(p.id,'ARS'),0) + Math.max(saldoProv(p.id,'USD'),0);
+  /* 25/8, auditoría: se ordenaba sumando pesos más dólares, que no es un
+     número de nada — la fábrica china con US$ 40.000 quedaba abajo del que
+     debía $80.000. Sin cotización confiable, primero manda el USD y desempata
+     el ARS. */
+  const debemos = p => Math.max(saldoProv(p.id,'USD'),0) * 1e9 + Math.max(saldoProv(p.id,'ARS'),0);
   if (SUBVISTA === "deuda") rows = rows.filter(p => saldoProv(p.id,'ARS')>0 || saldoProv(p.id,'USD')>0).sort((a,b)=>debemos(b)-debemos(a));
   const totPag = {ARS:0, USD:0};
   rows.forEach(function(p){ ['ARS','USD'].forEach(function(m){ const v = saldoProv(p.id,m); if (v>0) totPag[m] += v; }); });
@@ -7806,10 +7887,19 @@ function estadoFactura(f, pagado){
 }
 function seccionFactProv(p, facs, nots, imput){
   const vivas = facs.filter(x=>!x.anulado);
-  const debe = vivas.reduce(function(a,f){ return a + Math.max(Number(f.total||0)-Number(imput[f.id]||0),0); },0);
+  /* 25/8, auditoría: acá se sumaban pesos con dólares y el paréntesis juraba lo
+     contrario. Un proveedor importador tiene las dos monedas: la fábrica en USD
+     y el despachante en ARS. Ahora la cuenta va por moneda, cada una la suya. */
+  const debePorMon = {};
+  vivas.forEach(function(f){
+    const m = f.moneda||"ARS";
+    debePorMon[m] = (debePorMon[m]||0) + Math.max(Number(f.total||0)-Number(imput[f.id]||0),0);
+  });
+  const debeTxt = Object.keys(debePorMon).filter(function(m){ return debePorMon[m] > 0.009; })
+    .map(function(m){ return '<b>'+fmtM0(debePorMon[m], m)+'</b>'; }).join(' y ');
   return '<div class="sec">Facturas de compra</div>'+
    '<div class="muted" style="margin-bottom:8px">Cada factura es deuda con el proveedor. Tocá una para verla, imprimirla, pagarla o anularla. '+
-   (vivas.length? 'Sin cancelar quedan <b>'+fmtM(debe, (vivas[0]||{}).moneda||"ARS")+'</b> (sumando solo las de esa moneda).' : '')+'</div>'+
+   (vivas.length? (debeTxt ? 'Sin cancelar quedan '+debeTxt+'.' : 'No queda nada sin cancelar.') : '')+'</div>'+
    (facs.length? '<div class="tablewrap" style="max-height:42dvh;overflow:auto"><table><thead><tr>'+
      ['Comprobante','Fecha','Total','Pagado','Saldo','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      facs.map(function(f){
@@ -8444,7 +8534,7 @@ function pintarFacTot(){
   const tot = Number(FAC.neto||0)+imp;
   const el = $("fa_tot"); if (!el) return;
   el.innerHTML = '<div class="tablewrap"><table><tbody>'+
-   '<tr><td>Neto gravado</td><td style="text-align:right">'+(fmtM(FAC.neto,m)||"—")+'</td></tr>'+
+   '<tr><td>Neto gravado</td><td style="text-align:right">'+fmtM0(FAC.neto,m)+'</td></tr>'+
    '<tr><td>Impuestos</td><td style="text-align:right">'+(fmtM(imp,m)||"—")+'</td></tr>'+
    '<tr style="background:#f6f3ee"><td><b>TOTAL de la factura</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(tot,m)||"—")+'</b></td></tr>'+
    '</tbody></table></div>';
@@ -8490,7 +8580,7 @@ async function guardarFactura(){
                                 base:       x.base==null?null:String(x.base)}))});
     }catch(e){ }
   }
-  $("dlg").close(); await cargarProveedores(); VISTAS.compras();
+  await cargarProveedores(); await volverDeCompras();
 }
 /* 13/8, Gilda: «al cerrar la consulta VER, que no salga del proveedor». Se
    recuerda de dónde se entró y el botón Cerrar vuelve ahí, no al vacío. */
@@ -8498,6 +8588,17 @@ let _VOLVER_PROV = null;
 function cerrarVolviendo(){
   if (_VOLVER_PROV){ const p = _VOLVER_PROV; _VOLVER_PROV = null; fichaProveedor(p.id, p.tab); return; }
   document.getElementById("dlg").close();
+}
+/* 25/8, auditoría: siete guardados de Compras expulsaban al usuario a la
+   pantalla de Compras aunque estuviera trabajando desde la ficha del
+   proveedor, con el menú marcando otra cosa. Se lee la bandera ANTES de
+   cerrar (el cierre la apaga) y se vuelve a donde estaba. */
+async function volverDeCompras(){
+  const pv = _VOLVER_PROV; _VOLVER_PROV = null;
+  try{ $("dlg").close(); }catch(e){}
+  if (pv){ await fichaProveedor(pv.id, pv.tab); return; }
+  if (VISTA === "provee"){ try{ VISTAS.provee(); }catch(e){} return; }
+  VISTAS.compras();
 }
 async function verFactura(id){
   const [f,i,im] = await Promise.all([
@@ -8818,10 +8919,30 @@ async function imprimirFacturaCompra(id){
   setTimeout(function(){ w.print(); }, 400);
 }
 async function anularFactura(id){
+  /* 25/8, auditoría: no se anula una factura con pagos imputados vivos. Si no,
+     queda una orden de pago viva imputada a un comprobante que ya no cuenta:
+     saldo a favor nuestro que no existe. Primero la orden de pago, después el
+     papel — el mismo molde que la venta con remitos. */
+  const [pi, pg] = await Promise.all([
+    sb.from("pago_imputaciones").select("pago_id,importe").eq("factura_id",id),
+    sb.from("pagos_compra").select("id,codigo,anulado")
+  ]);
+  const anulados = {}; (pg.data||[]).forEach(function(x){ if (x.anulado) anulados[x.id]=true; });
+  const vivos = (pi.data||[]).filter(function(x){ return !anulados[x.pago_id]; });
+  if (vivos.length){
+    const cods = Array.from(new Set(vivos.map(function(x){
+      const p = (pg.data||[]).find(function(y){ return y.id===x.pago_id; });
+      return p ? (p.codigo||("pago #"+p.id)) : ("pago #"+x.pago_id);
+    })));
+    alert("Esta factura tiene "+vivos.length+" imputación(es) de pago vivas ("+cods.join(", ")+").\n\n"+
+      "Primero anulá la orden de pago desde Compras → Pagos: eso devuelve la plata a la cuenta.\n"+
+      "Después sí, anulá la factura.");
+    return;
+  }
   const m = prompt("¿Por qué se anula esta factura? La deuda con el proveedor se revierte."); if (m===null) return;
   const {error} = await sb.rpc("anular_factura_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
-  $("dlg").close(); await cargarProveedores(); VISTAS.compras();
+  await cargarProveedores(); await volverDeCompras();
 }
 
 /* ─── Nota de crédito / débito ─── */
@@ -8970,13 +9091,13 @@ async function guardarNota(){
   if (error) return err(esDuplicado(error)
     ? "Ya hay una nota viva de este proveedor con ese mismo tipo, punto de venta y número. Si la anterior está mal, anulala primero; si es otra nota, revisá el número."
     : error.message);
-  $("dlg").close(); await cargarProveedores(); VISTAS.compras();
+  await cargarProveedores(); await volverDeCompras();
 }
 async function anularNota(id){
   const m = prompt("¿Por qué se anula esta nota?"); if (m===null) return;
   const {error} = await sb.rpc("anular_nota_proveedor",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
-  await cargarProveedores(); VISTAS.compras();
+  await cargarProveedores(); await volverDeCompras();
 }
 
 /* ─── Orden de Pago · pago a proveedor ─── */
@@ -9069,7 +9190,14 @@ function medioQuitar(k){ pagSincro(); PAG.medios.splice(k,1); pintarMedios(); }
    redibuja primero, la tabla se arma con la cuenta vieja y el cambio se pierde
    sin decir nada. Es el mismo error que ya me comí con la grilla de impuestos. */
 function medioCuenta(k){ pagSincro(); pintarMedios(); }
-function pagoMoneda(){ pagSincro(); pintarMedios(); }
+function pagoMoneda(){
+  pagSincro();
+  PAG.moneda = $("pa_moneda") ? ($("pa_moneda").value||"ARS") : (PAG.moneda||"ARS");
+  pintarMedios();
+  /* al cambiar la moneda de la deuda cambian las facturas imputables: se
+     vuelve a pedir la lista, no se deja la de la otra moneda en pantalla */
+  pagoProveedor();
+}
 
 function rotuloMedio(x){
   if (x.tipo === "cheque_tercero"){
@@ -9160,8 +9288,14 @@ async function pagoProveedor(){
     if (pagoAnulado[x.pago_id]) return;
     pagados[x.factura_id] = (pagados[x.factura_id]||0) + Number(x.importe||0);
   });
+  /* 25/8, auditoría: la lista NO filtraba por moneda. Con la deuda en pesos se
+     ofrecía igual la factura de US$ 12.000 del proveedor chino, y al imputarla
+     el sistema la marcaba Paga: doce mil dólares cancelados con doce mil pesos.
+     Mismo criterio que la cobranza, que siempre lo hizo bien: solo se imputa
+     lo que está en la misma moneda que la deuda. */
   PAG.facturas = (f.data||[]).map(x=>({id:x.id, rot:nroComp(x), fecha:x.fecha, moneda:x.moneda,
-    total:Number(x.total||0), saldo:Number(x.total||0)-(pagados[x.id]||0)})).filter(x=>x.saldo>0.009);
+    total:Number(x.total||0), saldo:Number(x.total||0)-(pagados[x.id]||0)}))
+    .filter(x=>x.saldo>0.009 && (x.moneda||"ARS") === (PAG.moneda||"ARS"));
   $("pa_facturas").innerHTML = !PAG.facturas.length ? '<div class="muted">Este proveedor no tiene comprobantes pendientes.</div>' :
    '<div class="tablewrap"><table><thead><tr><th>Comprobante</th><th>Fecha</th><th>Moneda</th><th>Total</th><th>Saldo</th><th>A imputar</th><th></th></tr></thead><tbody>'+
    PAG.facturas.map((x,k)=>'<tr><td><b>'+esc(x.rot)+'</b></td><td>'+fmtF(x.fecha)+'</td><td>'+esc(x.moneda)+'</td>'+
@@ -9186,17 +9320,29 @@ function imputarSaldo(k){
 /* ── La cartera de cheques de terceros ── */
 async function abrirCartera(){
   pagSincro();
+  /* 25/8, auditoría: dos filtros que faltaban.
+     1) La moneda: un cheque de $500.000 entraba a una orden en dólares con su
+        nominal, como US$ 500.000.
+     2) pago_id vacío: si a un cheque Entregado alguien le cambiaba el estado a
+        mano, la cartera lo volvía a ofrecer y el mismo papel quedaba
+        comprometido con dos proveedores. El estado puede estar mal; el pago
+        del que salió, no. */
   const q = await sb.from("cheques").select("*").eq("tipo","Terceros").eq("estado","Disponible")
-              .eq("anulado",false).order("vencimiento");
+              .eq("anulado",false).is("pago_id",null).order("vencimiento");
   if (q.error) return alert(q.error.message);
   const usados = PAG.medios.filter(x=>x.tipo==="cheque_tercero").map(x=>String(x.cheque_id));
-  PAG.cartera = (q.data||[]).filter(x=>usados.indexOf(String(x.id))<0);
+  const monOrden = PAG.moneda||"ARS";
+  const otraMon = (q.data||[]).filter(x=>usados.indexOf(String(x.id))<0 && (x.moneda||"ARS") !== monOrden).length;
+  PAG.cartera = (q.data||[]).filter(x=>usados.indexOf(String(x.id))<0 && (x.moneda||"ARS") === monOrden);
+  window._CARTERA_OTRAMON = otraMon;
   const d = dlg2();
   $("d2tit").textContent = "Cheques de terceros en cartera";
+  const avisoOtra = window._CARTERA_OTRAMON
+    ? '<div class="muted" style="margin-bottom:8px">Hay '+window._CARTERA_OTRAMON+' cheque(s) en otra moneda que no se ofrecen: un cheque se entrega en la moneda de la orden, no se convierte solo.</div>' : '';
   $("d2body").innerHTML = !PAG.cartera.length
-    ? '<div class="muted">No hay cheques de terceros disponibles en la cartera. Entran cuando un cliente paga con cheque, o cargándolos a mano en <b>Cheques</b>.</div>'+
+    ? avisoOtra+'<div class="muted">No hay cheques de terceros disponibles en la cartera en '+esc(PAG.moneda||"ARS")+'. Entran cuando un cliente paga con cheque, o cargándolos a mano en <b>Cheques</b>.</div>'+
       '<div class="acciones"><button class="btn2" onclick="cerrarDlg2()">Cerrar</button></div>'
-    : '<div class="muted" style="margin-bottom:8px">Un cheque se entrega entero. Tildá los que le vas a dar al proveedor: se suman a la orden de pago.</div>'+
+    : avisoOtra+'<div class="muted" style="margin-bottom:8px">Un cheque se entrega entero. Tildá los que le vas a dar al proveedor: se suman a la orden de pago.</div>'+
       '<div class="tablewrap" style="max-height:50dvh;overflow:auto"><table><thead><tr><th></th><th>Número</th><th>Librador</th><th>Banco</th><th>Vence</th><th>Importe</th><th>Está en</th></tr></thead><tbody>'+
       PAG.cartera.map(function(c,k){
         const cta = (CTAS||[]).find(y=>String(y.id)===String(c.cuenta_id));
@@ -9216,7 +9362,8 @@ function carteraTotal(){
   let s = 0, n = 0;
   PAG.cartera.forEach(function(c,k){ const el=$("cc_"+k); if (el && el.checked){ s += Number(c.importe||0); n++; } });
   const el = $("cc_tot");
-  if (el) el.innerHTML = n ? 'Tildados: <b>'+n+'</b> cheque(s) por <b>'+fmtM(s,"ARS")+'</b>' : 'Todavía no tildaste ninguno.';
+  /* 25/8: decía siempre ARS con la moneda escrita a mano; ahora la de la orden */
+  if (el) el.innerHTML = n ? 'Tildados: <b>'+n+'</b> cheque(s) por <b>'+fmtM0(s,PAG.moneda||"ARS")+'</b>' : 'Todavía no tildaste ninguno.';
 }
 function carteraAgregar(){
   let n = 0;
@@ -9316,7 +9463,7 @@ async function guardarPago(){
     }
   });
   if (mal) return err(mal);
-  if (!saldoAlcanzaMedios(PAG.medios, "pagmsg")) return;
+  if (!saldoAlcanzaMedios(PAG.medios, "pagmsg", m)) return;
   const total = PAG.medios.reduce(function(a,x){ return a+Number(x.importe||0); },0);
   const imputaciones = [];
   PAG.facturas.forEach(function(x,k){ const el=$("pf_"+k); const v = el?Number(el.value||0):0; if (v>0) imputaciones.push({factura_id:x.id, importe:v}); });
@@ -9339,16 +9486,15 @@ async function guardarPago(){
     p_moneda:m, p_medios:medios, p_imputaciones:imputaciones, p_obs:PAG.obs||null});
   $("pa_guardar").disabled = false;
   if (r.error) return err(r.error.message);
-  $("dlg").close();
   await cargarProveedores(); await cargarFin(); try{ await cargarCheques(); }catch(e){}
-  VISTAS.compras();
+  await volverDeCompras();
 }
 
 async function anularPago(id){
   const m = prompt("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta."); if (m===null) return;
   const {error} = await sb.rpc("anular_pago_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
-  await cargarProveedores(); await cargarFin(); VISTAS.compras();
+  await cargarProveedores(); await cargarFin(); await volverDeCompras();
 }
 
 /* ═══════════ VENTAS ═══════════ */
@@ -9528,7 +9674,7 @@ function pintarFichaVenta(){
    '<div class="sec">Datos</div><div class="grid">'+
      '<div class="f"><label>Fecha</label><div>'+fmtF(ve.fecha)+'</div></div>'+
      '<div class="f"><label>Cliente</label><div>'+esc(cli?cli.nombre:("#"+ve.cliente_id))+
-       botonFichaCliente(cli?cli.id:null, ve.id)+'</div></div>'+
+       botonFichaCliente(cli?cli.id:null, {tipo:"venta", id:ve.id})+'</div></div>'+
      '<div class="f"><label>Moneda</label><div>'+esc(ve.moneda)+(enPesos?' <span class="muted">· a $ '+fmtN(cot)+' por dólar</span>':'')+'</div></div>'+
      '<div class="f"><label>Estado</label><div>'+esc(ve.estado||"En curso")+'</div></div>'+
    '</div>'+
@@ -9586,7 +9732,7 @@ function pintarFichaVenta(){
     '<div class="panel" style="margin-bottom:12px"><h2>'+
       esc((ve.codigo||"Venta")+(cli?" · "+cli.nombre:""))+'</h2>'+
       '<div class="desc">'+(ve.anulado?'Venta anulada.':'Venta '+esc(ve.estado||"En curso")+'.')+
-      ' Los botones están en la columna de la derecha.</div></div>'+
+      ' Los botones están en la columna de la derecha; en el teléfono, arriba de todo.</div></div>'+
     '<div class="prewrap"><div class="panel" style="margin:0">'+cuerpo+'</div>'+
     '<div class="preside">'+lateral+'</div></div>';
 }
@@ -10266,7 +10412,29 @@ function listaDeVenta(){
 function ventaItemAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:false, con_instalacion:false}); pintarVentaItems(); pintarVentaTotales(); }
 function ventaAdicAgregar(){ ventaSincro(); VTA.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0, descuento_pct:0, iva_pct:21, aplica_iva:true, es_adicional:true}); pintarVentaItems(); pintarVentaTotales(); }
 function ventaItemQuitar(k){ ventaSincro(); VTA.items.splice(k,1); pintarVentaItems(); pintarVentaTotales(); }
-function ventaMoneda(){ VTA.moneda = $("v_moneda").value || "ARS"; ventaSincro(); pintarVentaItems(); pintarVentaTotales(); }
+function ventaMoneda(){
+  ventaSincro();
+  VTA.moneda = $("v_moneda").value || "ARS";
+  /* 25/8, auditoría: cambiar la moneda cambiaba la ETIQUETA y dejaba los
+     números — $5.400.000 pasaban a decir US$ 5.400.000 y la venta se podía
+     guardar así. Ahora cada renglón con producto vuelve a buscar su precio de
+     la lista en la moneda nueva, y los que no se pueden repreciar se avisan. */
+  let aMano = 0;
+  VTA.items.forEach(function(x){
+    if (!x.producto_id){ if (Number(x.precio_unit||0) > 0) aMano++; return; }
+    const pr = PRODS.find(function(z){ return String(z.id)===String(x.producto_id); });
+    if (!pr){ aMano++; return; }
+    const nuevo = Number(precioDe(pr, listaDeVenta(), VTA.moneda, !!x.con_instalacion) || 0);
+    if (nuevo > 0) x.precio_unit = nuevo;
+    else { if (Number(x.precio_unit||0) > 0) aMano++; }
+  });
+  pintarVentaItems(); pintarVentaTotales();
+  if (aMano && $("vnmsg"))
+    $("vnmsg").innerHTML = '<div class="msg err" style="line-height:1.5"><b>Cambiaste la moneda a '+esc(VTA.moneda)+'.</b> '+
+      'Los renglones con producto se repreciaron con la lista. Hay <b>'+aMano+'</b> renglón(es) con importe cargado a mano '+
+      'que quedaron con el número de la otra moneda (o el producto no tiene precio en '+esc(VTA.moneda)+'): revisalos antes de guardar.</div>';
+  else if ($("vnmsg")) $("vnmsg").innerHTML = '<div class="msg ok">Moneda cambiada a '+esc(VTA.moneda)+': los precios se volvieron a buscar de la lista.</div>';
+}
 function ventaSincro(){
   VTA.items.forEach(function(x,k){
     ["producto_id","descripcion","cantidad","unidad","precio_unit","descuento_pct","iva_pct"].forEach(function(c){
@@ -10347,9 +10515,9 @@ function pintarVentaTotales(){
   tt.innerHTML = '<div class="tablewrap"><table><tbody>'+
     '<tr style="background:#f6f3ee"><td>Medida total</td><td style="text-align:right;white-space:normal">'+textoMedidas(med)+'</td></tr>'+
     (med.sinDato.length? '<tr><td colspan="2" class="muted" style="white-space:normal;font-size:11px">'+med.sinDato.length+' renglón(es) sin m² por caja ni ml por unidad en la ficha del producto: suman a las unidades pero no a los metros.</td></tr>':'')+
-    '<tr><td>Neto</td><td style="text-align:right">'+(fmtM(t.neto,m)||"—")+'</td></tr>'+
-    '<tr><td>IVA</td><td style="text-align:right">'+(fmtM(t.iva,m)||"—")+'</td></tr>'+
-    '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(t.total,m)||"—")+'</b></td></tr>'+
+    '<tr><td>Neto</td><td style="text-align:right">'+fmtM0(t.neto,m)+'</td></tr>'+
+    '<tr><td>IVA</td><td style="text-align:right">'+fmtM0(t.iva,m)+'</td></tr>'+
+    '<tr style="background:#f6f3ee"><td><b>TOTAL</b></td><td style="text-align:right;font-size:17px"><b>'+fmtM0(t.total,m)+'</b></td></tr>'+
     '</tbody></table></div>';
   const b = $("v_guardar");
   if (b) b.textContent = t.total>0 ? ("Registrar venta por "+fmtM(t.total,m)) : "Registrar venta";
@@ -10652,7 +10820,7 @@ async function formDocumento(id, pre){
    '</div>'+
    '<div class="muted" style="margin:2px 0 10px">Cliente, producto y proveedor son opcionales: si dejás los tres vacíos el documento queda como general, disponible para todos.</div>'+
    '<div class="sec">Tags</div>'+
-   '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">'+
+   '<div id="d_tags_caja" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">'+
      TAGS.filter(x=>x.activo || mios.indexOf(x.id)>=0).map(x=>
        '<label style="display:flex;align-items:center;gap:5px;border:1px solid #d9d2c8;border-radius:14px;padding:4px 10px;cursor:pointer">'+
        '<input type="checkbox" id="d_tag_'+x.id+'" '+(mios.indexOf(x.id)>=0?"checked":"")+'>'+esc(x.nombre)+'</label>').join("")+
@@ -10671,12 +10839,26 @@ async function formDocumento(id, pre){
 }
 
 async function tagAgregarRapido(){
+  /* 25/8, auditoría: antes decía «volvé a abrir el documento para tildarlo» —
+     y reabrirlo borraba el nombre, la descripción y el archivo ya cargados. El
+     cartel mandaba a hacer exactamente lo que perdía el trabajo. Ahora se
+     redibuja SOLO la caja de tags, conservando lo tildado, y el nuevo queda
+     tildado. Mismo molde que el alta rápida de conceptos de gasto. */
   const n = $("d_tag_nuevo").value.trim(); if (!n) return;
   const {error} = await sb.from("tags").insert({nombre:n, activo:true});
   if (error) return alert(error.message.indexOf("duplicate")>=0 ? "Ese tag ya existe." : error.message);
+  const tildados = TAGS.filter(function(x){ const el=$("d_tag_"+x.id); return el && el.checked; }).map(function(x){ return x.id; });
   await cargarDocs();
+  const caja = $("d_tags_caja");
+  if (caja){
+    const nuevoTag = TAGS.find(function(x){ return x.nombre === n; });
+    caja.innerHTML = TAGS.filter(function(x){ return x.activo || tildados.indexOf(x.id)>=0; }).map(function(x){
+      const on = tildados.indexOf(x.id)>=0 || (nuevoTag && x.id === nuevoTag.id);
+      return '<label style="display:flex;align-items:center;gap:5px;border:1px solid #d9d2c8;border-radius:14px;padding:4px 10px;cursor:pointer">'+
+        '<input type="checkbox" id="d_tag_'+x.id+'" '+(on?"checked":"")+'>'+esc(x.nombre)+'</label>';
+    }).join("");
+  }
   $("d_tag_nuevo").value = "";
-  alert("Tag agregado: "+n+". Volvé a abrir el documento para tildarlo.");
 }
 
 async function guardarDocumento(id){
@@ -10954,8 +11136,10 @@ VISTAS.clientes = async function(){
       rows = rows.filter(c => String(c.medio_pago_pref_id) === String(FMPG));
     }
   }
-  const debe   = c => Math.max(saldoCli(c.id,'ARS'),0) + Math.max(saldoCli(c.id,'USD'),0);
-  const aFavor = c => Math.max(-saldoCli(c.id,'ARS'),0) + Math.max(-saldoCli(c.id,'USD'),0);
+  /* 25/8, auditoría: mismo arreglo que en proveedores — el orden no suma
+     pesos con dólares: manda el USD y desempata el ARS. */
+  const debe   = c => Math.max(saldoCli(c.id,'USD'),0) * 1e9 + Math.max(saldoCli(c.id,'ARS'),0);
+  const aFavor = c => Math.max(-saldoCli(c.id,'USD'),0) * 1e9 + Math.max(-saldoCli(c.id,'ARS'),0);
   if (SUBVISTA === "afavor"){
     rows = rows.filter(c => saldoCli(c.id,'ARS') < 0 || saldoCli(c.id,'USD') < 0).sort((a,b)=>aFavor(b)-aFavor(a));
   } else if (FDEUDA || SUBVISTA === "morosos"){
@@ -11174,27 +11358,27 @@ let CLI = null, CLITAB = "datos", _VOLVER_CLI = null;
    desde una venta, el «Volver» vuelve a la venta y no al listado de clientes:
    el que está mirando una venta y se va a la cuenta corriente del cliente
    quiere volver a la venta, no empezar de nuevo. */
-let _CLI_DESDE_VENTA = null;
+let _CLI_DESDE = null;   /* {tipo:"venta"|"presupuesto", id} */
 
 /* El botón con el muñequito que en Pirka está al lado del nombre del cliente,
    en el presupuesto y en la venta. Pedido de Gustavo (25/8): «tiene que haber un
    iconito de un muñequito, que eso me lleva al cliente y a todas las solapas».
    Lleva ícono Y texto: un ícono solo obliga a pasar el mouse por arriba para
    saber qué hace. */
-function botonFichaCliente(cliId, desdeVenta){
+function botonFichaCliente(cliId, desde){
   if (!cliId || !P("cliente-consultar")) return '';
   const svg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px">'+
     '<circle cx="12" cy="7.5" r="4.2"/><path d="M3.5 21c0-4.4 3.8-6.8 8.5-6.8s8.5 2.4 8.5 6.8z"/></svg>';
   return ' <button class="btn2 btn-sm" title="Abrir la ficha del cliente: visitas, presupuestos, ventas, remitos, cuenta corriente y novedades" '+
-    'onclick="verFichaCliente('+cliId+','+(desdeVenta||'null')+')">'+svg+' Ver cliente</button>';
+    'onclick="verFichaCliente('+cliId+','+(desde?("'"+desde.tipo+"',"+desde.id):"null,null")+')">'+svg+' Ver cliente</button>';
 }
-function verFichaCliente(cliId, desdeVenta){
-  _CLI_DESDE_VENTA = desdeVenta || null;
+function verFichaCliente(cliId, tipo, desdeId){
+  _CLI_DESDE = (tipo && desdeId) ? {tipo:tipo, id:desdeId} : null;
   fichaCliente(cliId);
 }
 
 VISTAS.cli_ficha = function(){ if (CLI) pintarFichaCli(); else ir("clientes"); };
-function volverDeCliente(){ CLI = null; CLITAB = "datos"; _CLI_DESDE_VENTA = null; ir("clientes"); }
+function volverDeCliente(){ CLI = null; CLITAB = "datos"; _CLI_DESDE = null; ir("clientes"); }
 function irTabCli(tab){ CLITAB = tab; pintarFichaCli(); }
 
 const TABS_CLI = [
@@ -11241,7 +11425,7 @@ function pintarFichaCli(){
 
   $("main").innerHTML =
     '<div class="panel" style="margin-bottom:12px"><h2>'+esc((c.codigo?c.codigo+" · ":"")+c.nombre)+'</h2>'+
-      '<div class="desc">Todo lo que pasó con este cliente, solapa por solapa. Los botones están en la columna de la derecha.</div></div>'+
+      '<div class="desc">Todo lo que pasó con este cliente, solapa por solapa. Los botones están en la columna de la derecha; en el teléfono, arriba de todo.</div></div>'+
     '<div class="prewrap"><div class="panel" style="margin:0">'+tabsCli()+cuerpo+'</div>'+
     '<div class="preside">'+lateral+'</div></div>';
 
@@ -11341,14 +11525,18 @@ function tarjetaAccionesCli(){
   if (P("cliente-historial")) h += '<button class="b-neutro" onclick="imprimirCCCli('+c.id+')">Resumen de cuenta</button>';
   if ((CLI.cheques||[]).length) h += '<button class="b-neutro" onclick="comprobanteCheques('+c.id+')">Comprobante Cheque</button>';
   h += '<div class="sep"></div>'+
-    (_CLI_DESDE_VENTA
-      ? '<button class="b-volver" onclick="volverALaVentaDesdeCli()">Volver a la venta</button>'
+    (_CLI_DESDE
+      ? '<button class="b-volver" onclick="volverDesdeCli()">Volver '+(_CLI_DESDE.tipo==="venta"?'a la venta':'al presupuesto')+'</button>'
       : '<button class="b-volver" onclick="volverDeCliente()">Volver</button>');
   return h + '</div></div>';
 }
-function volverALaVentaDesdeCli(){
-  const v = _CLI_DESDE_VENTA; _CLI_DESDE_VENTA = null; CLI = null; CLITAB = "datos";
-  fichaVenta(v);
+/* El que entró a la cuenta corriente del cliente desde una venta o un
+   presupuesto quiere volver ahí, no empezar de nuevo desde el listado. */
+function volverDesdeCli(){
+  const o = _CLI_DESDE; _CLI_DESDE = null; CLI = null; CLITAB = "datos";
+  if (!o) return ir("clientes");
+  if (o.tipo === "venta") return fichaVenta(o.id);
+  return abrirPresupuesto(o.id);
 }
 
 function tarjetaAuditoriaCli(){
@@ -11488,10 +11676,18 @@ async function notaAgregar(cliId){
   fichaCliente(cliId);
 }
 async function tipoNotaAgregar(cliId){
+  /* 25/8: redibujaba la ficha entera y se perdía el texto de la nota. */
   const n = $("nt_tipo_nuevo").value.trim(); if (!n) return;
   const {error} = await sb.from("tipos_nota").insert({nombre:n, activo:true});
   if (error){ $("ntmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
-  fichaCliente(cliId);
+  const t = await sb.from("tipos_nota").select("*").order("id");
+  const sel = $("nt_tipo");
+  if (sel && !t.error){
+    const nuevo = (t.data||[]).find(function(x){ return x.nombre === n; });
+    sel.innerHTML = selOpts(t.data||[], nuevo ? nuevo.id : null);
+  }
+  $("nt_tipo_nuevo").value = "";
+  if ($("ntmsg")) $("ntmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y elegido. La nota que estabas escribiendo sigue ahí.</div>';
 }
 async function notaAnular(id, cliId){
   const motivo = prompt("¿Por qué se anula esta nota?");
@@ -11879,6 +12075,21 @@ async function guardarCliente(id){
 /* Cerrar el diálogo grande desde un onclick, sin escribir el id a mano en cada botón. */
 function cerrarDialogo(){ try{ $("dlg").close(); }catch(e){} }
 async function anularCobranza(cobId, cliId){
+  /* 25/8, auditoría: si el cheque que entró con esta cobranza ya se depositó o
+     ya salió en un pago, primero vuelve el valor y después el papel. Antes no
+     se miraba y el comentario de Cheques daba por hecho que la base frenaba. */
+  try{
+    const ch = await sb.from("cheques").select("id,numero,estado,pago_id").eq("cobranza_id",cobId).eq("anulado",false);
+    const trabados = (ch.data||[]).filter(function(x){ return x.estado !== "Disponible" || x.pago_id; });
+    if (trabados.length){
+      const x = trabados[0];
+      alert("El cheque N° "+(x.numero||"s/n")+" que entró con este recibo está «"+x.estado+"»"+(x.pago_id?" y salió en una orden de pago":"")+".\n\n"+
+        (x.pago_id ? "Primero anulá esa orden de pago desde Compras → Pagos."
+                   : "Primero deshacé el depósito desde Cheques: eso lo devuelve a la cartera.")+
+        "\nDespués sí, anulá la cobranza.");
+      return;
+    }
+  }catch(e){}
   const m = prompt("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
   if (m === null) return;
   const {error} = await sb.rpc("anular_cobranza", {p_id:cobId, p_motivo:m||"Sin motivo"});
@@ -12161,8 +12372,8 @@ function calcImputadoCob(){
   const resta = imp - s;
   const el = $("k_imputado"); if (!el) return;
   el.innerHTML = '<div class="tablewrap"><table><tbody>'+
-    '<tr><td>Cobro</td><td style="text-align:right"><b>'+(fmtM(imp,m)||"—")+'</b></td></tr>'+
-    '<tr><td>Imputado a ventas</td><td style="text-align:right">'+(fmtM(s,m)||"—")+'</td></tr>'+
+    '<tr><td>Cobro</td><td style="text-align:right"><b>'+fmtM0(imp,m)+'</b></td></tr>'+
+    '<tr><td>Imputado a ventas</td><td style="text-align:right">'+fmtM0(s,m)+'</td></tr>'+
     '<tr style="background:#f6f3ee"><td><b>Resta imputar</b></td><td style="text-align:right;font-size:16px"><b style="color:'+
       (resta < -0.009 ? '#7a2415' : '#1b2426')+'">'+fmtM0(resta,m)+'</b></td></tr>'+
     '</tbody></table></div>'+
@@ -12173,10 +12384,19 @@ function calcImputadoCob(){
 /* filtrarCtasCobranza se sacó el 14/8: la cuenta única del cobro la reemplazó
    la grilla de formas de pago, y la función quedaba sin nadie que la llamara. */
 async function concCobAgregar(cliId){
+  /* 25/8, auditoría: redibujaba el formulario entero y se perdían las formas
+     de pago y las imputaciones ya tecleadas. Ahora solo el desplegable. */
   const n = $("k_conc_nuevo").value.trim(); if (!n) return;
   const {error} = await sb.from("conceptos_cobranza").insert({nombre:n, activo:true});
   if (error) return alert(error.message);
-  formCobranza(cliId);
+  const cc = await sb.from("conceptos_cobranza").select("*").order("id");
+  const sel = $("k_concepto");
+  if (sel && !cc.error){
+    const nuevo = (cc.data||[]).find(function(x){ return x.nombre === n; });
+    sel.innerHTML = selOpts(cc.data||[], nuevo ? nuevo.id : null);
+  }
+  $("k_conc_nuevo").value = "";
+  if ($("cbmsg")) $("cbmsg").innerHTML = '<div class="msg ok">Concepto «'+esc(n)+'» agregado y elegido. Lo cargado no se tocó.</div>';
 }
 /* ══════════════════════════════════════════════════════════════════════════
    CRÉDITO / DÉBITO DE CUENTA CORRIENTE — con imputación a la venta (v78, 25/8)
@@ -12446,7 +12666,7 @@ async function finResumen(){
       (noPlata ? '<div class="muted" style="font-size:12px">no incluye '+(fmtM(noPlata,m)||"—")+' de cuentas a rendir</div>' : '')+'</div>'+
       (grupos.length? grupos.map(function(g){
         return '<div class="sec">'+esc(g.t.nombre)+(g.plata?'':' <span class="muted" style="font-weight:normal">· no es plata disponible</span>')+'</div><div class="tablewrap"><table><tbody>'+
-          g.cs.map(c=>'<tr><td>'+esc(c.nombre)+'</td><td style="text-align:right">'+(fmtM(c.saldo,m)||"—")+'</td></tr>').join("")+
+          g.cs.map(c=>'<tr><td>'+esc(c.nombre)+'</td><td style="text-align:right">'+fmtM0(c.saldo,m)+'</td></tr>').join("")+
           '<tr style="background:#f6f3ee"><td><b>Total '+esc(g.t.nombre)+'</b></td><td style="text-align:right"><b>'+(fmtM(g.total,m)||"—")+'</b></td></tr>'+
           '</tbody></table></div>';
       }).join("") : '<div class="muted">No hay cuentas en esta moneda todavía.</div>')+'</div>';
@@ -12485,7 +12705,7 @@ function finCuentas(){
    (CTASV.length
      ? '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Moneda</th><th>Tope</th><th>Saldo</th><th>Activa</th></tr></thead><tbody>'+
        CTASV.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
-         '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+(fmtM(c.saldo,c.moneda)||'—')+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")+
+         '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+fmtM0(c.saldo,c.moneda)+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")+
        '</tbody></table></div>'
      : (filtro
         ? '<div class="muted" style="line-height:1.5">No hay ninguna cuenta de tipo <b>'+esc(filtro)+'</b>.'+
@@ -12532,7 +12752,7 @@ function fichaCuenta(id){
     '<div class="f"><label>Tope (0 = sin tope)</label><input type="number" step="0.01" id="z_tope" value="'+(c?c.tope:0)+'" '+d+'></div>'+
     '<div class="f"><label>Activa</label><select id="z_activo" '+d+'><option value="1" '+(!c||c.activo?"selected":"")+'>Sí</option><option value="0" '+(c&&!c.activo?"selected":"")+'>No</option></select></div>'+
    '</div><div class="f"><label>Descripción</label><textarea id="z_desc" rows="2" '+d+'>'+esc(c?c.descripcion:"")+'</textarea></div>'+
-   (c?'<div class="muted">Saldo actual: <b>'+(fmtM(c.saldo,c.moneda)||"—")+'</b>. Se calcula con los movimientos y no se puede editar a mano.</div>':'')+
+   (c?'<div class="muted">Saldo actual: <b>'+fmtM0(c.saldo,c.moneda)+'</b>. Se calcula con los movimientos y no se puede editar a mano.</div>':'')+
    (!c&&P("cuenta-ajustar")?'<div class="sec">Saldo con el que arranca</div>'+
      '<div class="muted" style="margin-bottom:8px">Opcional. Si la caja o el banco ya tienen plata, poné cuánto y queda registrado como el primer movimiento, con tu nombre y la fecha de hoy. Si arranca en cero, dejalo vacío.</div>'+
      '<div class="f"><label>Saldo inicial</label><input type="number" step="0.01" id="z_inicial" placeholder="0"></div>':'')+
@@ -12590,7 +12810,9 @@ function celdaSaldo(mapa, movId, moneda, anulado){
   if (anulado) return '<td class="r"><span class="muted" title="Anulado: no mueve el saldo">—</span></td>';
   const v = mapa[movId];
   if (v === undefined) return '<td class="r"><span class="muted">—</span></td>';
-  return '<td class="r" style="'+(v<0?'color:#7a2415;font-weight:600':'')+'"><b>'+fmtM(v,moneda)+'</b></td>';
+  /* 25/8: el saldo que quedó en cero se muestra como $ 0 — el «—» de esta
+     columna ya significa otra cosa (anulado: no mueve el saldo). */
+  return '<td class="r" style="'+(v<0?'color:#7a2415;font-weight:600':'')+'"><b>'+fmtM0(v,moneda)+'</b></td>';
 }
 
 async function finMovs(){
@@ -13406,26 +13628,49 @@ function saldoAlcanza(cuentaId, importe, idMsg){
   };
   const t = (TCTAS||[]).find(x=>String(x.id)===String(c.tipo_cuenta_id));
   if (!(t && t.permite_negativo))
-    return decir('<b>Sin saldo en «'+esc(c.nombre)+'».</b><br>Tiene '+fmtM(saldo,mon)+' y esta operación saca '+fmtM(imp,mon)+
+    return decir('<b>Sin saldo en «'+esc(c.nombre)+'».</b><br>Tiene '+fmtM0(saldo,mon)+' y esta operación saca '+fmtM0(imp,mon)+
       '. Una cuenta de tipo '+esc(t?t.nombre:"")+' no puede quedar en negativo: usá otra cuenta, o ingresá la plata primero.');
   const tope = Number(c.tope||0);
   if (tope > 0 && queda < -tope - 0.009)
-    return decir('<b>Se pasa del descubierto de «'+esc(c.nombre)+'».</b><br>Quedaría en '+fmtM(queda,mon)+
-      ' y el descubierto acordado es '+fmtM(tope,mon)+'. Contando el descubierto hay '+fmtM(saldo+tope,mon)+' disponibles.');
-  return confirm("Ojo: vas a usar descubierto.\n\n«"+c.nombre+"» tiene "+fmtM(saldo,mon)+
-    " y esta operación saca "+fmtM(imp,mon)+": queda en "+fmtM(queda,mon)+"."+
-    (tope>0 ? "\nDescubierto acordado: "+fmtM(tope,mon)+"."
+    return decir('<b>Se pasa del descubierto de «'+esc(c.nombre)+'».</b><br>Quedaría en '+fmtM0(queda,mon)+
+      ' y el descubierto acordado es '+fmtM0(tope,mon)+'. Contando el descubierto hay '+fmtM0(saldo+tope,mon)+' disponibles.');
+  return confirm("Ojo: vas a usar descubierto.\n\n«"+c.nombre+"» tiene "+fmtM0(saldo,mon)+
+    " y esta operación saca "+fmtM0(imp,mon)+": queda en "+fmtM0(queda,mon)+"."+
+    (tope>0 ? "\nDescubierto acordado: "+fmtM0(tope,mon)+"."
             : "\nEsta cuenta no tiene descubierto acordado cargado (Tope en 0), así que el sistema no sabe hasta dónde puede ir.")+
     "\n\n¿Seguimos?");
 }
 /* Lo mismo para las operaciones con varias formas de pago: se suma por cuenta,
    porque dos renglones de la misma caja se comen el mismo saldo. */
-function saldoAlcanzaMedios(medios, idMsg){
+/* 25/8, auditoría: los importes de una orden de pago están en la moneda de la
+   DEUDA, y acá se restaban del saldo de la cuenta —que está en la SUYA— sin
+   convertir. Pagando US$ 1.000 desde una cuenta en pesos el aviso de
+   descubierto no saltaba; al revés, frenaba una operación válida con el número
+   en la moneda equivocada. Ahora, si viene la moneda de la operación, cada
+   importe se convierte a la moneda de su cuenta con el tipo de cambio del
+   propio medio — la misma cuenta que hace la transferencia. */
+function saldoAlcanzaMedios(medios, idMsg, monedaOp){
   const porCta = {};
+  let sinTC = null;
   (medios||[]).forEach(function(x){
     if (!x.cuenta_id) return;
-    porCta[x.cuenta_id] = (porCta[x.cuenta_id]||0) + Number(x.importe||0);
+    let imp = Number(x.importe||0);
+    if (monedaOp){
+      const cta = (CTAS||[]).find(function(c){ return String(c.id)===String(x.cuenta_id); });
+      if (cta && cta.moneda !== monedaOp){
+        const tc = Number(x.cotizacion||0);
+        if (!(tc>0)){ sinTC = cta.nombre; return; }
+        imp = (monedaOp === "USD" && cta.moneda === "ARS") ? imp * tc
+            : (monedaOp === "ARS" && cta.moneda === "USD") ? imp / tc : imp;
+      }
+    }
+    porCta[x.cuenta_id] = (porCta[x.cuenta_id]||0) + imp;
   });
+  if (sinTC){
+    const el = idMsg ? $(idMsg) : null;
+    if (el) el.innerHTML = '<div class="msg err">«'+esc(sinTC)+'» está en otra moneda y falta el tipo de cambio: sin eso no se puede saber si el saldo alcanza.</div>';
+    return false;
+  }
   return Object.keys(porCta).every(function(id){ return saldoAlcanza(id, porCta[id], idMsg); });
 }
 
