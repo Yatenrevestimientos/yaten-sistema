@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-156";
+const VERSION = "v2026.08.26-157";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -3642,13 +3642,35 @@ async function infoFinanzas(){
   const ch = (chq.data||[]).filter(x=>!x.anulado);
   const soloARS = x => (x.moneda||"ARS") === "ARS";
   const enCartera = ch.filter(x=>x.tipo==="Terceros" && x.estado==="Disponible" && soloARS(x));
-  const propiosVivos = ch.filter(x=>x.tipo==="Propios" && x.estado==="Disponible" && soloARS(x));
+  /* 26/8: con el circuito nuevo (v84) el cheque propio emitido queda «Entregado»
+     hasta que el banco lo debita. Por cubrir son los dos: el cargado a mano que
+     sigue Disponible y el emitido sin debitar. Antes solo contaba Disponible y
+     el KPI mentía por omisión. */
+  const propiosVivos = ch.filter(x=>x.tipo==="Propios" && (x.estado==="Disponible" || x.estado==="Entregado") && soloARS(x));
   const h = hoy();
   const vencidos = enCartera.filter(x=>x.vencimiento && x.vencimiento < h);
   const chqUSD = ch.filter(x=>(x.moneda||"ARS")!=="ARS" && x.estado==="Disponible");
 
+  /* 26/8, pedido de Gustavo — como el Reporte de finanzas de Pirka: todas las
+     cajas separadas por tipo, cada una con su saldo y su «Ver cuenta» que abre
+     el historial a pantalla completa. */
+  const tiposConCta = (TCTAS||[]).filter(t=>(CTAS||[]).some(c=>c.activo && String(c.tipo_cuenta_id)===String(t.id)));
+  const bloqueTipo = function(t){
+    const cs = (CTAS||[]).filter(c=>c.activo && String(c.tipo_cuenta_id)===String(t.id));
+    if (!cs.length) return "";
+    const tot = {};
+    cs.forEach(function(c){ tot[c.moneda] = (tot[c.moneda]||0) + Number(c.saldo||0); });
+    return '<div class="sec">'+esc(t.nombre)+'</div>'+
+      '<div class="tablewrap"><table><thead><tr><th>Cuenta</th><th>Moneda</th><th style="text-align:right">Saldo</th><th></th></tr></thead><tbody>'+
+      cs.map(c=>'<tr style="cursor:pointer" onclick="historialCuenta('+c.id+',\'info\')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(c.moneda)+'</td>'+
+        '<td style="text-align:right'+(Number(c.saldo||0)<0?';color:#7a2415':'')+'"><b>'+fmtM0(c.saldo,c.moneda)+'</b></td>'+
+        '<td style="text-align:right"><button class="btn2 btn-sm" onclick="event.stopPropagation();historialCuenta('+c.id+',\'info\')">Ver cuenta</button></td></tr>').join("")+
+      Object.keys(tot).map(m=>'<tr style="background:#f6f3ee"><td colspan="2" style="text-align:right"><b>Total en '+m+'</b></td><td style="text-align:right'+(tot[m]<0?';color:#7a2415':'')+'"><b>'+fmtM0(tot[m],m)+'</b></td><td></td></tr>').join("")+
+      '</tbody></table></div>';
+  };
   $("ibody").innerHTML =
-   '<div class="desc">Foto del día. Nada de esto se carga acá: sale de las cuentas, de las cuentas corrientes y de los cheques.</div>'+
+   '<div class="desc">Foto del día. Nada de esto se carga acá: sale de las cuentas, de las cuentas corrientes y de los cheques. Cada cuenta se abre con <b>Ver cuenta</b>: el historial entero, a pantalla completa.</div>'+
+   tiposConCta.map(bloqueTipo).join("")+
    '<div class="sec">Lo que tenés</div><div class="kpis">'+
      kpi("En cuentas ARS", fmtM(cajas.ARS||0,"ARS")||"$ 0", (CTAS||[]).filter(c=>c.activo&&c.moneda==="ARS").length+" cuentas", "#1d5b2c")+
      kpi("En cuentas USD", fmtM(cajas.USD||0,"USD")||"US$ 0", (CTAS||[]).filter(c=>c.activo&&c.moneda==="USD").length+" cuentas", "#1d5b2c")+
@@ -3662,7 +3684,7 @@ async function infoFinanzas(){
    '<div class="sec">Lo que debés</div><div class="kpis">'+
      kpi("A proveedores ARS", fmtM(leDebo.ARS,"ARS")||"$ 0", "", "#7a2415")+
      kpi("A proveedores USD", fmtM(leDebo.USD,"USD")||"US$ 0", "", "#7a2415")+
-     kpi("Cheques propios a cubrir", fmtM(propiosVivos.reduce((a,x)=>a+Number(x.importe||0),0),"ARS")||"$ 0", propiosVivos.length+" cheques emitidos sin cobrar", "#7a2415")+
+     kpi("Cheques propios a cubrir", fmtM(propiosVivos.reduce((a,x)=>a+Number(x.importe||0),0),"ARS")||"$ 0", propiosVivos.length+" emitidos y todavía sin debitar", "#7a2415")+
    '</div>'+
    (vencidos.length? '<div class="msg err" style="margin-top:10px"><b>'+vencidos.length+' cheque(s) en cartera ya vencidos</b> por '+
       fmtM(vencidos.reduce((a,x)=>a+Number(x.importe||0),0),"ARS")+'. Están en Cheques → Cheques vencidos.</div>' : '')+
@@ -13089,6 +13111,83 @@ async function finResumen(){
   $("fbody").innerHTML = html;
 }
 
+/* ─── El historial de la cuenta, a pantalla completa (26/8, pedido de Gustavo:
+   «como en Pirka: entrar a cada caja y ver los movimientos, con volver»).
+   Se entra desde Información → Finanzas («Ver cuenta») o desde Finanzas →
+   Cuentas. Muestra los movimientos de ESA cuenta con su saldo acumulado, el
+   comprometido por cheques propios sin debitar, y acciones al costado. */
+let HC = {texto:"", anulados:false, volver:null};
+async function historialCuenta(ctaId, desde){
+  if (desde) HC.volver = desde;
+  HC.texto = ""; HC.anulados = false;
+  await pintarHistorialCuenta(ctaId);
+}
+async function pintarHistorialCuenta(ctaId){
+  if (!CTAS.length) await cargarFin();
+  const c = (CTAS||[]).find(x=>String(x.id)===String(ctaId));
+  if (!c) return alert("No existe la cuenta.");
+  const t = (TCTAS||[]).find(x=>String(x.id)===String(c.tipo_cuenta_id));
+  let q = sb.from("movimientos_cuenta").select("*").eq("cuenta_id",Number(ctaId))
+    .order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
+  if (!HC.anulados) q = q.eq("anulado", false);
+  const [mv, chp] = await Promise.all([q,
+    sb.from("cheques").select("importe,vencimiento").eq("tipo","Propios").eq("estado","Entregado")
+      .eq("anulado",false).eq("cuenta_id",Number(ctaId))
+  ]);
+  if (mv.error) return alert(mv.error.message);
+  const tm = (HC.texto||"").toLowerCase();
+  const rows = (mv.data||[]).filter(x=>!tm || ((x.detalle||"")+" "+(x.motivo||"")).toLowerCase().indexOf(tm)>=0);
+  const recortado = (mv.data||[]).length === 500;
+  const SAL = await saldosAcumulados(rows.map(x=>x.cuenta_id));
+  const comp = chp.data||[];
+  const compTot = comp.reduce((a,x)=>a+Number(x.importe||0),0);
+  const compProx = comp.map(x=>x.vencimiento).filter(Boolean).sort()[0];
+  /* para la impresión, que usa lo mismo que Movimientos */
+  window._MOVROWS = rows;
+  window._MOVCOMP = comp.length? ('Comprometido por cheques propios sin debitar: '+fmtM0(compTot,c.moneda)+' ('+comp.length+' cheques). Contandolos el saldo quedaria en '+fmtM0(Number(c.saldo||0)-compTot,c.moneda)+'.') : '';
+  FIN.cuenta = String(ctaId); FIN.desde = ""; FIN.hasta = "";
+
+  $("main").innerHTML =
+   '<div class="prewrap"><div class="panel" style="margin:0">'+
+    '<h2 style="margin-top:0">Historial de '+esc(c.nombre)+'</h2>'+
+    '<div class="desc">Cada movimiento de esta cuenta, del más nuevo al más viejo. La columna <b>Saldo</b> es cómo quedó la cuenta después de ese movimiento, con todo su historial.</div>'+
+    '<div class="filtros">'+
+      '<div style="min-width:240px"><label>Buscar</label><input id="hc_txt" placeholder="detalle o motivo" value="'+esc(HC.texto)+'"></div>'+
+      '<div><label>Anulados</label><select id="hc_anul"><option value="0" '+(HC.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(HC.anulados?"selected":"")+'>Mostrar</option></select></div>'+
+      '<div style="min-width:auto"><button class="btn" id="hc_btn">Filtrar</button></div>'+
+    '</div>'+
+    (recortado? '<div class="msg" style="margin-bottom:8px">Se muestran los <b>500</b> movimientos más nuevos: hay más que no se ven y el buscador solo busca entre estos.</div>':'')+
+    (rows.length? '<div class="tablewrap" style="max-height:64dvh;overflow:auto"><table><thead><tr>'+
+      ['Fecha','Detalle','Crédito','Débito','Saldo','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+      rows.map(function(x){
+        return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td style="white-space:nowrap">'+fmtF(x.fecha)+'</td>'+
+          '<td style="white-space:normal;min-width:260px">'+esc(x.detalle)+'</td>'+
+          '<td style="color:#1d5b2c">'+(Number(x.credito)?fmtM(x.credito,c.moneda):'')+'</td>'+
+          '<td style="color:#7a2415">'+(Number(x.debito)?fmtM(x.debito,c.moneda):'')+'</td>'+
+          celdaSaldo(SAL, x.id, c.moneda, x.anulado)+
+          '<td>'+esc(x.motivo)+'</td></tr>';
+      }).join("")+'</tbody></table></div>'
+     : '<div class="muted">Esta cuenta todavía no tiene movimientos'+(tm?' con ese texto':'')+'.</div>')+
+    '</div>'+
+    '<div class="preside">'+
+      '<div class="pcard"><h3>La cuenta</h3><div class="in">'+
+        '<div class="muted">'+esc(t?t.nombre:"")+' · '+esc(c.moneda)+(c.activo?'':' · <b>inactiva</b>')+'</div>'+
+        '<div style="font-size:22px;font-weight:700;margin:6px 0">'+fmtM0(c.saldo,c.moneda)+'</div>'+
+        (comp.length? '<div class="msg" style="background:#faecbb">Comprometido por <b>'+comp.length+'</b> cheque'+(comp.length===1?'':'s')+' propio'+(comp.length===1?'':'s')+' sin debitar: <b>'+fmtM0(compTot,c.moneda)+'</b>'+(compProx?' (el más próximo cobra el '+fmtF(compProx)+')':'')+'.<br>Contándolos quedaría en <b>'+fmtM0(Number(c.saldo||0)-compTot,c.moneda)+'</b>.</div>' : '')+
+        (Number(c.tope||0)>0? '<div class="muted">Descubierto acordado: '+fmtM0(c.tope,c.moneda)+'</div>':'')+
+      '</div></div>'+
+      '<div class="pcard"><h3>Acciones</h3><div class="in pacc">'+
+        (P("finanzas-modificar")? '<button class="b-plata" onclick="formTransf('+c.id+')">Transferir desde esta cuenta</button>':'')+
+        '<button class="btn2" onclick="imprimirMovimientos()">Imprimir</button>'+
+        '<button class="b-volver" onclick="volverDeHistorialCuenta()">Volver</button>'+
+      '</div></div>'+
+    '</div></div>';
+  $("hc_btn").onclick = function(){ HC.texto = $("hc_txt").value.trim(); HC.anulados = $("hc_anul").value==="1"; pintarHistorialCuenta(ctaId); };
+}
+function volverDeHistorialCuenta(){
+  if (HC.volver === "fin"){ FIN.tab = "cuentas"; ir("finanzas"); }
+  else ir("informacion");
+}
 function finCuentas(){
   const puede = P("cuenta-modificar");
   /* Si se entró por Banco, Caja Efectivo o Cheques, se muestran solo esas cuentas.
@@ -13119,7 +13218,7 @@ function finCuentas(){
    '<div id="ctmsg"></div>'+(puede?'<div class="acciones" style="margin-bottom:10px"><button class="btn" onclick="fichaCuenta(null)">+ Cuenta nueva</button></div>':'')+
    (CTASV.length
      ? '<div class="tablewrap"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Moneda</th><th>Tope</th><th>Saldo</th><th>Activa</th></tr></thead><tbody>'+
-       CTASV.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
+       CTASV.map(c=>'<tr style="cursor:pointer'+(c.activo?'':';opacity:.55')+'" onclick="fichaCuenta('+c.id+')"><td><b>'+esc(c.nombre)+'</b> <button class="btn2 btn-sm" onclick="event.stopPropagation();historialCuenta('+c.id+',\'fin\')" title="Todos los movimientos de esta cuenta, a pantalla completa">Historial</button></td><td>'+esc(nom(TCTAS,c.tipo_cuenta_id))+'</td><td>'+esc(c.moneda)+'</td>'+
          '<td>'+(Number(c.tope)?fmtM(c.tope,c.moneda):'Sin tope')+'</td><td><b>'+fmtM0(c.saldo,c.moneda)+'</b></td><td>'+(c.activo?"Sí":"No")+'</td></tr>').join("")+
        '</tbody></table></div>'
      : (filtro
@@ -13740,7 +13839,7 @@ async function finTransf(){
      '</tbody></table></div>' : '<div class="muted">Sin transferencias.</div>')+'</div>';
   $("tr_btn").onclick = function(){ window.FTR = $("tr_txt").value.trim(); finTransf(); };
 }
-function formTransf(){
+function formTransf(origenId){
   const cs = CTAS.filter(c=>c.activo);
   const op = optCtas(cs);
   $("dtit").textContent = "Transferencia entre cuentas";
@@ -13755,6 +13854,7 @@ function formTransf(){
   $("dbody").innerHTML = '<div id="ftmsg"></div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="x_fecha" value="'+hoy()+'"></div>'+
     '<div class="f"><label>Sale de</label><select id="x_origen">'+op+'</select></div>'+
+    /* si viene del historial de una cuenta, esa cuenta ya sale elegida */
     '<div class="f"><label>Importe que sale</label><input type="number" step="0.01" id="x_io"></div>'+
     '<div class="f"><label>Entra en</label><select id="x_destino">'+op+'</select></div>'+
     '<div class="f" id="x_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="x_tc" oninput="calcTransf()" placeholder="pesos por dólar"></div>'+
@@ -13785,6 +13885,7 @@ function formTransf(){
     await cargarFin(); $("dlg").close(); FIN.tab = "transf"; VISTAS.finanzas();
   };
   $("dlg").showModal();
+  if (origenId && $("x_origen")) $("x_origen").value = String(origenId);
 }
 async function anularTransf(id){
   const m = await pedirMotivo("¿Por qué anulás esta transferencia?"); if (m===null) return;
