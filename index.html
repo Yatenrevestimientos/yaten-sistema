@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-157";
+const VERSION = "v2026.08.26-158";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -13330,7 +13330,12 @@ function celdaSaldo(mapa, movId, moneda, anulado){
 }
 
 async function finMovs(){
+  /* 26/8, segunda pasada contra Pirka: su «Resumen de Movimientos» muestra el
+     saldo total en ARS y en USD arriba de todo. Acá igual. */
+  const totMon = {ARS:0, USD:0};
+  (CTAS||[]).filter(c=>c.activo).forEach(function(c){ if (totMon[c.moneda]!==undefined) totMon[c.moneda]+=Number(c.saldo||0); });
   $("fbody").innerHTML = '<div class="panel"><h2>Movimientos de cuentas</h2>'+
+   '<div class="muted" style="margin-bottom:8px">Saldo total en ARS: <b>'+fmtM0(totMon.ARS,"ARS")+'</b> · Saldo total en USD: <b>'+fmtM0(totMon.USD,"USD")+'</b> — sumando todas las cuentas activas.</div>'+
    '<div class="filtros">'+
      '<div><label>Moneda</label><select id="mf_mon"><option value="">Todas</option>'+["ARS","USD"].map(x=>'<option '+(FIN.moneda===x?"selected":"")+'>'+x+'</option>').join("")+'</select></div>'+
      '<div><label>Desde</label><input type="date" id="mf_desde" value="'+FIN.desde+'"></div>'+
