@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-155";
+const VERSION = "v2026.08.26-156";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -7383,8 +7383,10 @@ function accionCheque(x){
   const anulable = x.estado === "Disponible" && !x.cobranza_id && !x.pago_id && P("finanzas-anular");
   const btnAnular = anulable ? ' <button class="btn2 btn-sm" onclick="anularCheque('+x.id+')">Anular</button>' : '';
   if (x.tipo === "Terceros" && x.estado === "Disponible" && P("finanzas-modificar"))
+    /* 26/8, sí de Gustavo a Gilda: Rechazado ya no es solo del dueño — que el
+       banco rechazó un cheque lo registra administración, con finanzas-anular. */
     return '<button class="btn btn-sm" onclick="formDepositar('+x.id+')">Depositar</button>'+
-           (esDueno()? ' <button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Rechazado</button>' : '')+btnAnular;
+           (P("finanzas-anular")? ' <button class="btn2 btn-sm" onclick="estadoCheque('+x.id+')">Rechazado</button>' : '')+btnAnular;
   /* Un depósito mal cargado tiene que poder deshacerse: si no, el cheque queda
      depositado para siempre y el recibo que lo trajo tampoco se puede anular. */
   if (x.tipo === "Terceros" && x.estado === "Depositado" && P("finanzas-anular"))
@@ -9129,22 +9131,24 @@ async function imprimirPagoCompra(id){
      '<tr class="tot"><td colspan="3" class="r"><b>IMPUTADO</b></td><td class="r"><b>'+fmtM0(imputado,x.moneda)+'</b></td></tr>'+
      '</tbody></table>'
     : '<div>Sin imputar a comprobantes: baja la deuda general del proveedor.</div>')+
-   /* 15/8: se sacó la columna «Sale de». De qué caja o de qué banco pagamos es
-      dato de adentro y el proveedor no tiene por qué verlo. Los datos del cheque
-      sí quedan: ese papel es suyo y lo tiene que poder identificar. */
+   /* 15/8 se había sacado la columna «Sale de». 26/8, decisión de Gustavo con
+      el pedido de Gilda: VUELVE — administración necesita leer en el papel de
+      qué caja o banco salió cada parte del pago. */
    '<h3>Forma de pago</h3>'+
-   '<table><thead><tr><th>Medio</th><th class="r">Importe</th></tr></thead><tbody>'+
+   '<table><thead><tr><th>Medio</th><th>Sale de</th><th class="r">Importe</th></tr></thead><tbody>'+
      (medios.length
        ? medios.map(function(y){
            const ch = chqs.find(z=>String(z.id)===String(y.cheque_id));
+           const ctaM = (CTAS||[]).find(z=>String(z.id)===String(y.cuenta_id));
            return '<tr><td>'+(ch
               ? 'Cheque '+(String(ch.tipo).toLowerCase().indexOf("prop")>=0?"propio":"de terceros")+' N° '+esc(ch.numero)+
                 (ch.vencimiento?' (vence '+fmtF(ch.vencimiento)+')':'')
               : esc(y.detalle||"Efectivo o banco"))+'</td>'+
+             '<td>'+esc(ctaM?ctaM.nombre:"")+'</td>'+
              '<td class="r">'+fmtM0(y.importe,x.moneda)+'</td></tr>';
          }).join("")
-       : '<tr><td>Efectivo o banco</td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>')+
-     '<tr class="tot"><td class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
+       : '<tr><td>Efectivo o banco</td><td></td><td class="r">'+fmtM0(x.importe,x.moneda)+'</td></tr>')+
+     '<tr class="tot"><td colspan="2" class="r"><b>TOTAL PAGADO</b></td><td class="r"><b>'+fmtM0(x.importe,x.moneda)+'</b></td></tr>'+
    '</tbody></table>'+
    (x.observaciones?'<div class="caja">'+esc(x.observaciones)+'</div>':'')+
    '<div class="firma"><div>Firma y aclaración de quien paga</div><div>Recibí conforme</div></div>'+
@@ -12231,8 +12235,10 @@ async function imprimirRecibo(cobId){
   ]);
   if (k.error) return alert(k.error.message);
   const x = k.data, imps = im.data||[], medios = me.data||[];
-  /* Se pide el TIPO de cada cuenta y los cheques; el nombre de la cuenta ni se
-     consulta. Si el rol no puede leerlos, el medio sale «Otro medio» y el recibo
+  const nombreDeCuenta = {};
+  /* 26/8, decisión de Gustavo con el pedido de Gilda: el recibo ahora también
+     dice EN QUÉ caja o banco entró cada parte. Si el rol no puede leer las
+     cuentas, el medio sale «Otro medio» y el recibo
      se imprime igual: no se cae por esto. */
   const tipoDeCuenta = {}; let chqs = [];
   try{
@@ -12240,11 +12246,11 @@ async function imprimirRecibo(cobId){
        que tienen una sola cuenta y ninguna fila en cobranza_medios. */
     const ctaIds = [...new Set(medios.map(y=>y.cuenta_id).concat([x.cuenta_id]).filter(Boolean))];
     if (ctaIds.length){
-      const cq = await sb.from("cuentas").select("id,tipo_cuenta_id").in("id", ctaIds);
+      const cq = await sb.from("cuentas").select("id,tipo_cuenta_id,nombre").in("id", ctaIds);
       const tIds = [...new Set((cq.data||[]).map(c=>c.tipo_cuenta_id).filter(Boolean))];
       const tq = tIds.length ? await sb.from("tipos_cuenta").select("id,nombre").in("id", tIds) : {data:[]};
       const tn = {}; (tq.data||[]).forEach(function(t){ tn[t.id] = t.nombre; });
-      (cq.data||[]).forEach(function(c){ tipoDeCuenta[c.id] = tn[c.tipo_cuenta_id]||""; });
+      (cq.data||[]).forEach(function(c){ tipoDeCuenta[c.id] = tn[c.tipo_cuenta_id]||""; nombreDeCuenta[c.id] = c.nombre||""; });
     }
     const chIds = [...new Set(medios.map(y=>y.cheque_id).filter(Boolean))];
     if (chIds.length){ const c = await sb.from("cheques").select("*").in("id", chIds); chqs = c.data||[]; }
@@ -12284,10 +12290,12 @@ async function imprimirRecibo(cobId){
      (medios.length
        ? medios.map(function(y){
            const ch = chqs.find(z=>String(z.id)===String(y.cheque_id));
-           return '<tr><td>'+medioParaElCliente(tipoDeCuenta[y.cuenta_id], ch)+'</td>'+
+           return '<tr><td>'+medioParaElCliente(tipoDeCuenta[y.cuenta_id], ch)+
+             (nombreDeCuenta[y.cuenta_id]?' — entró en '+esc(nombreDeCuenta[y.cuenta_id]):'')+'</td>'+
              '<td class="r">'+fmtM0(y.importe,mon)+'</td></tr>';
          }).join("")
-       : '<tr><td>'+medioParaElCliente(tipoDeCuenta[x.cuenta_id], null)+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>')+
+       : '<tr><td>'+medioParaElCliente(tipoDeCuenta[x.cuenta_id], null)+
+         (nombreDeCuenta[x.cuenta_id]?' — entró en '+esc(nombreDeCuenta[x.cuenta_id]):'')+'</td><td class="r">'+fmtM0(x.importe,mon)+'</td></tr>')+
    '</tbody></table>'+
    '<h3>Se aplic\u00f3 a</h3>'+
    (imps.length? '<table><thead><tr><th>Venta</th><th>Fecha</th><th class="r">Total</th><th class="r">Imputado</th></tr></thead><tbody>'+
@@ -13772,7 +13780,9 @@ function formTransf(){
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
       p_imp_origen:io, p_imp_destino:idst, p_obs:$("x_obs").value||null, p_cotizacion:tc||null});
     if (error){ $("ftmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
-    await cargarFin(); $("dlg").close(); VISTAS.finanzas();
+    /* 26/8, recorrida de Gilda: guardar la transferencia te tiraba al listado
+       de cuentas. Ahora cae en Transferencias, con la recién hecha arriba. */
+    await cargarFin(); $("dlg").close(); FIN.tab = "transf"; VISTAS.finanzas();
   };
   $("dlg").showModal();
 }
