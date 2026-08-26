@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-150";
+const VERSION = "v2026.08.26-151";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1133,7 +1133,8 @@ async function pintarPlanilla(){
      la visita, del presupuesto y del seguimiento se mira entrando al prospecto.
      Lo que antes se leía en una columna, ahora se ve en el color del renglón. */
   $("plres").innerHTML =
-  '<div class="muted" style="margin-bottom:8px">'+d.length+' oportunidad'+(d.length===1?"":"es")+' cerrada'+(d.length===1?"":"s")+' · '+
+  '<div class="muted" style="margin-bottom:8px">'+d.length+' oportunidad'+(d.length===1?"":"es")+' cerrada'+(d.length===1?"":"s")+
+   (d.length>300?' · <b>ojo:</b> el importe del presupuesto y el último seguimiento se cruzan solo en los 300 renglones más nuevos; del 301 en adelante el importe es el anotado a mano en el prospecto':'')+' · '+
     '<span class="pill p-vend">vendido</span> <span class="pill p-desc">perdido o descartado</span></div>'+
   '<div class="tablewrap" style="max-height:70dvh;overflow:auto"><table><thead><tr>'+
     ["Código","Fecha","Estado","Canal","Origen","VL","Cliente","Celular","Localidad","Objeción","Derivación","Resultado","Importe"]
@@ -2001,7 +2002,7 @@ VISTAS.nuevo = function(){
     '<div id="nmsg"></div>'+formHTML(null,false)+
     '<div class="acciones">'+
       '<button class="btn"  id="nguardar">Guardar prospecto</button>'+
-      '<button class="btn3" id="npresu">Guardar y presupuestar</button>'+
+      '<button class="btn3" id="npresu" style="background:#1d5b2c">Guardar y presupuestar</button>'+
       '<button class="btn2" id="ncancel">Limpiar</button>'+
     '</div>'+
     '<div class="muted" style="margin-top:6px;font-size:.85em">«Guardar y presupuestar» guarda el prospecto y abre el presupuesto sin salir de acá.</div>'+
@@ -2691,8 +2692,8 @@ const MAESTRAS = [
    ayuda:"Nada se borra en el sistema: se anula con un motivo, y queda quién lo anuló y cuándo. En «Aplica a» ponés a qué documento corresponde el motivo (Remito, Presupuesto, Prospecto, Pago, Factura de compra, Orden de compra) o «Todos» si sirve para cualquiera.",
    cols:[{c:"aplica_a", t:"Aplica a", ph:"Todos"}]},
   {k:"tim", extra:true, tabla:"tipos_impuesto", titulo:"Impuestos facturas",
-   ayuda:"Los impuestos que pueden venir en una factura de compra: IVA 21%, IVA 10,5%, percepciones. Cada factura arma su propia tabla eligiendo de acá.",
-   cols:[]},
+   ayuda:"Los impuestos que pueden venir en una factura de compra: IVA 21%, IVA 10,5%, percepciones. Cada factura arma su propia tabla eligiendo de acá. <b>Cargale la alícuota</b>: es lo que hace que el importe se calcule solo al elegirlo en la factura. Dejala vacía solo si cambia según el caso, como los derechos de aduana.",
+   cols:[{c:"porcentaje", t:"Alícuota %", ph:"21", num:true}]},
   {k:"mst", extra:true, tabla:"motivos_stock", titulo:"Motivos Modificación Stock",
    ayuda:"Por qué se ajustó el stock a mano: rotura, faltante de inventario, muestra, devolución. Todo ajuste queda con su motivo.",
    cols:[]},
@@ -4203,7 +4204,7 @@ const REPORTES = [
    const sinCosto = filas.filter(r=>!r[4]).length;
    return {cols:[{t:"Producto"},{t:"Moneda"},{t:"Cantidad",tipo:"n"},{t:"Facturado",tipo:"m"},
      {t:"Costo",tipo:"m"},{t:"Utilidad",tipo:"m"},{t:"Margen %",tipo:"n"}], filas:filas,
-     nota: sinCosto ? (sinCosto+" producto(s) sin costo cargado, o sin cotización del dólar en Configuración: esos renglones no calculan margen.") : ""};
+     nota: sinCosto ? (sinCosto+" producto(s) sin costo cargado, o sin cotización del dólar en Configuración: esos renglones no calculan margen. OJO: esos renglones SÍ suman al Facturado de arriba pero no al Costo ni a la Utilidad, así que los tres números del encabezado no cierran entre sí.") : ""};
  }},
 
 /* ── Compras e importaciones ── */
@@ -4564,7 +4565,7 @@ const REPORTES = [
    /* ── 3. Costo de la mercadería y de la instalación ──
       La instalación se cuenta SOLO en los renglones marcados «con instalación»,
       como pidió Gustavo, y sale del costo por m² del instalador de esa venta. */
-   let sinCosto = 0, sinInstalador = 0, sinM2 = 0;
+   let sinCosto = 0, sinCotiz = 0, sinInstalador = 0, sinM2 = 0;
    if (v.length){
      const [it, ins] = await Promise.all([
        sb.from("venta_items").select("venta_id,producto_id,cantidad,unidad,con_instalacion,es_adicional").in("venta_id", v.map(function(x){return x.id;})).limit(5000),
@@ -4582,7 +4583,9 @@ const REPORTES = [
          const pr = PRODS.find(function(z){ return z.id === y.producto_id; });
          const cu = pr ? Number(pr.costo_usd||0) : 0;
          const cA = cotizPara(ven.fecha, null, proms) || cot || null;
-         if (!cu || (m === "ARS" && !cA)) sinCosto++;
+         /* 26/8: dos causas, dos contadores — como ya quedó en ventaCostos */
+         if (!cu) sinCosto++;
+         else if (m === "ARS" && !cA) sinCotiz++;
          else acc[k].costo += (m === "USD" ? cu : cu*cA) * Number(y.cantidad||0);
        }
        if (y.con_instalacion){
@@ -4648,7 +4651,8 @@ const REPORTES = [
              contrib, a.gastos, contrib - a.gastos];
    });
 
-   if (sinCosto)       avisos.push(sinCosto+" renglón(es) de venta sin «Costo USD» en el producto, o sin cotización del dólar en Configuración: ese costo quedó en CERO, así que el margen se lee de más");
+   if (sinCosto)       avisos.push(sinCosto+" renglón(es) cuyo producto no tiene «Costo USD» en su ficha: ese costo quedó en CERO y el margen se lee de más");
+   if (sinCotiz)       avisos.push(sinCotiz+" renglón(es) con «Costo USD» cargado pero sin cotización del dólar para pasarlo a pesos: cargala en Configuración o en el presupuesto. Ese costo quedó en CERO");
    if (sinInstalador)  avisos.push(sinInstalador+" renglón(es) marcados «con instalación» sin costo por m² del instalador o sin cotización para convertirlo: la cuadrilla no se descontó");
    if (sinM2)          avisos.push(sinM2+" renglón(es) con instalación que no se pueden pasar a m² (el producto no tiene «m² por caja» y no se vende por m²): esa mano de obra no se descontó");
    if (sinFormaPago)   avisos.push(sinFormaPago+" venta(s) sin forma de pago con «Costo %» cargado: se contaron como si la cobranza no costara nada");
@@ -6354,7 +6358,7 @@ async function guardarExtraRemito(){
 }
 
 async function anularRemito(id, ventaId){
-  const m = prompt("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado."); if (m===null) return;
+  const m = pedirMotivo("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado."); if (m===null) return;
   const {error} = await sb.rpc("anular_remito",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   formRemito(ventaId);
@@ -6459,7 +6463,7 @@ async function formRecepcion(ordenId){
 }
 /* v68, 23/8 — la vuelta atrás de la recepción. */
 async function deshacerRecepcion(ordenId){
-  const m = prompt("¿Por qué deshacés la recepción de esta orden?\n\nVuelve TODA la mercadería de la orden: el stock baja, los renglones vuelven a cero y la orden queda Abierta.");
+  const m = pedirMotivo("¿Por qué deshacés la recepción de esta orden?\n\nVuelve TODA la mercadería de la orden: el stock baja, los renglones vuelven a cero y la orden queda Abierta.");
   if (m === null) return;
   if (!m.trim()) return alert("Hay que decir por qué se deshace la recepción.");
   const {data,error} = await sb.rpc("deshacer_recepcion_oc",{p_orden:ordenId, p_motivo:m.trim()});
@@ -6882,7 +6886,7 @@ async function reabrirEmbarque(id){
   fichaEmbarque(id);
 }
 async function anularEmbarque(id){
-  const m = prompt("¿Por qué se anula este embarque?"); if (m===null) return;
+  const m = pedirMotivo("¿Por qué se anula este embarque?"); if (m===null) return;
   const {error} = await sb.rpc("anular_embarque",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   try{ $("dlg").close(); }catch(e){}
@@ -7353,7 +7357,7 @@ async function formDepositar(id){
   try{ dlg2().showModal(); }catch(e){}
 }
 async function anularDeposito(id){
-  const m = prompt("¿Por qué deshacés el depósito? Queda registrado con tu nombre.");
+  const m = pedirMotivo("¿Por qué deshacés el depósito? Queda registrado con tu nombre.");
   if (m === null) return;
   const {error} = await sb.rpc("anular_deposito_cheque",{p_cheque:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
@@ -7481,6 +7485,9 @@ async function guardarCheque(){
   if (!v("ch_venc")) return err("Falta la fecha de cobro del cheque.");
   if (!esProp && !v("ch_cuenta")) return err("Elegí la cuenta donde entra el cheque.");
   if (!esProp && !v("ch_librador")) return err("Falta el librador, que es quién firma el cheque.");
+  /* 26/8, auditoría: la chequera llevaba asterisco y nadie la validaba — vacía
+     mandaba un cero a la base y salía el error técnico en inglés. */
+  if (esProp && !v("ch_chequera")) return err("Elegí la chequera de la que sale el cheque.");
   $("ch_guardar").disabled = true;
   const r = await sb.rpc("registrar_cheque_manual",{
     p_tipo: CHQ.tipo,
@@ -7514,7 +7521,7 @@ async function guardarCheque(){
    a la cuenta «Cheques de terceros» queda anulado en la misma operación, así el
    saldo vuelve exacto al que había antes del alta. Probado ida y vuelta. */
 async function anularCheque(id){
-  const m = prompt("¿Por qué anulás este cheque?\n\nOjo: anular no es rechazar. Rechazado lo rechaza el banco; anulado se usa cuando el cheque se cargó mal. Sale de la cartera y deja de contar en el saldo de la cuenta, y queda en el historial tachado, con tu nombre y este motivo.");
+  const m = pedirMotivo("¿Por qué anulás este cheque?\n\nOjo: anular no es rechazar. Rechazado lo rechaza el banco; anulado se usa cuando el cheque se cargó mal. Sale de la cartera y deja de contar en el saldo de la cuenta, y queda en el historial tachado, con tu nombre y este motivo.");
   if (m === null) return;
   if (!m.trim()) return alert("Hay que decir por qué se anula el cheque.");
   const {error} = await sb.rpc("anular_cheque",{p_id:id, p_motivo:m.trim()});
@@ -8142,14 +8149,19 @@ async function guardarPreciosProv(provId){
 async function ajustarPV(provId){
   const imp = Number($("pj_importe").value||0);
   if (!(imp>0)){ $("pvmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+  /* 26/8, auditoría: el detalle llevaba asterisco y se reemplazaba por la
+     palabra «Ajuste». Esa columna es la única explicación que va a quedar de
+     por qué cambió el saldo del proveedor. */
+  const det = ($("pj_detalle").value||"").trim();
+  if (!det){ $("pvmsg").innerHTML='<div class="msg err">Escribí el detalle: es lo único que va a explicar este movimiento en la cuenta corriente.</div>'; return; }
   const {error} = await sb.rpc("registrar_pv_manual",{p_proveedor:provId, p_moneda:$("pj_moneda").value||"ARS",
-    p_tipo:$("pj_tipo").value, p_importe:imp, p_detalle:$("pj_detalle").value||"Ajuste"});
+    p_tipo:$("pj_tipo").value, p_importe:imp, p_detalle:det});
   if (error){ $("pvmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   await cargarProveedores();
   fichaProveedor(provId);
 }
 async function anularPV(movId, provId){
-  const motivo = prompt("¿Por qué se anula este movimiento?");
+  const motivo = pedirMotivo("¿Por qué se anula este movimiento?");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_pv_movimiento",{p_id:movId, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -8378,7 +8390,7 @@ async function anularOC(id){
       "Si algo de esa mercadería ya salió del depósito, el sistema no te va a dejar deshacerla: primero hay que resolver esa salida.");
     return;
   }
-  const m = prompt("¿Por qué se anula esta orden de compra?\n\nNo tiene nada recibido: no entró mercadería al depósito."); if (m===null) return;
+  const m = pedirMotivo("¿Por qué se anula esta orden de compra?\n\nNo tiene nada recibido: no entró mercadería al depósito."); if (m===null) return;
   const {error} = await sb.rpc("anular_orden_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   VISTAS.compras();
@@ -8760,11 +8772,12 @@ async function guardarFactura(){
     }catch(e){}
   }
   if (idFac && filas.length){
-    try{
-      await sb.rpc("guardar_detalle_impuestos", {p_factura: idFac,
+    const rd = await sb.rpc("guardar_detalle_impuestos", {p_factura: idFac,
         p_filas: filas.map(x=>({porcentaje: x.porcentaje==null?null:String(x.porcentaje),
                                 base:       x.base==null?null:String(x.base)}))});
-    }catch(e){ }
+    /* 26/8: si este paso falla, la factura quedó bien pero el detalle de cómo
+       se calculó cada impuesto no — se dice, no se traga */
+    if (rd.error) alert("La factura quedó registrada BIEN, pero el detalle de base y porcentaje de los impuestos no se pudo guardar ("+rd.error.message+"). Los importes están; solo falta el detalle del cálculo.");
   }
   await cargarProveedores(); await volverDeCompras();
 }
@@ -9125,7 +9138,7 @@ async function anularFactura(id){
       "Después sí, anulá la factura.");
     return;
   }
-  const m = prompt("¿Por qué se anula esta factura? La deuda con el proveedor se revierte."); if (m===null) return;
+  const m = pedirMotivo("¿Por qué se anula esta factura? La deuda con el proveedor se revierte."); if (m===null) return;
   const {error} = await sb.rpc("anular_factura_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarProveedores(); await volverDeCompras();
@@ -9280,7 +9293,7 @@ async function guardarNota(){
   await cargarProveedores(); await volverDeCompras();
 }
 async function anularNota(id){
-  const m = prompt("¿Por qué se anula esta nota?"); if (m===null) return;
+  const m = pedirMotivo("¿Por qué se anula esta nota?"); if (m===null) return;
   const {error} = await sb.rpc("anular_nota_proveedor",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarProveedores(); await volverDeCompras();
@@ -9677,7 +9690,7 @@ async function guardarPago(){
 }
 
 async function anularPago(id){
-  const m = prompt("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta."); if (m===null) return;
+  const m = pedirMotivo("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta."); if (m===null) return;
   const {error} = await sb.rpc("anular_pago_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarProveedores(); await cargarFin(); await volverDeCompras();
@@ -9699,6 +9712,7 @@ VISTAS.ventas = async function(){
   else if (SUBVISTA === "pendientes") q = q.eq("estado","Pendiente a cerrar");
   const {data,error} = await q;
   if (error){ $("main").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const recortadoV = (data||[]).length === 500;
   // saldo por venta: lo que falta cobrar de cada una
   const sv = await sb.from("v_saldos_venta").select("venta_id,saldo");
   const saldoDe = {}; (sv.data||[]).forEach(x=>{ saldoDe[x.venta_id] = Number(x.saldo||0); });
@@ -9722,6 +9736,7 @@ VISTAS.ventas = async function(){
   const rotV = {encurso:"Ventas en curso", cerradas:"Ventas cerradas", pendientes:"Ventas pendientes a cerrar"}[SUBVISTA] || "Historial de ventas";
   $("main").innerHTML = '<div class="panel"><h2>'+rotV+'</h2>'+
    '<div class="desc">Cada venta nace de un presupuesto pasado a «Vendido» y genera sola la deuda en la cuenta corriente del cliente. No se borra: se anula, y la anulación revierte la deuda.</div>'+
+   (recortadoV?'<div class="msg" style="margin-bottom:8px">Se muestran las <b>500</b> ventas más nuevas del rango: hay más que no se ven, y el buscador solo busca entre estas. Achicá el rango de fechas.</div>':'')+
    '<div class="filtros">'+
      '<div><label>Desde</label><input type="date" id="vf_desde" value="'+FVEN.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="vf_hasta" value="'+FVEN.hasta+'"></div>'+
@@ -10031,7 +10046,7 @@ function tarjetaAccionesVen(){
   if (!ve.anulado && P("venta-cerrar")){
     h += (window._db76
       ? (instalado
-          ? '<button class="b-neutro" onclick="marcarInstalado(false)">Deshacer «instalado»</button>'
+          ? '<button class="b-deshacer" onclick="marcarInstalado(false)">Deshacer «instalado»</button>'
           : '<button class="b-avanzar" onclick="marcarInstalado(true)">Marcar como instalado</button>')
       : '<button class="b-neutro" disabled title="Falta correr la migración v76">Marcar como instalado</button>');
     if (!cerrada) h += '<button class="b-avanzar" onclick="cerrarVenta()">Cerrar</button>';
@@ -10229,17 +10244,28 @@ async function ventaCostos(){
   }
   comis = Number(ve.neto||0) * pcTot/100;
 
-  /* 4. Financiación: del «Costo %» de la forma de pago del presupuesto */
-  let finan = 0, mpNom = "";
+  /* 4. Financiación: del «Costo %» de la forma de pago del presupuesto.
+     26/8, auditoría: el aviso decía siempre la misma causa y saltaba también
+     cuando la venta era directa (no hay dónde cargar forma de pago) o cuando
+     el costo era CERO a propósito (efectivo). El aviso equivocado manda a
+     corregir un dato que está bien — tres causas, tres avisos. */
+  let finan = 0, mpNom = "", mpHay = false, mpCero = false;
   if (ve.presupuesto_id && M.mpg){
     try{
       const p = await sb.from("presupuestos").select("medio_pago_pref_id").eq("id", ve.presupuesto_id).limit(1);
       const mpid = (p.data||[]).length ? p.data[0].medio_pago_pref_id : null;
       const mp = (M.mpg||[]).find(function(z){ return String(z.id)===String(mpid); });
-      if (mp){ mpNom = mp.nombre; finan = Number(ve.neto||0) * Number(mp.costo_pct||0)/100; }
+      if (mp){
+        mpHay = true; mpNom = mp.nombre;
+        const pctmp = Number(mp.costo_pct||0);
+        if (pctmp > 0) finan = Number(ve.neto||0) * pctmp/100;
+        else mpCero = true;
+      }
     }catch(e){}
   }
-  if (!finan) avisos.push("sin forma de pago con «Costo %» cargado: la financiación se contó como si no costara nada");
+  if (!ve.presupuesto_id) avisos.push("esta venta no nació de un presupuesto, así que no tiene forma de pago anotada: la financiación se contó cero");
+  else if (mpCero) { /* efectivo u otra forma sin costo: cero es correcto, no se avisa nada */ }
+  else if (!mpHay) avisos.push("el presupuesto no tiene forma de pago elegida, o la elegida no tiene «Costo %» cargado en Tablas básicas: la financiación se contó como si no costara nada");
   if (sinCostoProd) avisos.push(sinCostoProd+" renglón(es) cuyo producto no tiene «Costo USD» cargado en su ficha: ese costo quedó en CERO y el margen se lee de más");
   if (sinCotiz)     avisos.push(sinCotiz+" renglón(es) con «Costo USD» cargado pero sin cotización del dólar para pasarlo a pesos: cargala en la venta o en Configuración. Ese costo quedó en CERO y el margen se lee de más");
 
@@ -10501,7 +10527,7 @@ async function anularVenta(id){
       "Después sí, anulá la venta.");
     return;
   }
-  const motivo = prompt("¿Por qué se anula esta venta? La deuda del cliente se revierte.\n\nNo tiene remitos: no salió mercadería del depósito, y lo que estaba comprometido para esta venta queda libre solo.");
+  const motivo = pedirMotivo("¿Por qué se anula esta venta? La deuda del cliente se revierte.\n\nNo tiene remitos: no salió mercadería del depósito, y lo que estaba comprometido para esta venta queda libre solo.");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_venta", {p_id:id, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -11097,9 +11123,9 @@ async function guardarDocumento(id){
 }
 
 async function anularDocumento(id){
-  const m = prompt("¿Por qué anulás este documento?"); if (m===null) return;
+  const m = pedirMotivo("¿Por qué anulás este documento?"); if (m===null) return;
   const {error} = await sb.from("documentos").update({anulado:true, anulado_en:new Date().toISOString(),
-    motivo_anulacion:m||"Sin motivo"}).eq("id",id);
+    anulado_por:PERFIL.id, motivo_anulacion:m||"Sin motivo"}).eq("id",id);
   if (error) return alert(error.message);
   await cargarDocs(); VISTAS.docs();
 }
@@ -11253,9 +11279,9 @@ async function convertirLead(id){
 }
 
 async function anularLead(id){
-  const m = prompt("¿Por qué anulás este lead?"); if (m===null) return;
+  const m = pedirMotivo("¿Por qué anulás este lead?"); if (m===null) return;
   const {error} = await sb.from("leads").update({anulado:true, anulado_en:new Date().toISOString(),
-    motivo_anulacion:m||"Sin motivo"}).eq("id",id);
+    anulado_por:PERFIL.id, motivo_anulacion:m}).eq("id",id);
   if (error) return alert(error.message);
   try{ $("dlg").close(); }catch(e){}
   VISTAS.leads();
@@ -11876,7 +11902,7 @@ async function tipoNotaAgregar(cliId){
   if ($("ntmsg")) $("ntmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y elegido. La nota que estabas escribiendo sigue ahí.</div>';
 }
 async function notaAnular(id, cliId){
-  const motivo = prompt("¿Por qué se anula esta nota?");
+  const motivo = pedirMotivo("¿Por qué se anula esta nota?");
   if (motivo === null) return;
   const {error} = await sb.from("notas_cliente").update({anulado:true, anulado_por:PERFIL.nombre, anulado_en:new Date().toISOString(), motivo_anulacion:motivo||"Sin motivo"}).eq("id",id);
   if (error){ $("ntmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
@@ -12180,7 +12206,7 @@ async function imprimirCCCli(cliId){
    '.pie{margin-top:22px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
    '</style></head><body>'+
    membrete('Resumen de cuenta · '+esc(cli.nombre||"")+' · '+rango)+
-   '<div class="caja"><b>'+esc(cli.nombre||"")+'</b>'+(cli.dni_cuit?' · '+esc(cli.dni_cuit):'')+
+   '<div class="caja"><b>'+esc(cli.nombre||"")+'</b>'+(cli.nro_doc?' · '+esc(cli.tipo_doc||"Doc")+' '+esc(cli.nro_doc):'')+
      (cli.celular||cli.telefono?'<br>'+esc(cli.celular||cli.telefono):'')+
      (cli.direccion?'<br>'+esc(cli.direccion):'')+'</div>'+
    (cuerpo || '<div>Sin movimientos en el período.</div>')+
@@ -12254,12 +12280,25 @@ async function guardarCliente(id){
     '<div class="msg ok">Cliente creado. ¿Seguís con algo más?</div>'+
     '<div class="acciones" style="margin-top:6px">'+
       ((nid && P("presupuesto-agregar"))? '<button class="btn"  onclick="presupuestoDesdeCliente('+nid+')">Hacerle un presupuesto</button>' : '')+
-      ((nid && P("venta-agregar"))?       '<button class="btn3" onclick="formVentaNueva('+nid+')">Registrarle una venta</button>' : '')+
+      ((nid && P("venta-agregar"))?       '<button class="btn3" style="background:#1d5b2c" onclick="formVentaNueva('+nid+')">Registrarle una venta</button>' : '')+
       '<button class="btn2" onclick="cerrarDialogo()">Cerrar</button>'+
     '</div>';
 }
 /* Cerrar el diálogo grande desde un onclick, sin escribir el id a mano en cada botón. */
 function cerrarDialogo(){ try{ $("dlg").close(); }catch(e){} }
+/* 26/8, auditoría: 17 anulaciones aceptaban Aceptar con el campo vacío y
+   guardaban «Sin motivo». Toda la defensa del sistema es que nada se borra y
+   todo queda con su porqué: un historial lleno de «Sin motivo» no explica
+   nada. Esta función repregunta hasta que haya motivo, o se cancela. */
+function pedirMotivo(txt){
+  let aviso = "";
+  while (true){
+    const m = prompt(aviso + txt);
+    if (m === null) return null;
+    if (String(m).trim()) return String(m).trim();
+    aviso = "EL MOTIVO NO PUEDE QUEDAR VACÍO.\n\n";
+  }
+}
 async function anularCobranza(cobId, cliId){
   /* 25/8, auditoría: si el cheque que entró con esta cobranza ya se depositó o
      ya salió en un pago, primero vuelve el valor y después el papel. Antes no
@@ -12276,7 +12315,7 @@ async function anularCobranza(cobId, cliId){
       return;
     }
   }catch(e){}
-  const m = prompt("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
+  const m = pedirMotivo("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
   if (m === null) return;
   const {error} = await sb.rpc("anular_cobranza", {p_id:cobId, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
@@ -12285,7 +12324,7 @@ async function anularCobranza(cobId, cliId){
   fichaCliente(cliId);
 }
 async function anularCC(movId, cliId){
-  const motivo = prompt("¿Por qué anulás este movimiento? Queda registrado con tu nombre.");
+  const motivo = pedirMotivo("¿Por qué anulás este movimiento? Queda registrado con tu nombre.");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_cc_movimiento", {p_id:movId, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -12387,8 +12426,11 @@ async function formCobranza(cliId){
     const imputa = [];
     (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0; if (v>0) imputa.push({venta_id:x.venta_id, importe:v}); });
     /* 10/8: la imputación no puede superar ni el saldo de cada venta ni lo
-       cobrado. Antes era solo un aviso que no frenaba nada; la base también
-       lo bloquea ahora (v52), pero acá se explica mejor y antes. */
+       cobrado. Antes era solo un aviso que no frenaba nada.
+       26/8, VERIFICADO leyendo la función: lo que acá decía «la base también
+       lo bloquea (v52)» era FALSO — la misma frase, de la misma versión, que
+       ya había resultado falsa en anular_venta el 23/8. El candado de verdad
+       se instaló y probó ese día: migración v80. */
     let malImp = null;
     (window._VTAS_COB||[]).forEach(function(x,k){ const el=$("kv_"+k); const v = el?Number(el.value||0):0;
       if (v > Number(x.saldo)+0.009) malImp = 'A la venta '+esc(x.codigo)+' no le podés imputar '+fmtM(v,x.moneda)+': su saldo es '+fmtM(x.saldo,x.moneda)+'.'; });
@@ -13020,12 +13062,17 @@ async function finMovs(){
   if (!FIN.anulados) q = q.eq("anulado", false);
   const {data,error} = await q;
   if (error){ $("mlista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  /* 26/8, auditoría: la lista traía 500 y decía «500 movimientos» como si
+     fueran todos — y el buscador filtra DENTRO de ese recorte. El que busca un
+     pago viejo, no lo encuentra y lo vuelve a cargar. Ahora el recorte se dice. */
+  const recortado = (data||[]).length === 500;
   const ctaDe = id => { const c = CTAS.find(x=>x.id===id); return c?c:{nombre:"?",moneda:"ARS"}; };
   const tm = (FIN.texto||"").toLowerCase();
   const rows = (data||[]).filter(x=> (!FIN.moneda || ctaDe(x.cuenta_id).moneda===FIN.moneda) &&
     (!tm || ((x.detalle||"")+" "+(x.motivo||"")+" "+ctaDe(x.cuenta_id).nombre).toLowerCase().indexOf(tm)>=0));
   const SAL = await saldosAcumulados(rows.map(x=>x.cuenta_id));
-  $("mlista").innerHTML = rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos. La columna <b>Saldo</b> es cómo quedó esa cuenta después de ese movimiento, contando todo su historial y no solo lo filtrado.</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
+  $("mlista").innerHTML = (recortado? '<div class="msg" style="margin-bottom:8px">Se muestran los <b>500</b> movimientos más nuevos del rango: hay más que no se ven, y el buscador solo busca entre estos 500. Achicá el rango de fechas para llegar a los anteriores.</div>':'')+
+   (rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos'+(recortado?' (de los 500 traídos)':'')+'. La columna <b>Saldo</b> es cómo quedó esa cuenta después de ese movimiento, contando todo su historial y no solo lo filtrado.</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
     ['Cuenta','Fecha','Detalle','Crédito','Débito','Saldo','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
     rows.map(function(x){ const c = ctaDe(x.cuenta_id);
       return '<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+esc(c.nombre)+'</td><td>'+fmtF(x.fecha)+'</td>'+
@@ -13034,7 +13081,7 @@ async function finMovs(){
         '<td style="color:#7a2415">'+(Number(x.debito)?fmtM(x.debito,c.moneda):'')+'</td>'+
         celdaSaldo(SAL, x.id, c.moneda, x.anulado)+
         '<td>'+esc(x.motivo)+'</td></tr>';
-    }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>';
+    }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>');
 }
 
 let FG = {desde:"", hasta:"", concepto:"", area:"", persona:"", vehiculo:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
@@ -13079,12 +13126,14 @@ async function finGastos(){
   if (!FG.anulados) q = q.eq("anulado", false);
   const {data,error} = await q;
   if (error){ $("glista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const recortadoG = (data||[]).length === 1000;
   const t = FG.texto.toLowerCase();
   let rows = (data||[]).filter(g => !t || ((g.detalle_extra||"")+" "+(g.proveedor||"")+" "+(g.nro_comprobante||"")+" "+(g.cuit_proveedor||"")+" "+nom(CGASTOS,g.concepto_id)+" "+nom(CTAS,g.cuenta_id)).toLowerCase().indexOf(t)>=0);
   const SALG = await saldosAcumulados(rows.map(g=>g.cuenta_id));
   if (FG.soloAnulados) rows = rows.filter(g=>g.anulado);
-  if (!rows.length){ $("glista").innerHTML='<div class="muted">No hay gastos con esos filtros.</div>'; return; }
+  if (!rows.length){ $("glista").innerHTML=(recortadoG?'<div class="msg" style="margin-bottom:8px">Se traen los <b>1000</b> gastos más nuevos y el buscador solo busca entre esos: lo que buscás puede ser más viejo. Achicá el rango de fechas.</div>':'')+'<div class="muted">No hay gastos con esos filtros.</div>'; return; }
   window._GASTOS_LISTA = rows;
+  window._GASTOS_RECORTE = recortadoG;
   const vivos = rows.filter(g=>!g.anulado);
   const tot = m => vivos.filter(g=>g.moneda===m);
   const resumen = ["ARS","USD"].map(function(m){
@@ -13093,7 +13142,8 @@ async function finGastos(){
     return '<div class="kpi" style="border-left-color:var(--oxido)"><div class="t">Gastado en '+m+' · '+v.length+' gastos</div><div class="n" style="font-size:20px">'+fmtM(ti,m)+'</div>'+
            '<div class="muted" style="font-size:12px">neto '+fmtM(tn,m)+' · IVA '+fmtM(tv,m)+'</div></div>';
   }).join("");
-  $("glista").innerHTML = (resumen?'<div class="kpis">'+resumen+'</div>':'')+
+  $("glista").innerHTML = (window._GASTOS_RECORTE?'<div class="msg" style="margin-bottom:8px">Se muestran los <b>1000</b> gastos más nuevos del rango: hay más que no se ven, los KPI de arriba suman solo estos, y el buscador solo busca entre estos. Achicá el rango de fechas.</div>':'')+
+   (resumen?'<div class="kpis">'+resumen+'</div>':'')+
    '<div class="muted" style="margin-bottom:8px">'+rows.length+' gasto'+(rows.length===1?"":"s")+(FG.anulados?" (incluye anulados)":"")+'</div>'+
    '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
    ['Fecha de pago','Corresponde a','Cuenta','Concepto'].concat(M.agt?['Área']:[]).concat(M.per?['Persona']:[]).concat(M.veh?['Vehículo']:[]).concat(['Proveedor','Comprobante','Neto','IVA','Importe','Saldo cuenta','Detalle','']).map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
@@ -13143,7 +13193,7 @@ async function verGasto(id){
    '<div class="sec">Comprobante</div><div class="grid">'+
      '<div class="f"><label>Proveedor</label><div>'+esc(x.proveedor||"—")+'</div></div>'+
      '<div class="f"><label>N° de comprobante</label><div>'+esc(x.nro_comprobante||"—")+'</div></div>'+
-     '<div class="f"><label>CUIT</label><div>'+esc(x.cuit||"—")+'</div></div>'+
+     '<div class="f"><label>CUIT</label><div>'+esc(x.cuit_proveedor||"—")+'</div></div>'+
    '</div>'+
    (x.detalle_extra?'<div class="f"><label>Detalle</label><div style="white-space:normal">'+esc(x.detalle_extra)+'</div></div>':'')+
    selloAuditoria(x)+
@@ -13246,20 +13296,32 @@ function formGasto(){
       p_impuesto:Number($("g_imp").value||0), p_concepto:$("g_concepto").value?Number($("g_concepto").value):null, p_extra:$("g_extra").value||null,
       p_comprobante:$("g_comprobante").value||null, p_cuit:$("g_cuit").value||null, p_proveedor:$("g_proveedor").value||null});
     if (r.error){ $("fgmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
-    /* la imputación va en un segundo paso, para no tocar la función que mueve la plata */
+    /* la imputación va en un segundo paso, para no tocar la función que mueve
+       la plata. 26/8, auditoría: el error de este paso se tiraba a la basura —
+       sb.rpc no lanza excepción, devuelve {error}, así que el catch no atrapaba
+       nada nunca. Un gasto sin imputar desaparece del reporte de egresos con un
+       rango de fechas puesto, y el sistema decía «guardado». Ahora se avisa. */
+    const avisos2 = [];
     const fi = ($("g_fecha_imp")||{}).value || $("g_fecha").value || hoy();
-    if (r.data) { try{ await sb.rpc("imputar_gasto",{p_gasto:Number(r.data), p_fecha:fi}); }catch(e){} }
-    /* el área también va aparte, por la misma razón: no se toca la función que mueve la plata */
+    if (r.data){
+      const ri = await sb.rpc("imputar_gasto",{p_gasto:Number(r.data), p_fecha:fi});
+      if (ri.error) avisos2.push("no pude imputarlo al mes ("+ri.error.message+"): abrilo y ponele la fecha de imputación, o queda afuera del reporte de egresos");
+    }
     const ar = ($("g_area")||{}).value, pe = ($("g_persona")||{}).value, ve = ($("g_vehiculo")||{}).value;
     if (r.data && (ar || pe || ve)){
-      try{ await sb.rpc("set_clasificacion_gasto",{p_gasto:Number(r.data), p_area: ar?Number(ar):null,
-             p_persona: pe?Number(pe):null, p_vehiculo: ve?Number(ve):null}); }
-      catch(e){ try{ if (ar) await sb.rpc("set_area_gasto",{p_gasto:Number(r.data), p_area:Number(ar)}); }catch(e2){} }
+      const rc = await sb.rpc("set_clasificacion_gasto",{p_gasto:Number(r.data), p_area: ar?Number(ar):null,
+             p_persona: pe?Number(pe):null, p_vehiculo: ve?Number(ve):null});
+      if (rc.error){
+        const ra = ar ? await sb.rpc("set_area_gasto",{p_gasto:Number(r.data), p_area:Number(ar)}) : {error:null};
+        if (!ar || ra.error) avisos2.push("no pude clasificarlo ("+rc.error.message+"): abrilo con «Clasificar» y ponele el área, o el reporte por área da de menos");
+      }
     }
+    if (avisos2.length) alert("El gasto quedó registrado BIEN, pero:\n\n· " + avisos2.join("\n· "));
     /* 14/8, Gilda: «cuando termino de cargar un gasto me lleva al estado de
-       resultado, tendría que ir al listado de gastos». Iba a Finanzas sin
-       decirle a qué solapa, y Finanzas abre en Estado financiero. */
-    await cargarFin(); $("dlg").close(); SUBVISTA = "gastos"; VISTAS.finanzas();
+       resultado, tendría que ir al listado de gastos».
+       26/8, auditoría: el arreglo anterior NUNCA funcionó — le pasaba una
+       solapa que Finanzas no conoce y caía igual en el Estado financiero. */
+    await cargarFin(); $("dlg").close(); ir("gastos");
   };
   $("dlg").showModal();
 }
@@ -13398,10 +13460,11 @@ async function areaGastoAgregar(){
 }
 
 async function anularGasto(id){
-  const m = prompt("¿Por qué anulás este gasto?"); if (m===null) return;
-  const {error} = await sb.rpc("anular_gasto",{p_id:id,p_motivo:m||"Sin motivo"});
+  const m = pedirMotivo("¿Por qué anulás este gasto?"); if (m===null) return;
+  const {error} = await sb.rpc("anular_gasto",{p_id:id,p_motivo:m});
   if (error) return alert(error.message);
-  await cargarFin(); VISTAS.finanzas();
+  await cargarFin();
+  if (VISTA === "gastos") VISTAS.gastos(); else VISTAS.finanzas();
 }
 
 async function finTransf(){
@@ -13453,8 +13516,9 @@ function formTransf(){
     const tc = Number($("x_tc").value||0);
     if (distinta && !(tc>0)){ $("ftmsg").innerHTML='<div class="msg err">Las cuentas son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
     /* 10/8: entre cuentas de la misma moneda entra exactamente lo que sale —
-       el campo editable permitía que salgan 100 y entren 1000. La base también
-       lo bloquea ahora (v52). */
+       el campo editable permitía que salgan 100 y entren 1000. Acá decía que
+       la base también lo bloquea (v52): al 26/8 NO está verificado leyendo
+       registrar_transferencia — pendiente, no darlo por hecho. */
     const idst = distinta ? Number($("x_id").value||0) : io;
     if (!saldoAlcanza($("x_origen").value, io, "ftmsg")) return;
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
@@ -13465,7 +13529,7 @@ function formTransf(){
   $("dlg").showModal();
 }
 async function anularTransf(id){
-  const m = prompt("¿Por qué anulás esta transferencia?"); if (m===null) return;
+  const m = pedirMotivo("¿Por qué anulás esta transferencia?"); if (m===null) return;
   const {error} = await sb.rpc("anular_transferencia",{p_id:id,p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarFin(); VISTAS.finanzas();
@@ -13523,7 +13587,7 @@ function formRetiro(){
   $("dlg").showModal();
 }
 async function anularRetiro(id){
-  const m = prompt("¿Por qué anulás este retiro?"); if (m===null) return;
+  const m = pedirMotivo("¿Por qué anulás este retiro?"); if (m===null) return;
   const {error} = await sb.rpc("anular_retiro",{p_id:id,p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarFin(); VISTAS.finanzas();
