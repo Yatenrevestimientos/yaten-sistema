@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-154";
+const VERSION = "v2026.08.26-155";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -844,6 +844,11 @@ function irAPrimeraVista(){
   ir(primera ? primera.id : "tablero");
 }
 function ir(v, sub){
+  /* 26/8, recorrida de Gilda: el filtro de Clientes quedaba pegado — filtrabas
+     por un cliente, volvías al otro día y la lista seguía recortada. Entrar a
+     la sección por el menú arranca con la lista entera; el filtro vive solo
+     mientras trabajás adentro. */
+  if (v === "clientes" && VISTA !== "clientes"){ FCLI = ""; FDEUDA = false; FMPG = ""; }
   VISTA = v; SUBVISTA = sub || "";
   /* La puerta, antes de dibujar nada.
      1) Si falta el permiso de la SECCIÓN, no se entra: cartel y nada más.
@@ -1312,7 +1317,7 @@ async function pintarCola(){
        '<td style="white-space:nowrap">'+celdaWa(p)+'</td>'+
        '<td>'+esc(nom(M.loc,p.localidad_id)||"—")+'</td>'+
        '<td>'+esc(nomP(p.vl_id)||"—")+'</td>'+
-       '<td>'+esc(p.derivacion||"<span class=muted>sin definir</span>")+'</td>'+
+       '<td>'+(p.derivacion?esc(p.derivacion):'<span class=muted>sin definir</span>')+'</td>'+
        '<td>'+badge(p.resultado)+'</td>'+
        '<td style="white-space:nowrap">'+(c.total
           ? '<b'+(cansado?' style="color:#7a2415"':'')+'>'+c.total+'</b> <span class="muted">('+c.llamadas+' llam · '+c.mensajes+' msj)</span>'
@@ -7202,12 +7207,22 @@ async function guardarAjusteStock(prodId){
   $("dlg").close(); VISTAS.stock();
 }
 async function pintarMovStock(){
-  const {data,error} = await sb.from("stock_movimientos").select("*").order("id",{ascending:false}).limit(400);
+  /* 26/8, recorrida de Gilda: «no se puede ver los movimientos de cada
+     producto». Filtro por producto: la historia entera de un producto,
+     con qué comprobante lo movió. */
+  let q = sb.from("stock_movimientos").select("*").order("id",{ascending:false}).limit(400);
+  if (window._MSTK_PROD) q = q.eq("producto_id", Number(window._MSTK_PROD));
+  const {data,error} = await q;
   if (error){ $("main").innerHTML = '<div class="panel"><div class="msg err">'+esc(error.message)+'</div></div>'; return; }
   const nomProd = id => { const p = STK.find(x=>x.producto_id===id); return p?p.nombre:("producto #"+id); };
   const quien = id => { const p = EQUIPO.find(x=>x.id===id); return p?p.nombre:""; };
+  const prods = (PRODS||[]).filter(x=>x.activo!==false);
   $("main").innerHTML = '<div class="panel"><h2>Modificaciones de stock</h2>'+
-   '<div class="desc">La auditoría del depósito: cada movimiento con el stock anterior, el posterior, quién lo hizo y por qué. No se borra ninguno.</div>'+
+   '<div class="desc">La auditoría del depósito: cada movimiento con el stock anterior, el posterior, quién lo hizo y por qué. No se borra ninguno. '+
+   'El stock <b>sube</b> con la recepción de la orden de compra, la devolución de insumos y el ajuste a favor; <b>baja</b> con el remito de entrega, el insumo de obra y el ajuste en contra.</div>'+
+   '<div class="filtros"><div style="min-width:280px"><label>Producto</label><select id="mstk_prod" onchange="window._MSTK_PROD=this.value;pintarMovStock()">'+
+     '<option value="">Todos</option>'+prods.map(x=>'<option value="'+x.id+'" '+(String(window._MSTK_PROD||"")===String(x.id)?"selected":"")+'>'+esc(x.nombre)+'</option>').join("")+
+   '</select></div></div>'+
    ((data||[]).length? '<div class="tablewrap" style="max-height:68dvh;overflow:auto"><table><thead><tr>'+
      ['Fecha','Producto','Stock anterior','Cantidad','Stock posterior','Motivo','Detalle','Origen','Realizado por',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      data.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"'+(x.anulado&&x.motivo_anulacion?' title="Anulado: '+esc(x.motivo_anulacion)+'"':'')+'><td>'+fmtF(x.fecha)+'</td>'+
@@ -7326,7 +7341,7 @@ VISTAS.cheques = async function(){
      '<button class="btn2" onclick="formCheque(\'Propios\')">+ Cheque propio</button></div>':'')+
    '</div>'+
    (esDueno() && SUBVISTA !== "propios"?'<div class="muted" style="margin-bottom:8px">El alta a mano es para la <b>carga inicial de la cartera</b>. En el día a día el cheque de terceros entra por el <b>recibo de cobranza</b> y el propio se emite desde la <b>orden de pago</b>.</div>':'')+
-   (SUBVISTA === "propios"?'<div class="muted" style="margin-bottom:8px">Los cheques propios se emiten desde la <b>orden de pago</b>, a nombre del proveedor al que se le entregan. Acá solo se listan.</div>':'')+
+   (SUBVISTA === "propios"?'<div class="muted" style="margin-bottom:8px">Los cheques propios se emiten desde la <b>orden de pago</b>. Emitirlo <b>no mueve la cuenta</b>: la plata sale cuando el proveedor lo cobra y alguien lo registra acá con <b>«Se debitó»</b>. Hasta entonces figura como plata comprometida.</div>':'')+
    (Object.keys(tot).length? '<div class="kpis" style="margin-bottom:10px">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m],m)+'</div><div class="muted">'+rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length+' cheque'+(rows.filter(x=>(x.moneda||"ARS")===m&&!x.anulado).length===1?"":"s")+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:62dvh;overflow:auto"><table><thead><tr>'+
      ['Librador','Número','Banco','Sucursal','Importe','Moneda','Emisión','Fecha de cobro','Vence','Cuenta','Estado','Situación',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
@@ -7379,6 +7394,13 @@ function accionCheque(x){
      un cheque Entregado lo hacía reaparecer en la cartera, y el mismo papel
      quedaba comprometido con dos proveedores. Si hay que dar marcha atrás, se
      anula la operación entera, no el cheque suelto. */
+  /* 26/8, decisión de Gustavo (reemplaza la del 23/8): el cheque propio no
+     debita la cuenta al emitirse; el débito lo registra una persona cuando el
+     proveedor lo cobra — igual que en Pirka. Deshacerlo pide más permiso. */
+  if (x.tipo === "Propios" && !x.anulado && x.estado === "Entregado" && P("finanzas-modificar"))
+    return '<button class="btn btn-sm" onclick="formDebitarPropio('+x.id+')">Se debitó</button>';
+  if (x.tipo === "Propios" && !x.anulado && x.estado === "Cobrado" && P("finanzas-anular"))
+    return '<button class="btn2 btn-sm" onclick="deshacerDebitoPropio('+x.id+')">Deshacer débito</button>';
   if (esDueno() && x.estado !== "Cobrado"){
     if (x.pago_id)     return '<span class="muted" title="Salió en una orden de pago. Anulá esa orden y el cheque vuelve solo.">salió en un pago</span>'+btnAnular;
     if (x.cobranza_id && x.estado !== "Disponible")
@@ -7387,6 +7409,45 @@ function accionCheque(x){
   }
   return btnAnular;
 }
+/* ── El débito del cheque propio (26/8, decisión de Gustavo) ──
+   Emitir el cheque no movió la cuenta. Cuando el proveedor lo cobra, alguien
+   lo registra acá: recién entonces sale la plata, con su control de saldo y
+   descubierto. Deshacer el débito lo devuelve a Entregado y la plata vuelve. */
+async function formDebitarPropio(id){
+  const q = await sb.from("cheques").select("*").eq("id",id).single();
+  if (q.error) return alert(q.error.message);
+  const c = q.data;
+  if (!CTAS.length) await cargarFin();
+  const cta = (CTAS||[]).find(x=>String(x.id)===String(c.cuenta_id));
+  $("d2tit").textContent = "El banco debitó el cheque";
+  $("d2body").innerHTML = '<div id="dbpmsg"></div>'+
+    '<div class="muted" style="margin-bottom:8px">Cheque propio N° <b>'+esc(c.numero||"")+'</b> por <b>'+fmtM(c.importe,c.moneda)+'</b>, '+
+    'con fecha de cobro '+fmtF(c.vencimiento)+'. La plata sale de <b>'+esc(cta?cta.nombre:"—")+'</b> recién ahora.</div>'+
+    (c.vencimiento && c.vencimiento > hoy()
+      ? '<div class="msg" style="background:#faecbb;margin-bottom:8px">La fecha de cobro es el '+fmtF(c.vencimiento)+' y todavía no llegó: un cheque no suele debitarse antes. Seguí solo si el resumen del banco ya lo muestra.</div>' : '')+
+    '<div class="grid"><div class="f"><label>Fecha del débito *</label><input type="date" id="dbp_fecha" value="'+hoy()+'"></div></div>'+
+    '<div class="acciones"><button class="btn" onclick="debitarPropio('+c.id+')">Registrar el débito</button>'+
+    '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+async function debitarPropio(id){
+  const c = ((await sb.from("cheques").select("cuenta_id,importe").eq("id",id).single())||{}).data;
+  if (c && !saldoAlcanza(c.cuenta_id, c.importe, "dbpmsg")) return;
+  const f = ($("dbp_fecha")||{}).value || hoy();
+  const r = await sb.rpc("debitar_cheque_propio", {p_id:id, p_fecha:f});
+  if (r.error){ const e=$("dbpmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; else alert(r.error.message); return; }
+  cerrarDlg2();
+  await cargarFin(); await cargarCheques();
+  VISTAS.cheques();
+}
+async function deshacerDebitoPropio(id){
+  if (!confirm("¿Deshacer el débito?\n\nEl cheque vuelve a Entregado y la plata vuelve a la cuenta. Es para un débito registrado por error: si el banco lo debitó de verdad, no lo toques.")) return;
+  const r = await sb.rpc("deshacer_debito_cheque_propio", {p_id:id});
+  if (r.error) return alert(r.error.message);
+  await cargarFin(); await cargarCheques();
+  VISTAS.cheques();
+}
+
 /* Depositar el cheque: sale de la cuenta «Cheques de terceros» y entra al banco.
    Es la operación que faltaba —Gustavo, 14/8: «si revisás el sistema de Pirka y
    entrás a cheques disponibles te aparecen los cheques y la opción de
@@ -8293,14 +8354,20 @@ async function comOrdenes(){
   const rows = (data||[]).filter(x=>aplicaFiltro(x, x.codigo));
   $("cbody").innerHTML = '<div class="desc">Lo que le pedimos al proveedor y todavía no llegó. La <b>fecha de recepción</b> es la que alimenta el pendiente de recepción del stock.</div>'+
    filtrosCompra("oc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formOrdenCompra()">+ Orden de compra</button></div>':'')+'</div>'+
+   '<div class="muted" style="margin-bottom:8px">Hacé clic en cualquier renglón para <b>ver la orden</b> con sus productos y cuánto falta recibir.</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
      ['Código','Proveedor','Fecha','Recepción','Total','Moneda','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     rows.map(x=>'<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
+     /* 26/8, recorrida de Gilda: la lista no dejaba ENTRAR a la orden para ver
+        los renglones — solo Recibir y Anular. Ahora el renglón se abre con un
+        clic, y los botones se llaman por lo que hacen: «Recibir mercadería»
+        cuando falta, «Ver recepción» cuando ya está recibida. */
+     rows.map(x=>'<tr'+filaAnul(x)+' style="cursor:pointer'+(x.anulado?';opacity:.45;text-decoration:line-through':'')+'" onclick="verOrdenCompra('+x.id+')">'+
+       '<td><b>'+esc(x.codigo)+'</b></td><td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
        '<td>'+(x.fecha_recepcion?fmtF(x.fecha_recepcion):'<span class="muted">sin fecha</span>')+'</td>'+
        '<td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td><td>'+esc(x.estado)+'</td>'+
-       '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':
-         ((P("stock-modificar")?'<button class="btn2 btn-sm" onclick="formRecepcion('+x.id+')">'+(x.estado!=="Recibida"?"Recibir":"Recepción")+'</button> ':'')+
-          (P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="anularOC('+x.id+')">Anular</button>':'')))+'</td></tr>').join("")+
+       '<td style="white-space:nowrap">'+(x.anulado?'<span class="pill no">Anulada</span>':
+         ((P("stock-modificar")?'<button class="btn2 btn-sm" onclick="event.stopPropagation();formRecepcion('+x.id+')">'+(x.estado!=="Recibida"?"Recibir mercadería":"Ver recepción")+'</button> ':'')+
+          (P("finanzas-anular")?'<button class="btn2 btn-sm" onclick="event.stopPropagation();anularOC('+x.id+')">Anular</button>':'')))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">No hay órdenes de compra con esos filtros.</div>');
   engancharFiltros("oc");
 }
@@ -9666,6 +9733,7 @@ function abrirChequePropio(){
         '<div class="f"><label>Fecha de cobro *</label><input type="date" id="cp_venc"></div>'+
       '</div>'+
       '<div id="cp_ctaav" style="margin:-4px 0 8px"></div>'+
+      '<div class="muted" style="margin-bottom:8px">El cheque <b>no saca la plata ahora</b>: la cuenta se debita cuando el proveedor lo cobre y lo registres en <b>Cheques → Cheques propios → «Se debitó»</b>. Mientras tanto queda como comprometido.</div>'+
       '<div class="f"><label>Comentarios</label><input id="cp_obs"></div>'+
       '<div class="acciones"><button class="btn" onclick="chequePropioAgregar()">Agregar a la orden</button>'+
       '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
@@ -13163,7 +13231,8 @@ async function finMovs(){
      '<div><label>Cuenta</label><select id="mf_cta"><option value="">Todas</option>'+CTAS.map(c=>'<option value="'+c.id+'" '+(String(FIN.cuenta||"")===String(c.id)?"selected":"")+'>'+esc(c.nombre)+'</option>').join("")+'</select></div>'+
      '<div><label>Anulados</label><select id="mf_anul"><option value="0" '+(FIN.anulados?"":"selected")+'>Ocultar</option><option value="1" '+(FIN.anulados?"selected":"")+'>Mostrar</option></select></div>'+
      '<div style="min-width:220px"><label>Buscar</label><input id="mf_txt" placeholder="detalle, cuenta o motivo" value="'+esc(FIN.texto||"")+'"></div>'+
-     '<div style="min-width:auto"><button class="btn" id="mf_btn">Filtrar</button></div></div>'+
+     '<div style="min-width:auto"><button class="btn" id="mf_btn">Filtrar</button></div>'+
+     '<div style="min-width:auto"><button class="btn2" onclick="imprimirMovimientos()">Imprimir</button></div></div>'+
    '<div id="mlista" class="muted">Cargando…</div></div>';
   $("mf_btn").onclick = function(){ FIN.moneda=$("mf_mon").value; FIN.desde=$("mf_desde").value; FIN.hasta=$("mf_hasta").value; FIN.cuenta=$("mf_cta").value; FIN.anulados=$("mf_anul").value==="1"; FIN.texto=$("mf_txt").value.trim(); finMovs(); };
   let q = sb.from("movimientos_cuenta").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(500);
@@ -13173,6 +13242,26 @@ async function finMovs(){
   if (!FIN.anulados) q = q.eq("anulado", false);
   const {data,error} = await q;
   if (error){ $("mlista").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  /* 26/8, pedido de Gustavo: al mirar una cuenta, arriba tiene que estar lo
+     comprometido por cheques propios emitidos y todavía sin debitar — plata
+     que el saldo aún no descuenta pero que ya está firmada. */
+  let comprometido = '';
+  if (FIN.cuenta){
+    const chp = await sb.from("cheques").select("importe,moneda,vencimiento")
+      .eq("tipo","Propios").eq("estado","Entregado").eq("anulado",false).eq("cuenta_id",Number(FIN.cuenta));
+    const l = chp.data||[];
+    if (l.length){
+      const cta0 = CTAS.find(x=>String(x.id)===String(FIN.cuenta))||{};
+      const suma = l.reduce((a,x)=>a+Number(x.importe||0),0);
+      const prox = l.map(x=>x.vencimiento).filter(Boolean).sort()[0];
+      const saldoCta = Number(cta0.saldo||0);
+      comprometido = '<div class="msg" style="background:#faecbb;margin-bottom:8px"><b>Comprometido por cheques propios sin debitar: '+
+        fmtM0(suma, cta0.moneda||"ARS")+'</b> ('+l.length+' cheque'+(l.length===1?'':'s')+
+        (prox?', el más próximo cobra el '+fmtF(prox):'')+'). '+
+        'El saldo de la cuenta todavía no los descuenta: contándolos quedaría en <b>'+fmtM0(saldoCta - suma, cta0.moneda||"ARS")+'</b>. '+
+        'Se descuentan al registrar «Se debitó» en Cheques → Cheques propios.</div>';
+    }
+  }
   /* 26/8, auditoría: la lista traía 500 y decía «500 movimientos» como si
      fueran todos — y el buscador filtra DENTRO de ese recorte. El que busca un
      pago viejo, no lo encuentra y lo vuelve a cargar. Ahora el recorte se dice. */
@@ -13182,7 +13271,8 @@ async function finMovs(){
   const rows = (data||[]).filter(x=> (!FIN.moneda || ctaDe(x.cuenta_id).moneda===FIN.moneda) &&
     (!tm || ((x.detalle||"")+" "+(x.motivo||"")+" "+ctaDe(x.cuenta_id).nombre).toLowerCase().indexOf(tm)>=0));
   const SAL = await saldosAcumulados(rows.map(x=>x.cuenta_id));
-  $("mlista").innerHTML = (recortado? '<div class="msg" style="margin-bottom:8px">Se muestran los <b>500</b> movimientos más nuevos del rango: hay más que no se ven, y el buscador solo busca entre estos 500. Achicá el rango de fechas para llegar a los anteriores.</div>':'')+
+  window._MOVROWS = rows; window._MOVCOMP = comprometido;
+  $("mlista").innerHTML = comprometido + (recortado? '<div class="msg" style="margin-bottom:8px">Se muestran los <b>500</b> movimientos más nuevos del rango: hay más que no se ven, y el buscador solo busca entre estos 500. Achicá el rango de fechas para llegar a los anteriores.</div>':'')+
    (rows.length? '<div class="muted" style="margin-bottom:8px">'+rows.length+' movimientos'+(recortado?' (de los 500 traídos)':'')+'. La columna <b>Saldo</b> es cómo quedó esa cuenta después de ese movimiento, contando todo su historial y no solo lo filtrado.</div><div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
     ['Cuenta','Fecha','Detalle','Crédito','Débito','Saldo','Motivo'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
     rows.map(function(x){ const c = ctaDe(x.cuenta_id);
@@ -13193,6 +13283,42 @@ async function finMovs(){
         celdaSaldo(SAL, x.id, c.moneda, x.anulado)+
         '<td>'+esc(x.motivo)+'</td></tr>';
     }).join("")+'</tbody></table></div>' : '<div class="muted">No hay movimientos con esos filtros.</div>');
+}
+
+/* 26/8, recorrida de Gilda: los movimientos de la cuenta no se podían
+   imprimir. Imprime EXACTAMENTE lo que está filtrado en pantalla. */
+function imprimirMovimientos(){
+  const rows = window._MOVROWS||[];
+  if (!rows.length) return alert("No hay movimientos para imprimir con estos filtros.");
+  const ctaDe = id => { const c = CTAS.find(x=>x.id===id); return c?c:{nombre:"?",moneda:"ARS"}; };
+  const cta0 = FIN.cuenta ? (CTAS.find(x=>String(x.id)===String(FIN.cuenta))||null) : null;
+  const titulo = "MOVIMIENTOS " + (cta0? "· "+cta0.nombre.toUpperCase() : "DE CUENTAS");
+  const rango = (FIN.desde?("del "+fmtF(FIN.desde)):"") + (FIN.hasta?(" al "+fmtF(FIN.hasta)):"");
+  const comp = (window._MOVCOMP||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>'+esc(titulo)+'</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:26px}'+
+   'table{width:100%;border-collapse:collapse;margin:8px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}.r{text-align:right}'+
+   '.aviso{border:1px solid #c9a227;background:#faf3d7;padding:7px 10px;margin:8px 0;font-size:11px}'+
+   '.pie{margin-top:18px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '</style></head><body>'+
+   membrete(titulo+(rango?' · '+rango:''))+
+   (comp? '<div class="aviso">'+esc(comp)+'</div>':'')+
+   '<table><thead><tr><th>Cuenta</th><th>Fecha</th><th>Detalle</th><th class="r">Crédito</th><th class="r">Débito</th><th>Motivo</th></tr></thead><tbody>'+
+   rows.map(function(x){ const c = ctaDe(x.cuenta_id);
+     return '<tr'+(x.anulado?' style="text-decoration:line-through;color:#999"':'')+'><td>'+esc(c.nombre)+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td>'+esc(x.detalle)+'</td>'+
+       '<td class="r">'+(Number(x.credito)?fmtM(x.credito,c.moneda):'')+'</td>'+
+       '<td class="r">'+(Number(x.debito)?fmtM(x.debito,c.moneda):'')+'</td>'+
+       '<td>'+esc(x.motivo||"")+'</td></tr>'; }).join("")+
+   '</tbody></table>'+
+   '<div class="pie">'+rows.length+' movimiento(s)'+(cta0?' · saldo actual de la cuenta: '+fmtM0(cta0.saldo,cta0.moneda):'')+
+   '. Impreso por '+esc((PERFIL&&PERFIL.nombre)||"")+' el '+fmtF(hoy())+'.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
 }
 
 let FG = {desde:"", hasta:"", concepto:"", area:"", persona:"", vehiculo:"", cuenta:"", anulados:false, texto:"", campo:"fecha_imputacion"};
@@ -13365,9 +13491,9 @@ function formGasto(){
         '<div class="muted" style="font-size:.85em;margin-top:4px">Para sueldos, cargas sociales y fondo de desempleo. Si la persona tiene área, se completa sola.</div></div>'
       : '')+
     (M.veh
-      ? '<div class="f"><label>Vehículo</label><select id="g_vehiculo"><option value="">— ninguno —</option>'+
-        M.veh.filter(x=>x.activo).map(x=>'<option value="'+x.id+'">'+esc(x.nombre)+(x.patente?' ('+esc(x.patente)+')':'')+'</option>').join("")+'</select>'+
-        '<div class="muted" style="font-size:.85em;margin-top:4px">Para combustible, patente, seguro y service.</div></div>'
+      ? '<div class="f"><label>Vehículo</label><select id="g_vehiculo" onchange="gastoVehiculoElegido()"><option value="">— ninguno —</option>'+
+        M.veh.filter(x=>x.activo).map(x=>'<option value="'+x.id+'" data-area="'+(x.area_id||"")+'">'+esc(x.nombre)+(x.patente?' ('+esc(x.patente)+')':'')+'</option>').join("")+'</select>'+
+        '<div class="muted" style="font-size:.85em;margin-top:4px">Para combustible, patente, seguro y service. Si el vehículo tiene área, se completa sola.</div></div>'
       : '')+
     '<div class="f"><label>Proveedor</label><input id="g_proveedor" placeholder="opcional"></div>'+
     '<div class="f"><label>N° de comprobante</label><input id="g_comprobante" placeholder="opcional"></div>'+
@@ -13513,6 +13639,16 @@ function gastoPersonaElegida(){
   const area = op ? op.getAttribute("data-area") : "";
   /* completa el área solo si la persona la tiene y el área está vacía:
      lo elegido a mano no se pisa */
+  if (area && !a.value) a.value = area;
+}
+/* 26/8, recorrida de Gilda: el área no se heredaba del vehículo — el gasto de
+   combustible quedaba sin área y el reporte por área no lo veía. Mismo criterio
+   que la persona: completa solo si está vacío, lo elegido a mano no se pisa. */
+function gastoVehiculoElegido(){
+  const v = $("g_vehiculo"), a = $("g_area");
+  if (!v || !a) return;
+  const op = v.options[v.selectedIndex];
+  const area = op ? op.getAttribute("data-area") : "";
   if (area && !a.value) a.value = area;
 }
 async function concGastoAgregar(){
@@ -13998,11 +14134,15 @@ function saldoAlcanza(cuentaId, importe, idMsg){
   if (tope > 0 && queda < -tope - 0.009)
     return decir('<b>Se pasa del descubierto de «'+esc(c.nombre)+'».</b><br>Quedaría en '+fmtM0(queda,mon)+
       ' y el descubierto acordado es '+fmtM0(tope,mon)+'. Contando el descubierto hay '+fmtM0(saldo+tope,mon)+' disponibles.');
-  return confirm("Ojo: vas a usar descubierto.\n\n«"+c.nombre+"» tiene "+fmtM0(saldo,mon)+
+  /* 26/8, recorrida de Gilda: era un confirm() y con un Enter se grababa —
+     así salió la OP-25 con los bancos en negativo. Ahora hay que escribir SI:
+     usar descubierto tiene que doler un poquito. */
+  const resp = prompt("OJO: vas a usar descubierto.\n\n«"+c.nombre+"» tiene "+fmtM0(saldo,mon)+
     " y esta operación saca "+fmtM0(imp,mon)+": queda en "+fmtM0(queda,mon)+"."+
     (tope>0 ? "\nDescubierto acordado: "+fmtM0(tope,mon)+"."
             : "\nEsta cuenta no tiene descubierto acordado cargado (Tope en 0), así que el sistema no sabe hasta dónde puede ir.")+
-    "\n\n¿Seguimos?");
+    "\n\nPara seguir, escribí SI (en mayúsculas):");
+  return (resp||"").trim() === "SI";
 }
 /* Lo mismo para las operaciones con varias formas de pago: se suma por cuenta,
    porque dos renglones de la misma caja se comen el mismo saldo. */
@@ -14017,6 +14157,11 @@ function saldoAlcanzaMedios(medios, idMsg, monedaOp){
   const porCta = {};
   let sinTC = null;
   (medios||[]).forEach(function(x){
+    /* 26/8, decisión de Gustavo (reemplaza la del 23/8): el cheque propio NO
+       saca plata al emitirse — sale cuando el proveedor lo cobra y alguien
+       registra el débito en Cheques → Cheques propios. Acá no cuenta, y por
+       eso tampoco dispara el aviso de descubierto al emitir. */
+    if (x.tipo === "cheque_propio") return;
     if (!x.cuenta_id) return;
     let imp = Number(x.importe||0);
     if (monedaOp){
