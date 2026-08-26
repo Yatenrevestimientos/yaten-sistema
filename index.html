@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-153";
+const VERSION = "v2026.08.26-154";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -2300,7 +2300,15 @@ VISTAS.agenda = async function(){
       '<b style="color:#8A5F1B">Sin decisión</b> · <b style="color:#4a5658">Pendiente</b> · '+
       '<b style="color:#8b8b8b">Descartado</b></div>'+
     '</div>';
-  $("main").innerHTML = panelCal + bloque("Visitas de hoy en adelante", futuras) + bloque("Visitas anteriores", pasadas.slice(0,60));
+  /* 26/8, auditoría: en el teléfono de Rocío la grilla del mes (7 columnas de
+     ~48px) ocupaba la primera pantalla entera y no se leía nada. En pantalla
+     angosta va primero la lista, que es lo que ella mira en la calle, y la
+     grilla queda abajo. En pantalla grande, como siempre. */
+  const angosto = window.innerWidth < 700;
+  const notaCorte = pasadas.length > 60 ? '<div class="muted" style="margin:-6px 0 10px">Se muestran las 60 visitas pasadas más recientes de '+pasadas.length+'.</div>' : '';
+  $("main").innerHTML = angosto
+    ? bloque("Visitas de hoy en adelante", futuras) + panelCal + bloque("Visitas anteriores", pasadas.slice(0,60)) + notaCorte
+    : panelCal + bloque("Visitas de hoy en adelante", futuras) + bloque("Visitas anteriores", pasadas.slice(0,60)) + notaCorte;
 };
 
 /* ─────────── SEGUIMIENTOS ─────────── */
@@ -3195,6 +3203,21 @@ async function correrDiagnostico(){
       const col = String(tc).split(".")[1];
       return col && GENERICAS.indexOf(col) < 0 && fuente.indexOf(col) < 0;
     });
+    /* 26/8, auditoría: a la copia de seguridad le faltaban OCHO tablas y la
+       pantalla decía que bajaba todo — y nadie se iba a enterar hasta el día
+       de la reconstrucción. Este control compara la lista de la copia contra
+       las tablas REALES de la base, para que no dependa de que alguien se
+       acuerde de agregar la tabla nueva a la lista. */
+    try{
+      const tablasReales = Array.from(new Set((cat.columnas||[]).map(function(tc){ return String(tc).split(".")[0]; }))).filter(Boolean);
+      const fueraDeCopia = tablasReales.filter(function(t){ return TABLAS_COPIA.indexOf(t) < 0; });
+      filas.push({t:"la copia de seguridad baja todo", q:"backup", r: fueraDeCopia.length?"mal":"bien",
+        d: fueraDeCopia.length
+          ? "La copia de seguridad NO incluye "+fueraDeCopia.length+" tabla(s) que existen en la base: "+fueraDeCopia.join(", ")+
+            ". El día de la reconstrucción esos datos no van a estar. Hay que agregarlas a la lista de la copia."
+          : "las "+TABLAS_COPIA.length+" tablas de la lista cubren todas las que la base tiene con datos propios"});
+    }catch(e){ filas.push({t:"la copia de seguridad baja todo", q:"backup", r:"nose", d:"no se pudo comparar: "+e.message}); }
+
     filas.push({t:"columnas que nadie usa", q:"vínculos entre módulos", r: muertas.length?"ojo":"bien",
       d: muertas.length
         ? muertas.length+" columna(s) están en la base y el programa no las nombra nunca: "+
@@ -6370,7 +6393,7 @@ async function anularRemito(id, ventaId){
   const ins = await sb.from("stock_movimientos").select("id,producto_id,cantidad,detalle")
                       .eq("origen","Remito extra").eq("ref_id",id).eq("anulado",false);
   const insumos = ins.data||[];
-  const m = pedirMotivo("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado."); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado.", "Remito"); if (m===null) return;
   let devolver = false;
   if (insumos.length){
     devolver = confirm("Este remito tiene "+insumos.length+" movimiento(s) de insumos de obra cargados (roturas, sobrantes, material usado).\n\n"+
@@ -6492,7 +6515,7 @@ async function formRecepcion(ordenId){
 }
 /* v68, 23/8 — la vuelta atrás de la recepción. */
 async function deshacerRecepcion(ordenId){
-  const m = pedirMotivo("¿Por qué deshacés la recepción de esta orden?\n\nVuelve TODA la mercadería de la orden: el stock baja, los renglones vuelven a cero y la orden queda Abierta.");
+  const m = await pedirMotivo("¿Por qué deshacés la recepción de esta orden?\n\nVuelve TODA la mercadería de la orden: el stock baja, los renglones vuelven a cero y la orden queda Abierta.");
   if (m === null) return;
   if (!m.trim()) return alert("Hay que decir por qué se deshace la recepción.");
   const {data,error} = await sb.rpc("deshacer_recepcion_oc",{p_orden:ordenId, p_motivo:m.trim()});
@@ -6915,7 +6938,7 @@ async function reabrirEmbarque(id){
   fichaEmbarque(id);
 }
 async function anularEmbarque(id){
-  const m = pedirMotivo("¿Por qué se anula este embarque?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué se anula este embarque?"); if (m===null) return;
   const {error} = await sb.rpc("anular_embarque",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   try{ $("dlg").close(); }catch(e){}
@@ -7203,7 +7226,7 @@ async function pintarMovStock(){
 }
 
 async function anularMovStock(id){
-  const m = pedirMotivo("¿Por qué se anula este movimiento? El stock vuelve a como estaba antes de él.");
+  const m = await pedirMotivo("¿Por qué se anula este movimiento? El stock vuelve a como estaba antes de él.");
   if (m===null) return;
   const {error} = await sb.rpc("anular_movimiento_stock",{p_id:id, p_motivo:m});
   if (error) return alert(error.message);
@@ -7401,7 +7424,7 @@ async function formDepositar(id){
   try{ dlg2().showModal(); }catch(e){}
 }
 async function anularDeposito(id){
-  const m = pedirMotivo("¿Por qué deshacés el depósito? Queda registrado con tu nombre.");
+  const m = await pedirMotivo("¿Por qué deshacés el depósito? Queda registrado con tu nombre.");
   if (m === null) return;
   const {error} = await sb.rpc("anular_deposito_cheque",{p_cheque:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
@@ -7565,7 +7588,7 @@ async function guardarCheque(){
    a la cuenta «Cheques de terceros» queda anulado en la misma operación, así el
    saldo vuelve exacto al que había antes del alta. Probado ida y vuelta. */
 async function anularCheque(id){
-  const m = pedirMotivo("¿Por qué anulás este cheque?\n\nOjo: anular no es rechazar. Rechazado lo rechaza el banco; anulado se usa cuando el cheque se cargó mal. Sale de la cartera y deja de contar en el saldo de la cuenta, y queda en el historial tachado, con tu nombre y este motivo.");
+  const m = await pedirMotivo("¿Por qué anulás este cheque?\n\nOjo: anular no es rechazar. Rechazado lo rechaza el banco; anulado se usa cuando el cheque se cargó mal. Sale de la cartera y deja de contar en el saldo de la cuenta, y queda en el historial tachado, con tu nombre y este motivo.");
   if (m === null) return;
   if (!m.trim()) return alert("Hay que decir por qué se anula el cheque.");
   const {error} = await sb.rpc("anular_cheque",{p_id:id, p_motivo:m.trim()});
@@ -8205,7 +8228,7 @@ async function ajustarPV(provId){
   fichaProveedor(provId);
 }
 async function anularPV(movId, provId){
-  const motivo = pedirMotivo("¿Por qué se anula este movimiento?");
+  const motivo = await pedirMotivo("¿Por qué se anula este movimiento?");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_pv_movimiento",{p_id:movId, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -8434,7 +8457,7 @@ async function anularOC(id){
       "Si algo de esa mercadería ya salió del depósito, el sistema no te va a dejar deshacerla: primero hay que resolver esa salida.");
     return;
   }
-  const m = pedirMotivo("¿Por qué se anula esta orden de compra?\n\nNo tiene nada recibido: no entró mercadería al depósito."); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué se anula esta orden de compra?\n\nNo tiene nada recibido: no entró mercadería al depósito.", "Orden de compra"); if (m===null) return;
   const {error} = await sb.rpc("anular_orden_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   VISTAS.compras();
@@ -9182,7 +9205,7 @@ async function anularFactura(id){
       "Después sí, anulá la factura.");
     return;
   }
-  const m = pedirMotivo("¿Por qué se anula esta factura? La deuda con el proveedor se revierte."); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué se anula esta factura? La deuda con el proveedor se revierte.", "Factura de compra"); if (m===null) return;
   const {error} = await sb.rpc("anular_factura_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarProveedores(); await volverDeCompras();
@@ -9337,7 +9360,7 @@ async function guardarNota(){
   await cargarProveedores(); await volverDeCompras();
 }
 async function anularNota(id){
-  const m = pedirMotivo("¿Por qué se anula esta nota?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué se anula esta nota?"); if (m===null) return;
   const {error} = await sb.rpc("anular_nota_proveedor",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarProveedores(); await volverDeCompras();
@@ -9734,7 +9757,7 @@ async function guardarPago(){
 }
 
 async function anularPago(id){
-  const m = pedirMotivo("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta."); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué se anula este pago? Vuelve la deuda al proveedor y vuelve la plata a la cuenta.", "Pago"); if (m===null) return;
   const {error} = await sb.rpc("anular_pago_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarProveedores(); await cargarFin(); await volverDeCompras();
@@ -10571,7 +10594,7 @@ async function anularVenta(id){
       "Después sí, anulá la venta.");
     return;
   }
-  const motivo = pedirMotivo("¿Por qué se anula esta venta? La deuda del cliente se revierte.\n\nNo tiene remitos: no salió mercadería del depósito, y lo que estaba comprometido para esta venta queda libre solo.");
+  const motivo = await pedirMotivo("¿Por qué se anula esta venta? La deuda del cliente se revierte.\n\nNo tiene remitos: no salió mercadería del depósito, y lo que estaba comprometido para esta venta queda libre solo.");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_venta", {p_id:id, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -11167,7 +11190,7 @@ async function guardarDocumento(id){
 }
 
 async function anularDocumento(id){
-  const m = pedirMotivo("¿Por qué anulás este documento?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué anulás este documento?"); if (m===null) return;
   const {error} = await sb.from("documentos").update({anulado:true, anulado_en:new Date().toISOString(),
     anulado_por:PERFIL.id, motivo_anulacion:m||"Sin motivo"}).eq("id",id);
   if (error) return alert(error.message);
@@ -11323,7 +11346,7 @@ async function convertirLead(id){
 }
 
 async function anularLead(id){
-  const m = pedirMotivo("¿Por qué anulás este lead?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué anulás este lead?"); if (m===null) return;
   const {error} = await sb.from("leads").update({anulado:true, anulado_en:new Date().toISOString(),
     anulado_por:PERFIL.id, motivo_anulacion:m}).eq("id",id);
   if (error) return alert(error.message);
@@ -11953,7 +11976,7 @@ async function tipoNotaAgregar(cliId){
   if ($("ntmsg")) $("ntmsg").innerHTML = '<div class="msg ok">Tipo «'+esc(n)+'» agregado y elegido. La nota que estabas escribiendo sigue ahí.</div>';
 }
 async function notaAnular(id, cliId){
-  const motivo = pedirMotivo("¿Por qué se anula esta nota?");
+  const motivo = await pedirMotivo("¿Por qué se anula esta nota?");
   if (motivo === null) return;
   const {error} = await sb.from("notas_cliente").update({anulado:true, anulado_por:PERFIL.nombre, anulado_en:new Date().toISOString(), motivo_anulacion:motivo||"Sin motivo"}).eq("id",id);
   if (error){ $("ntmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
@@ -12341,7 +12364,13 @@ function cerrarDialogo(){ try{ $("dlg").close(); }catch(e){} }
    guardaban «Sin motivo». Toda la defensa del sistema es que nada se borra y
    todo queda con su porqué: un historial lleno de «Sin motivo» no explica
    nada. Esta función repregunta hasta que haya motivo, o se cancela. */
-function pedirMotivo(txt){
+/* 26/8, auditoría: la maestra «Motivos de anulación» existía con su columna
+   «Aplica a» y las 20 anulaciones pedían texto libre — nunca se iba a poder
+   responder «¿por qué se anulan las ventas?» con un número. Ahora el motivo se
+   elige de la maestra (filtrada por el documento) más un detalle opcional, y
+   «Otro motivo» exige escribirlo. Si la maestra está vacía, cae al texto libre
+   de siempre, que sigue sin poder quedar vacío. */
+function pedirMotivoTexto(txt){
   let aviso = "";
   while (true){
     const m = prompt(aviso + txt);
@@ -12349,6 +12378,37 @@ function pedirMotivo(txt){
     if (String(m).trim()) return String(m).trim();
     aviso = "EL MOTIVO NO PUEDE QUEDAR VACÍO.\n\n";
   }
+}
+function pedirMotivo(txt, aplicaA){
+  const lista = (M.man||[]).filter(function(x){ return x.activo !== false; })
+    .filter(function(x){ const a = String(x.aplica_a||"").trim(); return !a || a === "Todos" || !aplicaA || a === aplicaA; });
+  if (!lista.length) return Promise.resolve(pedirMotivoTexto(txt));
+  return new Promise(function(res){
+    const d = dlg2(); if (!d) return res(pedirMotivoTexto(txt));
+    $("d2tit").textContent = "Motivo de la anulación";
+    $("d2body").innerHTML =
+      '<div class="muted" style="margin-bottom:10px;white-space:pre-line">'+esc(txt)+'</div>'+
+      '<div class="f"><label>Motivo '+AST+'</label><select id="pm_motivo">'+
+        lista.map(function(x){ return '<option value="'+x.id+'">'+esc(x.nombre)+'</option>'; }).join("")+
+        '<option value="__otro__">Otro motivo…</option></select></div>'+
+      '<div class="f"><label>Detalle <span class="muted" style="font-size:.85em">(opcional; obligatorio si es «Otro motivo»)</span></label>'+
+        '<input id="pm_detalle" placeholder="Lo que haga falta aclarar"></div>'+
+      '<div id="pm_msg"></div>'+
+      '<div class="acciones"><button class="btn" id="pm_ok">Anular con este motivo</button>'+
+      '<button class="btn2" id="pm_cancel">No anular</button></div>';
+    const fin = function(v){ try{ d.close(); }catch(e){} res(v); };
+    $("pm_ok").onclick = function(){
+      const mid = $("pm_motivo").value, det = ($("pm_detalle").value||"").trim();
+      if (mid === "__otro__"){
+        if (!det){ $("pm_msg").innerHTML = '<div class="msg err">«Otro motivo» necesita el detalle: escribí por qué.</div>'; return; }
+        fin(det); return;
+      }
+      const mm = lista.find(function(x){ return String(x.id) === String(mid); });
+      fin((mm ? mm.nombre : "Motivo") + (det ? " — " + det : ""));
+    };
+    $("pm_cancel").onclick = function(){ fin(null); };
+    try{ d.showModal(); }catch(e){ res(pedirMotivoTexto(txt)); }
+  });
 }
 async function anularCobranza(cobId, cliId){
   /* 25/8, auditoría: si el cheque que entró con esta cobranza ya se depositó o
@@ -12366,7 +12426,7 @@ async function anularCobranza(cobId, cliId){
       return;
     }
   }catch(e){}
-  const m = pedirMotivo("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
+  const m = await pedirMotivo("¿Por qué anulás esta cobranza?\n\nSe revierte todo junto: la plata que entró a la cuenta, la imputación a las ventas y el cheque, si lo hubo.");
   if (m === null) return;
   const {error} = await sb.rpc("anular_cobranza", {p_id:cobId, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
@@ -12375,7 +12435,7 @@ async function anularCobranza(cobId, cliId){
   fichaCliente(cliId);
 }
 async function anularCC(movId, cliId){
-  const motivo = pedirMotivo("¿Por qué anulás este movimiento? Queda registrado con tu nombre.");
+  const motivo = await pedirMotivo("¿Por qué anulás este movimiento? Queda registrado con tu nombre.");
   if (motivo === null) return;
   const {error} = await sb.rpc("anular_cc_movimiento", {p_id:movId, p_motivo:motivo||"Sin motivo"});
   if (error) return alert(error.message);
@@ -13511,7 +13571,7 @@ async function areaGastoAgregar(){
 }
 
 async function anularGasto(id){
-  const m = pedirMotivo("¿Por qué anulás este gasto?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué anulás este gasto?"); if (m===null) return;
   const {error} = await sb.rpc("anular_gasto",{p_id:id,p_motivo:m});
   if (error) return alert(error.message);
   await cargarFin();
@@ -13567,9 +13627,10 @@ function formTransf(){
     const tc = Number($("x_tc").value||0);
     if (distinta && !(tc>0)){ $("ftmsg").innerHTML='<div class="msg err">Las cuentas son de distinta moneda: cargá el tipo de cambio.</div>'; return; }
     /* 10/8: entre cuentas de la misma moneda entra exactamente lo que sale —
-       el campo editable permitía que salgan 100 y entren 1000. Acá decía que
-       la base también lo bloquea (v52): al 26/8 NO está verificado leyendo
-       registrar_transferencia — pendiente, no darlo por hecho. */
+       el campo editable permitía que salgan 100 y entren 1000. 26/8: VERIFICADO
+       por la puerta de atrás — se intentó registrar salen 100 / entran 999
+       con la función de la base directa y frenó con su mensaje.
+       Este candado sí existe. */
     const idst = distinta ? Number($("x_id").value||0) : io;
     if (!saldoAlcanza($("x_origen").value, io, "ftmsg")) return;
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
@@ -13580,7 +13641,7 @@ function formTransf(){
   $("dlg").showModal();
 }
 async function anularTransf(id){
-  const m = pedirMotivo("¿Por qué anulás esta transferencia?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué anulás esta transferencia?"); if (m===null) return;
   const {error} = await sb.rpc("anular_transferencia",{p_id:id,p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarFin(); VISTAS.finanzas();
@@ -13638,7 +13699,7 @@ function formRetiro(){
   $("dlg").showModal();
 }
 async function anularRetiro(id){
-  const m = pedirMotivo("¿Por qué anulás este retiro?"); if (m===null) return;
+  const m = await pedirMotivo("¿Por qué anulás este retiro?"); if (m===null) return;
   const {error} = await sb.rpc("anular_retiro",{p_id:id,p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
   await cargarFin(); VISTAS.finanzas();
