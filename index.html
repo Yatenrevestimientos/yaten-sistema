@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-149";
+const VERSION = "v2026.08.26-150";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -7922,7 +7922,7 @@ function seccionFactProv(p, facs, nots, imput){
         '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="_VOLVER_PROV={id:'+p.id+',tab:\'facturas\'}; verNota('+n.id+')">Ver</button> '+
         (n.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>';
      }).join("")+'</tbody></table></div>' : '<div class="muted">Sin notas de crédito ni de débito.</div>')+
-   (P("compra-modificar")?'<div class="acciones"><button class="btn2" onclick="formFacturaCompra()">+ Factura de compra</button>'+
+   (P("compra-modificar")?'<div class="acciones"><button class="btn2" onclick="formFacturaCompra('+p.id+')">+ Factura de compra</button>'+
      '<button class="btn2" onclick="formPagoCompra('+p.id+')">+ Pago a proveedor</button></div>':'');
 }
 
@@ -8386,23 +8386,40 @@ async function anularOC(id){
 
 /* ─── Factura de compra ─── */
 let FAC = null;
-function formFacturaCompra(){
+async function formFacturaCompra(provId){
   $("dtit").textContent = "Factura de compra";
   if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
-  FAC = {proveedor_id:null, tipo:"Factura A", punto_venta:"", nro:"", fecha:hoy(), moneda:"ARS", neto:0, obs:"", imp:[]};
+  /* los renglones salen del catálogo: si no está en memoria, se carga */
+  if (!PRODS.length) await cargarCatalogo();
+  /* 25/8, auditoría: el botón de la ficha del proveedor abría el formulario en
+     blanco y había que volver a elegirlo. Ahora se precarga, como el pago. */
+  FAC = {proveedor_id:provId||null, tipo:"Factura A", punto_venta:"", nro:"", fecha:hoy(), moneda:"ARS", neto:0, obs:"", imp:[], items:[], orden_id:null};
   pintarFac(); try{ $("dlg").showModal(); }catch(e){}
+  if (provId) await facProvElegido();
 }
 function pintarFac(){
   $("dbody").innerHTML = '<div id="facmsg"></div>'+
    '<div class="grid">'+
-     '<div class="f"><label>Proveedor *</label><select id="fa_prov">'+selProv(FAC.proveedor_id)+'</select></div>'+
+     '<div class="f"><label>Proveedor *</label><select id="fa_prov" onchange="facProvElegido()">'+selProv(FAC.proveedor_id)+'</select></div>'+
+     '<div class="f"><label>¿De qué orden de compra es?</label><select id="fa_orden" onchange="facOrdenElegida()">'+facOpcionesOC()+'</select>'+
+       '<div class="muted" style="font-size:.85em;margin-top:4px">Elegila y los renglones se precargan solos, editables. Sin orden también vale.</div></div>'+
      '<div class="f"><label>Tipo</label><select id="fa_tipo">'+selTxt(["Factura A","Factura B","Factura C","Factura M","Ticket","Despacho de importación","Otro"],FAC.tipo)+'</select></div>'+
      '<div class="f"><label>Punto de venta '+AST+'</label><input id="fa_pv" value="'+esc(FAC.punto_venta)+'" placeholder="0001"></div>'+
      '<div class="f"><label>Número '+AST+'</label><input id="fa_nro" value="'+esc(FAC.nro)+'" placeholder="00001234"></div>'+
      '<div class="f"><label>Fecha</label><input type="date" id="fa_fecha" value="'+FAC.fecha+'"></div>'+
      '<div class="f"><label>Moneda</label><select id="fa_moneda"><option value="ARS" '+(FAC.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(FAC.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
-     '<div class="f"><label>Neto gravado *</label><input type="number" step="0.01" id="fa_neto" value="'+(FAC.neto||"")+'" oninput="facSincro()"></div>'+
+     '<div class="f"><label>Neto gravado *</label><input type="number" step="0.01" id="fa_neto" value="'+(FAC.neto||"")+'" oninput="facSincro(); facItemsTotal()"></div>'+
    '</div>'+
+   '<div class="sec">Renglones <span class="muted" style="font-size:.8em;text-transform:none;letter-spacing:0">(qué se compró — opcional en facturas de servicios)</span></div>'+
+   '<div class="acciones" style="margin-bottom:6px"><button class="btn2 btn-sm" onclick="facItemAgregar()">+ Renglón</button>'+
+     '<div style="display:flex;gap:6px;align-items:center;margin-left:8px;flex-wrap:wrap">'+
+       '<input id="fa_np_cod" placeholder="Código nuevo" style="width:110px">'+
+       '<input id="fa_np_nom" placeholder="¿Falta el producto? Nombre" style="width:190px">'+
+       '<select id="fa_np_tipo" style="width:130px"><option value="">Tipo…</option>'+TIPOSP.filter(function(t){ return t.activo; }).map(function(t){ return '<option value="'+t.id+'">'+esc(t.nombre)+'</option>'; }).join("")+'</select>'+
+       '<input id="fa_np_uni" placeholder="un" style="width:55px" title="Unidad">'+
+       '<button class="btn2 btn-sm" onclick="prodRapidoFactura()">Crear y agregar</button>'+
+     '</div></div>'+
+   '<div id="fa_items"></div><div id="fa_items_tot"></div>'+
    '<div class="sec">Impuestos del comprobante</div>'+
    '<div class="muted" style="margin-bottom:8px">Cargá cada impuesto por separado, como viene en la factura: IVA, percepciones, ingresos brutos, y los de aduana cuando sea un despacho. '+
    'Elegís el impuesto y <b>el importe se calcula solo</b> sobre el neto. Si en la factura viene otro número, pisalo y el porcentaje se recalcula solo. '+
@@ -8417,6 +8434,7 @@ function pintarFac(){
    '<div class="acciones"><button class="btn" id="fa_guardar" onclick="guardarFactura()">Registrar factura</button>'+
    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
   pintarFacImp();
+  pintarFacItems();
 }
 /* redondeo a dos decimales, para que el importe calculado no arrastre centésimas */
 const dos = n => Math.round(Number(n||0)*100)/100;
@@ -8540,6 +8558,156 @@ function pintarFacTot(){
    '</tbody></table></div>';
   const b = $("fa_guardar"); if (b) b.textContent = tot>0 ? ("Registrar factura por "+fmtM(tot,m)) : "Registrar factura";
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   LOS RENGLONES DE LA FACTURA DE COMPRA (26/8/2026)
+   Hallazgo de la auditoría: `factura_items` existía, tres reportes la leían, y
+   el formulario mandaba `p_items:[]` escrito a mano — los reportes de compras
+   estuvieron vacíos desde siempre.
+   Diseño decidido con Gustavo (26/8), tomando lo bueno de Pirka sin su doble
+   carga: el producto sale del ÚNICO catálogo (no una lista por proveedor: si
+   un dato se tipea dos veces, van a ser dos datos distintos); al elegir la
+   ORDEN DE COMPRA los renglones se precargan solos y quedan ligados (era el
+   otro hallazgo: ninguna factura sabía de qué orden era); y si el producto no
+   existe, el ALTA RÁPIDA lo crea acá mismo —código, nombre, tipo y unidad—
+   marcado «no se vende» hasta que alguien complete la ficha, así la factura
+   no se traba y el catálogo no se ensucia.
+   El precio se precarga de la OC, o si no hay, de la lista del proveedor — y
+   SIEMPRE se puede editar, porque manda el papel (pedido de Gustavo, textual).
+   Renglones opcionales: una factura de servicios sale sin renglones, con el
+   aviso de que no entra en los reportes de productos comprados.
+   ══════════════════════════════════════════════════════════════════════════ */
+let FAC_OCS = [];           /* las órdenes del proveedor elegido */
+let FAC_PPRECIOS = {};      /* lista de precios del proveedor: producto_id -> fila */
+
+async function facProvElegido(){
+  facSincro();
+  FAC_OCS = []; FAC_PPRECIOS = {};
+  if (FAC.proveedor_id){
+    const [oc, pp] = await Promise.all([
+      sb.from("ordenes_compra").select("id,codigo,fecha,moneda,estado,total")
+        .eq("proveedor_id", Number(FAC.proveedor_id)).eq("anulado", false)
+        .order("id",{ascending:false}).limit(100),
+      sb.from("proveedor_precios").select("*").eq("proveedor_id", Number(FAC.proveedor_id))
+    ]);
+    FAC_OCS = oc.data||[];
+    (pp.data||[]).forEach(function(x){ FAC_PPRECIOS[x.producto_id] = x; });
+  }
+  const sel = $("fa_orden");
+  if (sel) sel.innerHTML = facOpcionesOC();
+}
+function facOpcionesOC(){
+  return '<option value="">— sin orden de compra —</option>'+
+    FAC_OCS.map(function(o){
+      return '<option value="'+o.id+'" '+(String(FAC.orden_id)===String(o.id)?"selected":"")+'>'+
+        esc(o.codigo)+' · '+fmtF(o.fecha)+' · '+fmtM0(o.total, o.moneda||"ARS")+' · '+esc(o.estado||"")+'</option>';
+    }).join("");
+}
+async function facOrdenElegida(){
+  facSincro();
+  const id = $("fa_orden") ? ($("fa_orden").value||null) : null;
+  FAC.orden_id = id ? Number(id) : null;
+  if (!FAC.orden_id){ pintarFacItems(); return; }
+  if (FAC.items.length && !confirm("Ya hay renglones cargados. ¿Los reemplazo por los de la orden de compra?")) return;
+  const [oc, it] = await Promise.all([
+    sb.from("ordenes_compra").select("id,moneda").eq("id", FAC.orden_id).single(),
+    sb.from("oc_items").select("*").eq("orden_id", FAC.orden_id).order("id")
+  ]);
+  if (it.error){ $("facmsg").innerHTML='<div class="msg err">'+esc(it.error.message)+'</div>'; return; }
+  /* los renglones vienen de la orden, EDITABLES: manda el papel de la factura */
+  FAC.items = (it.data||[]).map(function(y){
+    return {producto_id:y.producto_id, descripcion:y.descripcion||"", cantidad:Number(y.cantidad||0),
+            unidad:y.unidad||"un", precio_unit:Number(y.precio_unit||0)};
+  });
+  if (oc.data && oc.data.moneda && oc.data.moneda !== FAC.moneda){
+    FAC.moneda = oc.data.moneda;
+    const mo = $("fa_moneda"); if (mo) mo.value = FAC.moneda;
+  }
+  pintarFacItems();
+  $("facmsg").innerHTML = '<div class="msg ok">Se precargaron '+FAC.items.length+' renglón(es) de la orden. Corregí lo que en la factura venga distinto: <b>manda el papel</b>.</div>';
+}
+function facItemAgregar(){ facSincro(); FAC.items.push({producto_id:null, descripcion:"", cantidad:1, unidad:"un", precio_unit:0}); pintarFacItems(); }
+function facItemQuitar(k){ facSincro(); FAC.items.splice(k,1); pintarFacItems(); }
+function facItemProducto(k){
+  facSincro();
+  const x = FAC.items[k], p = PRODS.find(function(y){ return String(y.id)===String(x.producto_id); });
+  if (p){
+    x.descripcion = p.nombre;
+    x.unidad = p.unidad || x.unidad;
+    /* el precio sugerido sale de la lista del proveedor si está cargada; el de
+       la OC ya vino puesto al precargar. Siempre editable. */
+    const pp = FAC_PPRECIOS[p.id];
+    if (pp){
+      const v = FAC.moneda === "USD" ? pp.precio_usd : pp.precio_ars;
+      if (v != null && v !== "" && Number(v) > 0) x.precio_unit = Number(v);
+    }
+  }
+  pintarFacItems();
+}
+function facItemsSincro(){
+  FAC.items.forEach(function(x,k){
+    const d=$("fit_"+k+"_desc"), c=$("fit_"+k+"_cant"), u=$("fit_"+k+"_uni"), pu=$("fit_"+k+"_precio");
+    if (d) x.descripcion = d.value;
+    if (c) x.cantidad = c.value===""?0:Number(c.value);
+    if (u) x.unidad = u.value;
+    if (pu) x.precio_unit = pu.value===""?0:Number(pu.value);
+    const sub = $("fit_"+k+"_sub");
+    if (sub) sub.textContent = fmtM0(Number(x.cantidad||0)*Number(x.precio_unit||0), FAC.moneda);
+  });
+  facItemsTotal();
+}
+function facItemsTotal(){
+  const el = $("fa_items_tot"); if (!el) return;
+  const vivos = FAC.items.filter(function(x){ return Number(x.cantidad||0)>0; });
+  const suma = vivos.reduce(function(a,x){ return a + Number(x.cantidad||0)*Number(x.precio_unit||0); },0);
+  const neto = Number(FAC.neto||0);
+  if (!vivos.length){
+    el.innerHTML = '<div class="muted" style="margin-top:4px">Sin renglones. La factura vale igual, pero esta compra <b>no va a entrar</b> en los reportes de productos comprados.</div>';
+    return;
+  }
+  el.innerHTML = '<div class="muted" style="margin-top:4px">Renglones: <b>'+fmtM0(suma, FAC.moneda)+'</b>'+
+    (neto>0 && Math.abs(suma-neto) > 0.5
+      ? ' — <span style="color:#7a2415">no coincide con el neto gravado ('+fmtM0(neto,FAC.moneda)+'). Puede estar bien (descuentos, no gravados), pero miralo.</span>'
+      : (neto>0 ? ' — coincide con el neto gravado.' : ''))+'</div>';
+}
+function pintarFacItems(){
+  const el = $("fa_items"); if (!el) return;
+  const opts = function(v){
+    return '<option value=""></option>'+PRODS.filter(function(p){ return p.activo || String(p.id)===String(v); })
+      .map(function(p){ return '<option value="'+p.id+'" '+(String(v)===String(p.id)?"selected":"")+'>'+esc(p.codigo+" — "+p.nombre)+(p.disponible_venta?'':' (no se vende)')+'</option>'; }).join("");
+  };
+  el.innerHTML = !FAC.items.length ? '' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Producto</th><th style="min-width:160px">Descripción</th><th>Cantidad</th><th>Un.</th><th>Precio unit.</th><th>Subtotal</th><th></th></tr></thead><tbody>'+
+   FAC.items.map(function(x,k){
+     return '<tr><td><select style="width:100%" id="fit_'+k+'_prod" onchange="FAC.items['+k+'].producto_id=this.value||null; facItemProducto('+k+')">'+opts(x.producto_id)+'</select></td>'+
+       '<td><input id="fit_'+k+'_desc" value="'+esc(x.descripcion)+'" oninput="facItemsSincro()"></td>'+
+       '<td><input type="number" step="0.001" style="width:90px" id="fit_'+k+'_cant" value="'+(x.cantidad||"")+'" oninput="facItemsSincro()"></td>'+
+       '<td><input style="width:60px" id="fit_'+k+'_uni" value="'+esc(x.unidad)+'" oninput="facItemsSincro()"></td>'+
+       '<td><input type="number" step="0.01" style="width:120px" id="fit_'+k+'_precio" value="'+(x.precio_unit||"")+'" oninput="facItemsSincro()" title="Siempre editable: manda el papel de la factura"></td>'+
+       '<td id="fit_'+k+'_sub" style="text-align:right">'+fmtM0(Number(x.cantidad||0)*Number(x.precio_unit||0), FAC.moneda)+'</td>'+
+       '<td><button class="btn2 btn-sm" onclick="facItemQuitar('+k+')">Quitar</button></td></tr>';
+   }).join("")+'</tbody></table></div>';
+  facItemsTotal();
+}
+/* Alta rápida del producto sin salir de la factura. Queda en el catálogo con
+   «no se vende», así no aparece en presupuestos ni ventas hasta que alguien le
+   complete la ficha (precios, m² por caja, costo USD). */
+async function prodRapidoFactura(){
+  const cod = ($("fa_np_cod").value||"").trim();
+  const nom = ($("fa_np_nom").value||"").trim();
+  const tid = $("fa_np_tipo").value||null;
+  const uni = ($("fa_np_uni").value||"").trim() || "un";
+  if (!cod || !nom){ $("facmsg").innerHTML='<div class="msg err">El producto nuevo necesita código y nombre.</div>'; return; }
+  const r = await sb.from("productos").insert({codigo:cod, nombre:nom, tipo_id:tid?Number(tid):null,
+    unidad:uni, activo:true, disponible_venta:false, se_instala:false, registra_stock:true}).select("id").single();
+  if (r.error){ $("facmsg").innerHTML='<div class="msg err">'+esc(esDuplicado(r.error)?"Ya hay un producto con ese código.":r.error.message)+'</div>'; return; }
+  facSincro(); facItemsSincro();
+  await cargarCatalogo();
+  FAC.items.push({producto_id:r.data.id, descripcion:nom, cantidad:1, unidad:uni, precio_unit:0});
+  pintarFacItems();
+  $("fa_np_cod").value=""; $("fa_np_nom").value="";
+  $("facmsg").innerHTML = '<div class="msg ok">Producto <b>'+esc(cod)+' — '+esc(nom)+'</b> creado y agregado como renglón. Quedó marcado <b>«no se vende»</b>: antes de ofrecerlo hay que completarle la ficha en Productos (precios, m² por caja, costo).</div>';
+}
+
 async function guardarFactura(){
   facSincro();
   const err = t => { $("facmsg").innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
@@ -8561,9 +8729,15 @@ async function guardarFactura(){
   ]);
   if (f.length){ avisoFaltan("facmsg", f, "la factura"); return; }
   const filas = FAC.imp.filter(x=>Number(x.importe)>0);
+  /* 26/8: los renglones y la orden viajan de verdad — hasta hoy iban [] y null
+     escritos a mano, y tres reportes de compras estuvieron vacíos siempre. */
+  facItemsSincro();
+  const itemsVivos = FAC.items.filter(function(x){ return Number(x.cantidad||0) > 0 && (x.producto_id || String(x.descripcion||"").trim()); })
+    .map(function(x){ return {producto_id: x.producto_id?Number(x.producto_id):null, descripcion:x.descripcion||"",
+                              cantidad:Number(x.cantidad||0), precio_unit:Number(x.precio_unit||0)}; });
   const r = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
     p_punto_venta:FAC.punto_venta||null, p_nro:FAC.nro||null, p_fecha:FAC.fecha||hoy(), p_moneda:FAC.moneda,
-    p_neto:Number(FAC.neto), p_impuestos:filas, p_items:[], p_obs:FAC.obs||null, p_orden:null});
+    p_neto:Number(FAC.neto), p_impuestos:filas, p_items:itemsVivos, p_obs:FAC.obs||null, p_orden:FAC.orden_id||null});
   /* v61 (14/8): la base ya no acepta dos comprobantes iguales del mismo
      proveedor. El error viene técnico; acá se dice en criollo. */
   if (r.error) return err(esDuplicado(r.error)
@@ -8573,6 +8747,18 @@ async function guardarFactura(){
      función que registra la factura. Si falla, la factura ya quedó bien: lo
      único que se pierde es el detalle de cómo se calculó cada impuesto. */
   const idFac = Number(r.data);
+  /* La fila se pide de vuelta, siempre: si la función de la base ignora los
+     renglones (migración vieja), acá se dice — no se supone. */
+  if (idFac && itemsVivos.length){
+    try{
+      const chk = await sb.from("factura_items").select("id").eq("factura_id", idFac);
+      if (!chk.error && (chk.data||[]).length === 0){
+        alert("OJO: la factura se registró bien, pero los renglones NO se guardaron.\n"+
+          "La función de la base todavía no los escribe: falta una migración. Avisá para correrla;\n"+
+          "los datos de la factura no se perdieron, solo el detalle de renglones.");
+      }
+    }catch(e){}
+  }
   if (idFac && filas.length){
     try{
       await sb.rpc("guardar_detalle_impuestos", {p_factura: idFac,
