@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-151";
+const VERSION = "v2026.08.26-152";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -6301,7 +6301,7 @@ function pintarExtraRemito(){
   $("dbody").innerHTML = '<div id="exmsg"></div>'+
    '<div class="desc">Lo que la obra consumió por encima de lo cotizado y lo que volvió al depósito. '+
    'Un panel vendido puede necesitar pegamento que no se cargó en el remito; una placa se puede romper; puede sobrar material y volver. '+
-   '<b>Cada renglón mueve el stock en el acto</b> y queda con su motivo, su fecha y quién lo cargó. Nada se borra: se anula desde Stock.</div>'+
+   '<b>Cada renglón mueve el stock en el acto</b> y queda con su motivo, su fecha y quién lo cargó. Nada se borra: se anula desde <b>Stock → Modificaciones de stock</b>, con el botón Anular de cada renglón (desde el 26/8 existe de verdad).</div>'+
    (movs.length? '<div class="kpis" style="margin-bottom:10px">'+
       '<div class="kpi" style="border-left-color:#7a2415"><div class="t">Salió de más</div><div class="n">'+fmtN(Math.abs(sum(salio,x=>x.cantidad)))+'</div><div class="muted">'+salio.length+' renglón(es)</div></div>'+
       '<div class="kpi" style="border-left-color:#1d5b2c"><div class="t">Volvió al depósito</div><div class="n">'+fmtN(sum(volvio,x=>x.cantidad))+'</div><div class="muted">'+volvio.length+' renglón(es)</div></div>'+
@@ -6358,9 +6358,34 @@ async function guardarExtraRemito(){
 }
 
 async function anularRemito(id, ventaId){
+  /* 26/8, decisión de Gustavo: si el remito tiene insumos de obra cargados
+     (roturas, sobrantes, material gastado), al anularlo SE PREGUNTA si esos
+     insumos vuelven al depósito o quedan gastados. Si la obra se cayó entera,
+     vuelven; si la obra ya empezó y el material es irrecuperable, quedan.
+     Los insumos son movimientos de stock con origen «Remito extra» (v81). */
+  const ins = await sb.from("stock_movimientos").select("id,producto_id,cantidad,detalle")
+                      .eq("origen","Remito extra").eq("ref_id",id).eq("anulado",false);
+  const insumos = ins.data||[];
   const m = pedirMotivo("¿Por qué se anula este remito? Vuelve el stock y baja lo entregado."); if (m===null) return;
-  const {error} = await sb.rpc("anular_remito",{p_id:id, p_motivo:m||"Sin motivo"});
+  let devolver = false;
+  if (insumos.length){
+    devolver = confirm("Este remito tiene "+insumos.length+" movimiento(s) de insumos de obra cargados (roturas, sobrantes, material usado).\n\n"+
+      "ACEPTAR  = los insumos TAMBIÉN se anulan y el stock vuelve al depósito (la obra se cayó, el material no se usó).\n"+
+      "CANCELAR = los insumos quedan como gastados en la obra (el material ya es irrecuperable).\n\n"+
+      "El remito se anula igual en los dos casos.");
+  }
+  const {error} = await sb.rpc("anular_remito",{p_id:id, p_motivo:m});
   if (error) return alert(error.message);
+  if (devolver){
+    const fallados = [];
+    for (const x of insumos){
+      const r2 = await sb.rpc("anular_movimiento_stock",{p_id:x.id, p_motivo:"Se anuló el remito y los insumos vuelven al depósito. Motivo del remito: "+m});
+      if (r2.error) fallados.push("#"+x.id+" ("+r2.error.message+")");
+    }
+    if (fallados.length) alert("El remito quedó anulado, pero "+fallados.length+" insumo(s) no se pudieron devolver:\n"+fallados.join("\n")+"\n\nAnulalos a mano desde Stock → Modificaciones de stock.");
+  } else if (insumos.length){
+    alert("El remito quedó anulado. Los "+insumos.length+" insumo(s) quedaron como gastados en la obra: si hace falta devolver alguno, se anula desde Stock → Modificaciones de stock.");
+  }
   formRemito(ventaId);
 }
 async function verRemito(id){
@@ -7157,14 +7182,29 @@ async function pintarMovStock(){
   $("main").innerHTML = '<div class="panel"><h2>Modificaciones de stock</h2>'+
    '<div class="desc">La auditoría del depósito: cada movimiento con el stock anterior, el posterior, quién lo hizo y por qué. No se borra ninguno.</div>'+
    ((data||[]).length? '<div class="tablewrap" style="max-height:68dvh;overflow:auto"><table><thead><tr>'+
-     ['Fecha','Producto','Stock anterior','Cantidad','Stock posterior','Motivo','Detalle','Origen','Realizado por'].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
-     data.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"><td>'+fmtF(x.fecha)+'</td>'+
+     ['Fecha','Producto','Stock anterior','Cantidad','Stock posterior','Motivo','Detalle','Origen','Realizado por',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     data.map(x=>'<tr style="'+(x.anulado?'opacity:.45;text-decoration:line-through':'')+'"'+(x.anulado&&x.motivo_anulacion?' title="Anulado: '+esc(x.motivo_anulacion)+'"':'')+'><td>'+fmtF(x.fecha)+'</td>'+
        '<td><b>'+esc(nomProd(x.producto_id))+'</b></td><td>'+fmtN(x.stock_anterior)+'</td>'+
        '<td style="'+(Number(x.cantidad)<0?'color:#7a2415':'color:#1d5b2c')+';font-weight:600">'+(Number(x.cantidad)>0?'+':'')+fmtN(x.cantidad)+'</td>'+
        '<td><b>'+fmtN(x.stock_posterior)+'</b></td><td>'+esc(nom(MOTSTK,x.motivo_id))+'</td>'+
-       '<td style="white-space:normal">'+esc(x.detalle)+'</td><td>'+esc(x.origen)+'</td><td>'+esc(quien(x.creado_por))+'</td></tr>').join("")+
+       '<td style="white-space:normal">'+esc(x.detalle)+'</td><td>'+esc(x.origen)+'</td><td>'+esc(quien(x.creado_por))+'</td>'+
+       /* v81: la vuelta atrás que el cartel de insumos prometía. Solo el ajuste
+          manual y el insumo de obra se anulan sueltos; lo que generó un
+          documento se anula desde ese documento. */
+       '<td>'+(!x.anulado && (x.origen==="Ajuste manual"||x.origen==="Remito extra") && P("stock-modificar")
+          ? '<button class="btn2 btn-sm" onclick="anularMovStock('+x.id+')">Anular</button>'
+          : (x.anulado?'<span class="pill no">Anulado</span>':''))+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">Todavía no hay movimientos de stock.</div>')+
    '</div>';
+}
+
+async function anularMovStock(id){
+  const m = pedirMotivo("¿Por qué se anula este movimiento? El stock vuelve a como estaba antes de él.");
+  if (m===null) return;
+  const {error} = await sb.rpc("anular_movimiento_stock",{p_id:id, p_motivo:m});
+  if (error) return alert(error.message);
+  await cargarStock();
+  pintarMovStock();
 }
 
 /* ═══════════ GASTOS (seccion propia, como en Pirka) ═══════════ */
