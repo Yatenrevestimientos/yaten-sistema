@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-152";
+const VERSION = "v2026.08.26-153";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1500,6 +1500,10 @@ function selHoraVisita(id, val, dis){
 /* 11/8, Gustavo: «campos obligatorios indicar con asterisco». Uno solo acá, así
    el día que se decida cambiarlo de color o de forma se cambia en un lugar. */
 const AST = '<span style="color:#7a2415;font-weight:700" title="Obligatorio">*</span>';
+/* 26/8, auditoría: seis campos del prospecto llevaban el asterisco pleno y el
+   sistema no los exigía mientras estaba en la cola — un asterisco que a veces
+   no vale enseña a ignorarlos todos. La marca suave dice la regla real. */
+const AST2 = '<span class="muted" style="font-size:.85em" title="Obligatorio recién al derivarlo (visita o venta); en la cola puede quedar vacío">*al derivar</span>';
 /* Las reglas de qué es obligatorio, escritas UNA vez y usadas por las dos
    pantallas del prospecto —el alta y la ficha—, para que no se separen. */
 /* 14/8: el prospecto ahora entra a una COLA DE TRABAJO antes de que se sepa
@@ -1591,22 +1595,22 @@ function formHTML(p, ro, lig){
   '<div class="sec">Entrada del prospecto · carga la VL</div><div class="grid">'+
     '<div class="f"><label>Fecha</label><input type="date" id="c_fecha" value="'+(p.fecha||hoy())+'" '+d+'></div>'+
     '<div class="f"><label>Estado</label><select id="c_estado" '+d+'>'+selTxt(ESTADOS,p.estado)+'</select></div>'+
-    '<div class="f"><label>Canal de contacto '+AST+'</label><select id="c_canal_id" '+d+'>'+selOpts(M.can,p.canal_id)+'</select></div>'+
-    '<div class="f"><label>Origen '+AST+'</label><select id="c_origen_id" '+d+'>'+selOpts(M.ori,p.origen_id)+'</select></div>'+
-    '<div class="f"><label>VL responsable '+AST+'</label><select id="c_vl_id" '+d+'>'+selPer(VLS(),p.vl_id)+'</select></div>'+
+    '<div class="f"><label>Canal de contacto '+AST2+'</label><select id="c_canal_id" '+d+'>'+selOpts(M.can,p.canal_id)+'</select></div>'+
+    '<div class="f"><label>Origen '+AST2+'</label><select id="c_origen_id" '+d+'>'+selOpts(M.ori,p.origen_id)+'</select></div>'+
+    '<div class="f"><label>VL responsable '+AST2+'</label><select id="c_vl_id" '+d+'>'+selPer(VLS(),p.vl_id)+'</select></div>'+
   '</div><div class="grid">'+
     '<div class="f"><label>Cliente '+AST+'</label><input id="c_nombre" value="'+esc(p.nombre)+'" '+d+'></div>'+
-    '<div class="f"><label>Celular '+AST+'</label><input id="c_celular" value="'+esc(p.celular)+'" '+d+'></div>'+
+    '<div class="f"><label>Celular '+AST+' <span class="muted" style="font-size:.85em">(con celular o teléfono alcanza)</span></label><input id="c_celular" value="'+esc(p.celular)+'" '+d+'></div>'+
     '<div class="f"><label>Teléfono</label><input id="c_telefono" value="'+esc(p.telefono)+'" '+d+'></div>'+
     '<div class="f"><label>Email</label><input id="c_email" value="'+esc(p.email)+'" '+d+'></div>'+
-    '<div class="f"><label>Localidad '+AST+'</label><select id="c_localidad_id" '+d+'>'+selOpts(M.loc,p.localidad_id)+'</select></div>'+
+    '<div class="f"><label>Localidad '+AST2+'</label><select id="c_localidad_id" '+d+'>'+selOpts(M.loc,p.localidad_id)+'</select></div>'+
     '<div class="f"><label>Dirección de obra <span class="muted" style="font-size:.85em">(obligatoria si va a visita)</span></label><input id="c_direccion" value="'+esc(p.direccion)+'" '+d+'></div>'+
   '</div><div class="grid">'+
-    '<div class="f"><label>Motivo de consulta '+AST+'</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
+    '<div class="f"><label>Motivo de consulta '+AST2+'</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
     '<div class="f"><label>Decide con</label><input id="c_decide_con" value="'+esc(p.decide_con)+'" '+d+'></div>'+
     '<div class="f"><label>Objeción de entrada</label><select id="c_objecion_entrada_id" '+d+'>'+selOpts(M.obj,p.objecion_entrada_id)+'</select></div>'+
   '</div><div class="grid">'+
-    '<div class="f"><label>Derivación '+AST+'</label><select id="c_derivacion" '+d+' onchange="togglePorDerivacion()">'+selTxt(DERIVA,p.derivacion)+'</select>'+
+    '<div class="f"><label>Derivación '+AST2+'</label><select id="c_derivacion" '+d+' onchange="togglePorDerivacion()">'+selTxt(DERIVA,p.derivacion)+'</select>'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">Se decide acá, cuando entra el cliente. Con «Presupuesto directo» el sistema saltea la visita.</div></div>'+
   '</div>'+
   '<div id="avisoDeriva" class="msg" style="display:none">Elegí la <b>derivación</b> para seguir cargando.</div>'+
@@ -11625,6 +11629,13 @@ function botonFichaCliente(cliId, desde){
     'onclick="verFichaCliente('+cliId+','+(desde?("'"+desde.tipo+"',"+desde.id):"null,null")+')">'+svg+' Ver cliente</button>';
 }
 function verFichaCliente(cliId, tipo, desdeId){
+  /* 26/8, auditoría: desde un presupuesto NUEVO sin guardar, irse a la ficha
+     del cliente perdía los renglones cargados sin preguntar — el Volver del
+     propio presupuesto sí pregunta. Mismo aviso acá. */
+  if (VISTA === "pre_ficha" && typeof PRE !== "undefined" && PRE && !PRE.cab.id && (PRE.items.length || PRE.adic.length)){
+    if (!confirm("Este presupuesto todavía no se guardó.\n\n¿Vas a la ficha del cliente igual y perdés lo cargado?")) return;
+    PRE = null;
+  }
   _CLI_DESDE = (tipo && desdeId) ? {tipo:tipo, id:desdeId} : null;
   fichaCliente(cliId);
 }
@@ -13840,7 +13851,9 @@ function panelAjustePrecios(){
      '<div><label>Porcentaje</label><input type="number" step="0.1" id="ap_pct" placeholder="15 sube, -10 baja"></div>'+
      '<div><label>Redondear a</label><select id="ap_red"><option value="0">Sin redondear</option><option value="100">Centenas</option><option value="1000">Miles</option></select></div>'+
      '<div style="min-width:auto"><button class="btn" onclick="aplicarAjuste()">Aplicar</button></div>'+
-   '</div><div class="muted">Los presupuestos ya guardados no cambian: cada renglón conserva el precio con el que se cerró.</div></div>';
+     '<div style="min-width:auto"><button class="btn2" onclick="deshacerAjustePrecios()">Deshacer el último ajuste</button></div>'+
+   '</div><div class="muted">Los presupuestos ya guardados no cambian: cada renglón conserva el precio con el que se cerró. '+
+   'Antes de aplicar se guarda una <b>foto de todos los precios</b>: «Deshacer el último ajuste» los devuelve tal cual, por si el porcentaje salió mal o se tocó dos veces. Ojo con el redondeo: se aplica también a los precios en dólares.</div></div>';
 }
 async function aplicarAjuste(){
   const pct = Number($("ap_pct").value||0);
@@ -13850,32 +13863,32 @@ async function aplicarAjuste(){
   const afectados = PRODS.filter(p=>p.activo && (!tipo || String(p.tipo_id)===String(tipo)));
   if (!afectados.length){ $("apmsg").innerHTML='<div class="msg err">No hay productos activos con ese filtro.</div>'; return; }
   const rotCual = {AMBOS:"sin y con instalación", SIN:"sin instalación", CON:"con instalación"}[cual];
-  if (!confirm("Vas a "+(pct>0?"aumentar":"bajar")+" un "+Math.abs(pct)+" % el precio "+rotCual+" de "+afectados.length+" producto(s). ¿Confirmás?")) return;
-  const f = 1 + pct/100;
-  const ajustar = v => { let n = Number(v||0) * f; if (red>0) n = Math.round(n/red)*red; else n = Math.round(n*100)/100; return n; };
-  let fallos = 0;
-  for (let i=0;i<afectados.length;i++){
-    const p = afectados[i], o = {};
-    const verARS = (mon === "ARS" || mon === "AMBAS");
-    const verUSD = (mon === "USD" || mon === "AMBAS");
-    if (cual !== "CON"){
-      if (verARS) o.precio_ars = ajustar(p.precio_ars);
-      if (verUSD) o.precio_usd = ajustar(p.precio_usd);
-    }
-    if (cual !== "SIN"){
-      /* el precio instalado en cero se deja en cero: significa que ese producto
-         no se instala, y multiplicarlo no lo convierte en un precio */
-      if (verARS && Number(p.precio_inst_ars||0) > 0) o.precio_inst_ars = ajustar(p.precio_inst_ars);
-      if (verUSD && Number(p.precio_inst_usd||0) > 0) o.precio_inst_usd = ajustar(p.precio_inst_usd);
-    }
-    if (!Object.keys(o).length) continue;
-    const r = await sb.from("productos").update(o).eq("id", p.id);
-    if (r.error) fallos++;
+  if (!confirm("Vas a "+(pct>0?"aumentar":"bajar")+" un "+Math.abs(pct)+" % el precio "+rotCual+" de "+afectados.length+" producto(s).\n\nAntes se guarda una foto de todos los precios: si sale mal, «Deshacer el último ajuste» los devuelve. ¿Confirmás?")) return;
+  /* 26/8, auditoría (v82): antes eran N updates sueltos, sin foto y sin vuelta
+     atrás — un 15 tipeado en vez de 1,5 destruía el catálogo. Ahora es UNA
+     función en la base: saca la foto, ajusta todo junto, y devuelve el lote. */
+  const r = await sb.rpc("ajustar_precios_masivo", {p_tipo: tipo?Number(tipo):null, p_moneda:mon, p_cual:cual, p_pct:pct, p_redondeo:red});
+  if (r.error){
+    $("apmsg").innerHTML = '<div class="msg err">'+(String(r.error.message).indexOf("ajustar_precios_masivo")>=0 || String(r.error.code)==="PGRST202"
+      ? 'Falta correr la <b>migración v82</b> en la base (la función del ajuste con foto). No se tocó ningún precio: avisá y se corre.'
+      : esc(r.error.message))+'</div>';
+    return;
   }
   await cargarCatalogo();
   VISTAS.productos();
-  $("apmsg").innerHTML = fallos? '<div class="msg err">'+fallos+' productos no se pudieron actualizar.</div>'
-    : '<div class="msg ok">Listo: '+afectados.length+' productos actualizados '+(pct>0?"+":"")+pct+' % en el precio '+rotCual+'.</div>';
+  $("apmsg").innerHTML = '<div class="msg ok">Listo: '+((r.data||{}).productos||afectados.length)+' productos actualizados '+(pct>0?"+":"")+pct+' % en el precio '+rotCual+'. Quedó la foto (lote #'+((r.data||{}).lote||"?")+'): si salió mal, «Deshacer el último ajuste».</div>';
+}
+
+/* La vuelta atrás del ajuste masivo (v82): repone los CUATRO precios de cada
+   producto de la última foto no deshecha. Ojo: si después del ajuste se tocó
+   un precio a mano, el deshacer también lo pisa — lo dice antes. */
+async function deshacerAjustePrecios(){
+  if (!confirm("¿Deshacer el último ajuste masivo?\n\nDevuelve TODOS los precios de los productos afectados a como estaban justo antes de ese ajuste. Si después del ajuste tocaste algún precio a mano, ese cambio también se pisa.")) return;
+  const r = await sb.rpc("deshacer_ajuste_precios");
+  if (r.error){ $("apmsg").innerHTML = '<div class="msg err">'+esc(r.error.message)+'</div>'; return; }
+  await cargarCatalogo();
+  VISTAS.productos();
+  $("apmsg").innerHTML = '<div class="msg ok">Deshecho el lote #'+((r.data||{}).lote||"?")+': '+((r.data||{}).productos||"los")+' productos volvieron a sus precios anteriores.</div>';
 }
 
 async function ajustarCuenta(id){
