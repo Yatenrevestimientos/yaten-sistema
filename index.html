@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.30-159";
+const VERSION = "v2026.08.30-160";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1459,15 +1459,20 @@ async function locRapidaGuardar(selId){
   const ya = (M.loc||[]).find(x=>igual(x.nombre)===igual(n));
   if (ya && !ya.activo) return err("«"+ya.nombre+"» ya existe pero está dada de baja. Reactivala desde Tablas básicas → Localidades y volvé a elegirla acá.");
   if (ya){ if (sel) sel.innerHTML = selOpts(M.loc, ya.id); cerrarDlg2(); return; }
-  /* visita_propia en false = alrededores, lo conservador; se ajusta en Tablas básicas si hace falta */
-  const {error} = await sb.from("localidades").insert({nombre:n, activo:true, visita_propia:false});
-  if (error) return err(error.message);
+  /* 30/8, v85: el alta va por la función agregar_localidad — el permiso es el de
+     cargar prospectos, así la VL en la calle puede, y la tabla queda cerrada
+     (probado con el usuario de Rocío: la función anda, el insert directo frena).
+     La función además normaliza espacios y no duplica ni con tildes distintas. */
+  const r = await sb.rpc("agregar_localidad", {p_nombre: n});
+  if (r.error){
+    if (r.error.code === "PGRST202") return err("Falta la migración v85 en la base: la localidad no se agregó. Avisá para correrla.");
+    return err(r.error.message);
+  }
   /* se recarga SOLO la maestra de localidades y se repinta SOLO el select:
      repintar el formulario entero perdería lo que ya se tipeó */
   const r2 = await sb.from("localidades").select("id,nombre,zona,visita_propia,activo").order("nombre");
   M.loc = r2.data || M.loc;
-  const nueva = (M.loc||[]).find(x=>igual(x.nombre)===igual(n));
-  if (sel) sel.innerHTML = selOpts(M.loc, nueva ? nueva.id : null);
+  if (sel) sel.innerHTML = selOpts(M.loc, r.data || null);
   cerrarDlg2();
 }
 /* opciones de cuentas de dinero: solo las activas, con la moneda a la vista */
@@ -8393,6 +8398,10 @@ async function imprimirOC(id){
 function estadoFactura(f, pagado){
   if (f.anulado) return {t:"Anulada", c:"#6b7679"};
   const total = Number(f.total||0), pg = Number(pagado||0);
+  /* 30/8, decisión de Gustavo: la factura en $ 0 por descuento total SE PERMITE
+     — y no debe nada, así que queda Paga. Sin esto flotaba como «Pendiente»
+     para siempre y ensuciaba la lista de deudas. */
+  if (total <= 0.009) return {t:"Paga", c:"#1d5b2c"};
   if (pg <= 0.009) return {t:"Pendiente", c:"#7a2415"};
   if (pg >= total - 0.009) return {t:"Paga", c:"#1d5b2c"};
   return {t:"Pago parcial", c:"#8a6d1f"};
