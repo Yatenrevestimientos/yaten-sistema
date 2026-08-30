@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.26-158";
+const VERSION = "v2026.08.30-159";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -307,7 +307,7 @@ function letraComp(x){
 const nroSolo = x => [x.punto_venta, x.nro_comprobante].filter(function(v){ return v!==null && v!==undefined && String(v)!==""; }).join("-") || "sin número";
 const nroComp = x => letraComp(x)+" "+nroSolo(x);
 const fmtF = d => d? String(d).slice(0,10).split("-").reverse().join("/") : "";
-const hoy  = () => new Date().toISOString().slice(0,10);
+const hoy  = () => { const d = new Date(); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); return d.toISOString().slice(0,10); };   /* 30/8 auditoría: fecha LOCAL — la versión UTC corría un día entre las 21 y las 24 */
 /* Los colores de la marca, para las impresiones. Petróleo y rojo óxido. */
 const YAT_PETROLEO = "#24393C", YAT_OXIDO = "#7E2E18";
 /* El isotipo de Yaten en vectores. Usa currentColor: toma el color del contenedor,
@@ -764,7 +764,7 @@ function pintarNav(){
     const subs = (SUBMENU[m.id]||[]).filter(x=>!x.perm||tieneAlguno(x.perm));
     /* La ficha del presupuesto es una vista propia («pre_ficha») pero sigue
        siendo Presupuestos: el menú tiene que decir dónde estás. */
-    const acaEstoy = (m.id===VISTA) || (VISTA==="pre_ficha" && m.id==="presup") || (VISTA==="ven_ficha" && m.id==="ventas") || (VISTA==="cli_ficha" && m.id==="clientes");
+    const acaEstoy = (m.id===VISTA) || (VISTA==="pre_ficha" && m.id==="presup") || (VISTA==="ven_ficha" && m.id==="ventas") || (VISTA==="cli_ficha" && m.id==="clientes") || (VISTA==="prov_ficha" && m.id==="provee");   /* 30/8: la ficha del proveedor también */
     if (!subs.length){
       return '<button class="sec-btn '+(acaEstoy?"on":"")+'" data-v="'+m.id+'">'+esc(m.t)+'</button>';
     }
@@ -1430,6 +1430,46 @@ function selOpts(arr,val){
   return '<option value=""></option>' + vis.map(o=>'<option value="'+o.id+'" '+(String(val)===String(o.id)?"selected":"")+'>'+esc(o.nombre)+(o.activo?"":" (de baja)")+'</option>').join("");
 }
 function selTxt(arr,val){ return '<option value=""></option>' + arr.map(o=>'<option '+(val===o?"selected":"")+'>'+esc(o)+'</option>').join(""); }
+/* ── Alta rápida de localidad (30/8) ──
+   Mismo molde que concGastoAgregar: quien está cargando un prospecto, cliente o
+   proveedor de una localidad que falta no tiene que cortar la carga e irse a
+   Tablas básicas. Se abre en dlg2 porque la ficha puede estar en dlg: queda encima. */
+function btnLocMas(selId, deshabilitado){
+  if (deshabilitado) return '';
+  return ' <button class="btn2 btn-sm" type="button" title="Agregar una localidad nueva" onclick="locRapida(\''+selId+'\')">+</button>';
+}
+async function locRapida(selId){
+  $("d2tit").textContent = "Localidad nueva";
+  $("d2body").innerHTML = '<div id="locmsg"></div>'+
+    '<div class="f"><label>Nombre *</label><input id="loc_nueva"></div>'+
+    '<div class="acciones"><button class="btn" onclick="locRapidaGuardar(\''+selId+'\')">Agregar</button>'+
+    '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+async function locRapidaGuardar(selId){
+  const err = t => { const e=$("locmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const n = ($("loc_nueva")||{value:""}).value.trim();
+  if (!n) return err("Escribí el nombre de la localidad.");
+  const sel = $(selId);
+  /* si ya existe (aunque sea con otras mayúsculas) no se duplica: se elige y listo */
+  /* 30/8 auditoría: la comparación ignora tildes y espacios dobles («Dina Huapí» =
+     «Dina Huapi») para no partir el embudo en dos; y una localidad DE BAJA no se
+     elige en silencio: se frena con cartel — conservador, como todo lo de baja. */
+  const igual = s => String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
+  const ya = (M.loc||[]).find(x=>igual(x.nombre)===igual(n));
+  if (ya && !ya.activo) return err("«"+ya.nombre+"» ya existe pero está dada de baja. Reactivala desde Tablas básicas → Localidades y volvé a elegirla acá.");
+  if (ya){ if (sel) sel.innerHTML = selOpts(M.loc, ya.id); cerrarDlg2(); return; }
+  /* visita_propia en false = alrededores, lo conservador; se ajusta en Tablas básicas si hace falta */
+  const {error} = await sb.from("localidades").insert({nombre:n, activo:true, visita_propia:false});
+  if (error) return err(error.message);
+  /* se recarga SOLO la maestra de localidades y se repinta SOLO el select:
+     repintar el formulario entero perdería lo que ya se tipeó */
+  const r2 = await sb.from("localidades").select("id,nombre,zona,visita_propia,activo").order("nombre");
+  M.loc = r2.data || M.loc;
+  const nueva = (M.loc||[]).find(x=>igual(x.nombre)===igual(n));
+  if (sel) sel.innerHTML = selOpts(M.loc, nueva ? nueva.id : null);
+  cerrarDlg2();
+}
 /* opciones de cuentas de dinero: solo las activas, con la moneda a la vista */
 function optCtas(lista){
   return (lista||[]).map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("");
@@ -1608,7 +1648,7 @@ function formHTML(p, ro, lig){
     '<div class="f"><label>Celular '+AST+' <span class="muted" style="font-size:.85em">(con celular o teléfono alcanza)</span></label><input id="c_celular" value="'+esc(p.celular)+'" '+d+'></div>'+
     '<div class="f"><label>Teléfono</label><input id="c_telefono" value="'+esc(p.telefono)+'" '+d+'></div>'+
     '<div class="f"><label>Email</label><input id="c_email" value="'+esc(p.email)+'" '+d+'></div>'+
-    '<div class="f"><label>Localidad '+AST2+'</label><select id="c_localidad_id" '+d+'>'+selOpts(M.loc,p.localidad_id)+'</select></div>'+
+    '<div class="f"><label>Localidad '+AST2+'</label><div style="display:flex;gap:6px"><select id="c_localidad_id" '+d+'>'+selOpts(M.loc,p.localidad_id)+'</select>'+btnLocMas('c_localidad_id', d!=="")+'</div></div>'+
     '<div class="f"><label>Dirección de obra <span class="muted" style="font-size:.85em">(obligatoria si va a visita)</span></label><input id="c_direccion" value="'+esc(p.direccion)+'" '+d+'></div>'+
   '</div><div class="grid">'+
     '<div class="f"><label>Motivo de consulta '+AST2+'</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
@@ -2296,6 +2336,7 @@ VISTAS.agenda = async function(){
       '<button class="btn2 btn-sm" onclick="calMover(-1)">‹ Mes anterior</button>'+
       '<button class="btn2 btn-sm" onclick="calHoy()">Hoy</button>'+
       '<button class="btn2 btn-sm" onclick="calMover(1)">Mes siguiente ›</button>'+
+      '<button class="btn2 btn-sm" onclick="imprimirHojaRuta()">Imprimir</button>'+
     '</div>'+
     '<div class="desc">'+(delMes.length? delMes.length+' visita'+(delMes.length===1?'':'s')+' este mes. Tocá una para abrir el prospecto.'
                                        : 'No hay visitas cargadas en este mes.')+'</div>'+
@@ -2315,6 +2356,69 @@ VISTAS.agenda = async function(){
     ? bloque("Visitas de hoy en adelante", futuras) + panelCal + bloque("Visitas anteriores", pasadas.slice(0,60)) + notaCorte
     : panelCal + bloque("Visitas de hoy en adelante", futuras) + bloque("Visitas anteriores", pasadas.slice(0,60)) + notaCorte;
 };
+
+
+/* ── Hoja de ruta de visitas (30/8) ──
+   El ATO sale a la calle con el listado del día en papel. Antes se copiaba a
+   mano de la pantalla. Mismo molde de impresión que imprimirCheques. */
+function imprimirHojaRuta(){
+  $("dtit").textContent = "Imprimir hoja de ruta";
+  $("dbody").innerHTML = '<div id="hrmsg"></div>'+
+    '<div class="grid">'+
+      '<div class="f"><label>Desde</label><input type="date" id="hr_desde" value="'+hoy()+'"></div>'+
+      '<div class="f"><label>Hasta</label><input type="date" id="hr_hasta" value="'+hoy()+'"></div>'+
+      '<div class="f"><label>ATO</label><select id="hr_ato"><option value="">Todos</option>'+
+        ATOS().map(function(e){ return '<option value="'+e.id+'">'+esc(e.nombre)+'</option>'; }).join("")+'</select></div>'+
+    '</div>'+
+    '<div class="acciones"><button class="btn" onclick="hrImprimir()">Imprimir</button>'+
+    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
+  try{ $("dlg").showModal(); }catch(e){}
+}
+async function hrImprimir(){
+  const err = t => { const e=$("hrmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const de = ($("hr_desde")||{}).value, ha = ($("hr_hasta")||{}).value;
+  if (!de || !ha) return err("Poné las dos fechas del rango.");
+  if (de > ha) return err("«Desde» no puede ser posterior a «Hasta».");
+  const atoId = ($("hr_ato")||{}).value ? Number($("hr_ato").value) : null;
+  /* mismo camino que la pantalla de agenda: traerProspectos (últimas 1000 fichas) */
+  const todos = await traerProspectos();
+  const rows = todos.filter(function(p){
+    return p.fecha_visita && p.fecha_visita >= de && p.fecha_visita <= ha &&
+           (!atoId || Number(p.ato_id) === atoId);
+  });
+  rows.sort(function(a,b){
+    const ka = a.fecha_visita+" "+(a.hora_visita||""), kb = b.fecha_visita+" "+(b.hora_visita||"");
+    return ka > kb ? 1 : -1;
+  });
+  try{ document.getElementById("dlg").close(); }catch(e){}
+  const rango = fmtF(de)+(de===ha ? "" : " al "+fmtF(ha));
+  const titulo = 'Hoja de ruta de visitas · '+rango+(atoId ? ' · '+esc(nomP(atoId)) : '');
+  /* traerProspectos corta en 1000 por fecha de carga: si vino al tope puede faltar algo viejo */
+  const notaCorte = todos.length >= 1000
+    ? '<div style="font-size:10px;color:#7a2415;margin:6px 0">Ojo: el sistema leyó las últimas 1000 fichas; si hay más, puede faltar alguna visita de fichas viejas.</div>' : '';
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Hoja de ruta</title><style>'+
+   'body{font:12px Georgia,serif;color:#1b2426;margin:26px}'+
+   'table{width:100%;border-collapse:collapse;margin:8px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}'+
+   'th{font-size:10px;text-transform:uppercase;color:#6b7679}'+
+   '.pie{margin-top:18px;font-size:10px;color:#6b7679;border-top:1px solid #ddd;padding-top:8px}'+
+   '</style></head><body>'+
+   membrete(titulo)+
+   notaCorte+
+   (rows.length ? '<table><thead><tr><th>Fecha</th><th>Hora</th><th>Cliente</th><th>Dirección</th><th>Localidad</th><th>Teléfono</th><th>ATO</th><th>Resultado</th><th>Notas previas</th></tr></thead><tbody>'+
+     rows.map(function(p){
+       return '<tr><td><b>'+fmtF(p.fecha_visita)+'</b></td><td>'+esc(p.hora_visita)+'</td>'+
+         '<td>'+esc(p.nombre)+'</td><td style="white-space:normal">'+esc(p.direccion)+'</td>'+
+         '<td>'+esc(nom(M.loc,p.localidad_id))+'</td><td>'+esc(p.celular||p.telefono||"")+'</td>'+
+         '<td>'+esc(nomP(p.ato_id))+'</td><td>'+esc(p.resultado||"")+'</td><td style="white-space:normal">'+esc(p.observaciones_previas)+'</td></tr>';
+     }).join("")+'</tbody></table>'
+    : '<div>No hay visitas en el rango.</div>')+
+   '<div class="pie">'+rows.length+' visita(s). Impreso por '+esc((PERFIL&&PERFIL.nombre)||"")+' el '+fmtF(hoy())+'.</div>'+
+   '</body></html>';
+  const w = window.open("", "_blank");
+  if (!w){ alert("El navegador bloqueó la ventana. Permití las ventanas emergentes."); return; }
+  w.document.write(html); w.document.close();
+  setTimeout(function(){ w.print(); }, 400);
+}
 
 /* ─────────── SEGUIMIENTOS ─────────── */
 VISTAS.segui = async function(){
@@ -6549,7 +6653,11 @@ async function deshacerRecepcion(ordenId){
   if (error){ $("rcpmsg").innerHTML='<div class="msg err" style="line-height:1.5">'+esc(error.message)+'</div>'; return; }
   alert("Listo: volvieron "+data+" renglón"+(data===1?"":"es")+". La orden quedó Abierta y el stock volvió a como estaba.");
   $("dlg").close();
-  if (VISTA === "compras") VISTAS.compras();
+  /* 30/8 auditoría: si se deshizo desde la ficha del proveedor (pantalla propia desde hoy),
+     se repinta la ficha — si no, la solapa OCs queda mintiendo el estado. En cualquier otra
+     pantalla (p. ej. recepciones pendientes) se queda donde estaba, como siempre. */
+  if (VISTA === "prov_ficha" && PROVF){ await fichaProveedor(PROVF.p.id, PVTAB); }
+  else if (VISTA === "compras") VISTAS.compras();
 }
 async function guardarRecepcion(ordenId){
   const items = [];
@@ -7838,6 +7946,7 @@ VISTAS.provee = async function(){
    corriente. Ahora cada cosa tiene su solapa y las compras del proveedor se ven
    desde el proveedor, que es donde se las busca. */
 let PVTAB = "datos";
+let PROVF = null;   /* 30/8: lo cargado para la ficha del proveedor a pantalla completa (molde CLI del cliente) */
 /* Quién cargó o anuló un documento — la auditoría en criollo */
 function quienEs(uuid){
   if (!uuid) return "—";
@@ -7850,6 +7959,8 @@ function selloAuditoria(x){
       (x.anulado_en?' el '+fmtF(x.anulado_en):'')+'. Motivo: '+esc(x.motivo_anulacion||"sin motivo")+'</span>' : '';
   return '<div class="muted" style="margin-top:8px;font-size:11px;line-height:1.5">'+alta+baja+'</div>';
 }
+/* 30/8: sin uso desde hoy — la ficha a pantalla completa arma sus solapas en
+   pintarFichaProv con TABS_PROV. Se deja por si hay que volver. */
 function tabsProv(p){
   if (!p) return '';
   const tabs = [["datos","Datos"],["ocs","Órdenes de compra"],["facturas","Facturas y notas"],
@@ -7863,21 +7974,41 @@ function tabsProv(p){
 function irTabProv(id, tab){ PVTAB = tab; fichaProveedor(id); }
 async function fichaProveedor(id, tab){
   if (tab) PVTAB = tab;
+  /* 30/8: la cuenta corriente pasó de una solapa «cc» a dos («ccars»/«ccusd»).
+     Los _VOLVER_PROV viejos y cualquier llamador que traiga "cc" caen en pesos. */
+  if (PVTAB === "cc") PVTAB = "ccars";
   if (!id) PVTAB = "datos";
   const p = id ? PROVS.find(x=>x.id===id) : null;
   const puede = P("compra-modificar");
   const d = puede?"":"disabled";
   const v = k => p ? (p[k]==null?"":p[k]) : "";
-  let mov = [], precios = [], ocs = [], facs = [], nots = [], imput = {};
+  let mov = [], precios = [], ocs = [], facs = [], nots = [], imput = {}, pagos = [], medios = [], chqPagos = {};
   if (p){
-    const [m,pr,o,f,n] = await Promise.all([
+    const [m,pr,o,f,n,pg] = await Promise.all([
       sb.from("pv_movimientos").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(3000),
       sb.from("proveedor_precios").select("*").eq("proveedor_id",p.id),
       sb.from("ordenes_compra").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}),
       sb.from("facturas_compra").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}),
-      sb.from("notas_proveedor").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false})
+      sb.from("notas_proveedor").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}),
+      /* 30/8: la solapa Pagos de la ficha a pantalla completa. Tope 400 con cartel. */
+      sb.from("pagos_compra").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400)
     ]);
-    mov = m.data||[]; precios = pr.data||[]; ocs = o.data||[]; facs = f.data||[]; nots = n.data||[];
+    mov = m.data||[]; precios = pr.data||[]; ocs = o.data||[]; facs = f.data||[]; nots = n.data||[]; pagos = pg.data||[];
+    /* 30/8: de qué cuenta salió cada pago y con qué se pagó, sin abrirlos de a
+       uno. El número del cheque vive en la tabla cheques: sin él, la columna
+       «Forma de pago» diría «cheque» a secas y no identifica nada. */
+    if (pagos.length){
+      const me = await sb.from("pago_medios").select("*").in("pago_id", pagos.map(x=>x.id));
+      medios = me.data||[];
+      const chIds = medios.map(y=>y.cheque_id).filter(Boolean);
+      if (chIds.length){
+        const ch = await sb.from("cheques").select("id,numero,tipo").in("id", chIds);
+        (ch.data||[]).forEach(function(x){ chqPagos[x.id] = x; });
+      }
+    }
+    /* para «Sale de» hacen falta las cuentas: mismo patrón que verFactura.
+       Sin permiso de finanzas, CTAS queda vacío y la columna dice «—». */
+    if (!CTAS.length && P("finanzas-consultar")){ try{ await cargarFin(); }catch(e){} }
     /* Cuánto se le pagó a cada factura: es lo que define si está paga o no.
        ══ OJO, error encontrado el 12/8 probando ══
        Un pago ANULADO deja su imputación en la tabla. Si se suman todas, una
@@ -7908,22 +8039,244 @@ async function fichaProveedor(id, tab){
      '<div class="f"><label>Teléfono</label><input id="pv_telefono" value="'+esc(v("telefono"))+'" '+d+'></div>'+
      '<div class="f"><label>Celular</label><input id="pv_celular" value="'+esc(v("celular"))+'" '+d+'></div>'+
      '<div class="f"><label>Dirección</label><input id="pv_direccion" value="'+esc(v("direccion"))+'" '+d+'></div>'+
-     '<div class="f"><label>Localidad</label><select id="pv_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select></div>'+
+     '<div class="f"><label>Localidad</label><div style="display:flex;gap:6px"><select id="pv_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select>'+btnLocMas('pv_localidad_id', d!=="")+'</div></div>'+
      '<div class="f"><label>Activo</label><select id="pv_activo" '+d+'><option value="1" '+(!p||p.activo?"selected":"")+'>Sí</option><option value="0" '+(p&&!p.activo?"selected":"")+'>No</option></select></div>'+
    '</div>'+
    '<div class="f"><label>Observaciones</label><textarea id="pv_observaciones" rows="2" '+d+'>'+esc(v("observaciones"))+'</textarea></div>'+
    (puede?'<div class="acciones"><button class="btn" id="pv_guardar">'+(p?"Guardar cambios":"Crear proveedor")+'</button></div>':'');
-  const cuerpo =
-    !p ? datos :
-    PVTAB === "ocs"      ? seccionOCProv(p, ocs, facs) :
-    PVTAB === "facturas" ? seccionFactProv(p, facs, nots, imput) :
-    PVTAB === "cc"       ? seccionCCProv(p, mov) :
-    PVTAB === "precios"  ? seccionPreciosProv(p, precios) : datos;
-  $("dbody").innerHTML = '<div id="pvmsg"></div>' + tabsProv(p) + cuerpo;
-  if (puede && $("pv_guardar")) $("pv_guardar").onclick = function(){ guardarProveedor(id); };
-  if (PVTAB === "cc" && p) engancharCCProv(p.id);
-  try{ $("dlg").showModal(); }catch(e){}
+  /* ── Proveedor nuevo: la ventana modal de siempre (30/8) ──
+     El alta no tiene historial que mostrar: es el mismo corte que hace
+     fichaCliente — el formulario solo, en el diálogo, y listo. */
+  if (!p){
+    $("dbody").innerHTML = '<div id="pvmsg"></div>' + datos;
+    if (puede && $("pv_guardar")) $("pv_guardar").onclick = function(){ guardarProveedor(id); };
+    try{ $("dlg").showModal(); }catch(e){}
+    return;
+  }
+  /* ── Proveedor que ya existe: pantalla completa con solapas (30/8) ──
+     Mismo molde que la ficha del cliente del 25/8: panel con solapas y las
+     tarjetas de Acciones y Auditoría a la derecha. El diálogo quedaba chico
+     para OCs, facturas, pagos y dos cuentas corrientes. */
+  PROVF = {p:p, datos:datos, mov:mov, precios:precios, ocs:ocs, facs:facs,
+           nots:nots, imput:imput, pagos:pagos, medios:medios, chqPagos:chqPagos, puede:puede};
+  VISTA = "prov_ficha"; SUBVISTA = "";
+  try{ $("dlg").close(); }catch(e){}
+  pintarNav();
+  pintarFichaProv();
+  window.scrollTo({top:0,behavior:"instant"});
 }
+/* ══════════════════════════════════════════════════════════════════════
+   LA FICHA DEL PROVEEDOR A PANTALLA COMPLETA, CON SOLAPAS (30/8/2026)
+   Mismo molde que la ficha del cliente del 25/8: el diálogo quedaba chico para
+   ver órdenes, facturas, pagos y dos cuentas corrientes. El alta sigue en la
+   ventana modal —no hay historial que mostrar— y el proveedor existente pasa
+   a pantalla propia, con las acciones en la columna de la derecha.
+   ══════════════════════════════════════════════════════════════════════ */
+VISTAS.prov_ficha = function(){ if (PROVF) pintarFichaProv(); else ir("provee"); };
+function volverDeProveedor(){ PROVF = null; PVTAB = "datos"; ir("provee"); }
+
+const TABS_PROV = [
+  ["datos",    "Datos"],
+  ["ocs",      "Órdenes de compra"],
+  ["facturas", "Facturas y notas"],
+  ["pagos",    "Pagos"],
+  ["ccars",    "Cuenta corriente ARS"],
+  ["ccusd",    "Cuenta corriente USD"],
+  ["precios",  "Lista de precios"]
+];
+
+function pintarFichaProv(){
+  const p = PROVF.p;
+  const cuerpo =
+    PVTAB === "ocs"      ? seccionOCProv(p, PROVF.ocs, PROVF.facs) :
+    PVTAB === "facturas" ? seccionFactProv(p, PROVF.facs, PROVF.nots, PROVF.imput) :
+    PVTAB === "pagos"    ? seccionPagosProv(p, PROVF.pagos, PROVF.medios) :
+    PVTAB === "ccars"    ? seccionCCProvMon(p, PROVF.mov, "ARS") :
+    PVTAB === "ccusd"    ? seccionCCProvMon(p, PROVF.mov, "USD") :
+    PVTAB === "precios"  ? seccionPreciosProv(p, PROVF.precios) :
+                           PROVF.datos;
+  /* las solapas se arman acá (molde tabsCli); irTabProv vuelve a pedir los
+     datos a la base, así cada solapa muestra lo último */
+  const solapas = '<div class="acciones" style="gap:4px;margin:2px 0 12px;flex-wrap:wrap">'+
+    TABS_PROV.map(function(t){
+      const act = PVTAB === t[0];
+      return '<button class="'+(act?"btn":"btn2")+' btn-sm" onclick="irTabProv('+p.id+',\''+t[0]+'\')">'+esc(t[1])+'</button>';
+    }).join("")+'</div>';
+  const lateral = tarjetaAccionesProv() + tarjetaAuditoriaProv();
+  $("main").innerHTML =
+    '<div class="panel" style="margin-bottom:12px"><h2>'+esc(p.nombre)+'</h2>'+
+      '<div class="desc">Todo lo que pasó con este proveedor, solapa por solapa. Los botones están en la columna de la derecha; en el teléfono, arriba de todo.</div></div>'+
+    '<div class="prewrap"><div class="panel" style="margin:0"><div id="pvmsg"></div>'+solapas+cuerpo+'</div>'+
+    '<div class="preside">'+lateral+'</div></div>';
+  /* cada solapa engancha lo suyo después de dibujarse, como en el cliente */
+  if (PVTAB === "datos" && PROVF.puede && $("pv_guardar"))
+    $("pv_guardar").onclick = function(){ guardarProveedor(p.id); };
+  if (PVTAB === "ccars" || PVTAB === "ccusd") engancharCCProv(p.id);
+}
+
+/* ── La columna de la derecha: Acciones · Auditoría (molde del cliente) ── */
+function tarjetaAccionesProv(){
+  const p = PROVF.p;
+  let h = '<div class="pcard"><h3>Acciones</h3><div class="in pacc">';
+  /* mismo criterio que en el cliente: Guardar solo con la solapa Datos abierta;
+     si no, un atajo para ir a editarlos. Un botón que no puede hacer lo que
+     dice es peor que no tenerlo. */
+  if (PROVF.puede && PVTAB === "datos")
+    h += '<button class="b-guardar" onclick="guardarProveedor('+p.id+')">Guardar cambios</button>';
+  else if (PROVF.puede)
+    h += '<button class="b-neutro" onclick="irTabProv('+p.id+',\'datos\')">Editar los datos</button>';
+  if (PROVF.puede){
+    h += '<div class="sep"></div>';
+    h += '<button class="b-plata" onclick="formCredDebProv('+p.id+')">Registrar crédito/débito</button>';
+    /* el guardado del pago, la factura y la OC vuelven por volverDeCompras,
+       que desde el 30/8 sabe volver a esta ficha */
+    h += '<button class="b-plata" onclick="formPagoCompra('+p.id+')">Registrar pago</button>';
+    h += '<div class="sep"></div>';
+    h += '<button class="b-avanzar" onclick="formOrdenCompra('+p.id+')">+ Orden de compra</button>';
+    h += '<button class="b-avanzar" onclick="formFacturaCompra('+p.id+')">+ Factura de compra</button>';
+  }
+  h += '<div class="sep"></div>';
+  h += '<button class="b-neutro" onclick="imprimirCCProv('+p.id+')">Resumen de cuenta</button>';
+  h += '<div class="sep"></div>';
+  h += '<button class="b-volver" onclick="volverDeProveedor()">Volver</button>';
+  return h + '</div></div>';
+}
+
+function tarjetaAuditoriaProv(){
+  const p = PROVF.p;
+  /* si la tabla proveedores no tiene esas columnas, no se inventa nada */
+  if (!p.creado_en && !p.creado_por) return '';   /* 30/8 auditoría: null también esconde — «Creado el» pelado no dice nada */
+  return '<div class="pcard"><h3>Auditoría</h3><div class="in paud">'+
+    'Creado el '+fmtF(p.creado_en)+(p.creado_por?' por '+esc(quienEs(p.creado_por)):'')+
+    '</div></div>';
+}
+
+/* ── Solapa Pagos (30/8) ──
+   Cada orden de pago al proveedor: cuánto, de qué cuenta salió y con qué se
+   pagó, sin abrirlas de a una. Sin permiso de finanzas no hay cuentas en
+   memoria y la columna «Sale de» dice «—»: no se inventa. */
+function seccionPagosProv(p, pagos, medios){
+  pagos = pagos||[]; medios = medios||[];
+  const chq = (PROVF && PROVF.chqPagos) || {};
+  const porPago = {};
+  medios.forEach(function(y){ (porPago[y.pago_id] = porPago[y.pago_id]||[]).push(y); });
+  const saleDe = function(x){
+    const ms = porPago[x.id]||[];
+    if (!ms.length) return esc(nom(CTAS,x.cuenta_id)||"—");
+    return ms.map(function(y){ return esc(nom(CTAS,y.cuenta_id)||"—"); }).join("<br>");
+  };
+  const formaDe = function(x){
+    const ms = porPago[x.id]||[];
+    if (!ms.length) return 'Efectivo o banco';
+    return ms.map(function(y){
+      const ch = y.cheque_id ? chq[y.cheque_id] : null;
+      if (ch) return '<b>Cheque'+(String(ch.tipo||"").toLowerCase().indexOf("prop")>=0?' propio':'')+'</b> N° '+esc(ch.numero||"s/n");
+      return esc(y.detalle||"Efectivo o banco");
+    }).join("<br>");
+  };
+  return '<div class="sec">Pagos</div>'+
+   '<div class="muted" style="margin-bottom:8px">Cada orden de pago a este proveedor. Tocá «Ver» para abrirla, imprimirla o anularla. Los anulados se ven tachados y no cuentan.</div>'+
+   (pagos.length? '<div class="tablewrap" style="max-height:52dvh;overflow:auto"><table><thead><tr>'+
+     ['Código','Fecha','Importe','Sale de','Forma de pago',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     pagos.map(function(x){
+       return '<tr'+filaAnul(x)+'><td><b>'+esc(x.codigo||("#"+x.id))+'</b></td><td>'+fmtF(x.fecha)+'</td>'+
+        '<td><b>'+fmtM(x.importe,x.moneda)+'</b></td>'+
+        '<td>'+saleDe(x)+'</td>'+
+        '<td style="white-space:normal;min-width:180px">'+formaDe(x)+'</td>'+
+        '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="_VOLVER_PROV={id:'+p.id+',tab:\'pagos\'}; verPagoCompra('+x.id+')">Ver</button>'+
+        (x.anulado?' <span class="pill no">Anulado</span>':'')+'</td></tr>';
+     }).join("")+'</tbody></table></div>'+
+     (pagos.length===400 ? '<div class="msg" style="margin-top:6px">Se muestran los <b>400</b> pagos más nuevos. Los anteriores se ven desde Compras → Pagos, filtrando por fecha.</div>' : '')
+    : '<div class="muted">Todavía no se le registró ningún pago a este proveedor.</div>');
+}
+
+/* ── Solapa Cuenta corriente, UNA moneda (30/8) ──
+   Es el bloque por moneda que vivía adentro de seccionCCProv, con sus filtros
+   y su ajuste manual, ahora con la moneda fijada por la solapa —como en la
+   ficha del cliente, una solapa para pesos y otra para dólares. */
+function seccionCCProvMon(p, mov, m){
+  const puede = P("compra-modificar");
+  const c = ccCalcular(mov, m);
+  const orden = c.filas.slice().reverse();
+  const tope = FCC.filas > 0 ? FCC.filas : orden.length;
+  const visibles = orden.slice(0, tope);
+  const recortadas = orden.length - visibles.length;
+  const saldo = c.saldoFinal;
+  const tabla = (!c.filas.length && !c.anulados.length && !c.saldoAnterior)
+    ? '<div class="muted">Sin movimientos en '+m+'.</div>'
+    : '<div style="margin-bottom:8px"><b style="font-size:18px;color:'+(saldo>0?'#7a2415':'#1d5b2c')+'">'+
+      (saldo>0? 'Le debemos '+fmtM(saldo,m) : saldo<0? 'Nos debe '+fmtM(-saldo,m) : 'Sin saldo')+'</b>'+
+      (FCC.desde||FCC.hasta ? ' <span class="muted">· saldo al final del período; el saldo anterior al rango era '+fmtM0(c.saldoAnterior,m)+'</span>' : '')+
+      '</div>'+
+      '<div class="tablewrap" style="max-height:40dvh;overflow:auto"><table><thead><tr>'+
+        '<th>Fecha</th><th>Detalle</th><th>Le debemos</th><th>Le pagamos</th><th>Saldo</th>'+(P("finanzas-anular")?'<th></th>':'')+
+        '</tr></thead><tbody>'+
+      (FCC.desde? '<tr style="background:#f6f3ee"><td>'+fmtF(FCC.desde)+'</td><td><b>Saldo anterior</b></td>'+
+        '<td></td><td></td><td><b>'+fmtM0(c.saldoAnterior,m)+'</b></td>'+(P("finanzas-anular")?'<td></td>':'')+'</tr>' : '')+
+      visibles.map(function(f){
+        const x = f.mov;
+        return '<tr><td>'+fmtF(x.fecha)+'</td>'+
+          '<td style="white-space:normal;min-width:220px">'+esc(x.detalle)+btnVerMov(x,p.id)+'</td>'+
+          '<td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td><td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td>'+
+          '<td><b>'+fmtM0(f.saldo,m)+'</b></td>'+
+          (P("finanzas-anular")?'<td>'+(x.ref_id
+            ? '<span class="muted" title="Este renglón lo generó '+esc(x.origen||"un documento")+'. Anulalo desde ahí y se revierte todo junto.">desde '+esc((x.origen||"el documento").toLowerCase())+'</span>'
+            : '<button class="btn2 btn-sm" onclick="anularPV('+x.id+','+p.id+')">Anular</button>')+'</td>':'')+
+          '</tr>';
+      }).join("")+
+      c.anulados.map(function(x){
+        return '<tr style="opacity:.45;text-decoration:line-through"><td>'+fmtF(x.fecha)+'</td>'+
+          '<td style="white-space:normal">'+esc(x.detalle)+btnVerMov(x,p.id)+'</td>'+
+          '<td>'+(Number(x.credito)?fmtM(x.credito,m):'')+'</td><td>'+(Number(x.debito)?fmtM(x.debito,m):'')+'</td>'+
+          '<td class="muted">no suma</td>'+(P("finanzas-anular")?'<td><span class="pill no">Anulado</span></td>':'')+'</tr>';
+      }).join("")+
+      '</tbody></table></div>'+
+      (recortadas>0 ? '<div class="msg" style="margin-top:6px">Se muestran los <b>'+visibles.length+'</b> movimientos más nuevos del período. '+
+        'Quedan <b>'+recortadas+'</b> sin mostrar — el saldo de arriba los cuenta igual. Subí la cantidad de filas o achicá el rango de fechas.</div>' : '');
+  return '<div class="sec">Cuenta corriente '+m+'</div>'+
+   '<div class="muted" style="margin-bottom:8px">Todo lo que le debemos y todo lo que le pagamos en '+(m==="ARS"?"pesos":"dólares")+'. El <b>saldo</b> de cada renglón es el acumulado hasta ese movimiento. Los anulados se muestran tachados y no suman.</div>'+
+   '<div class="filtros">'+
+     '<div><label>Desde</label><input type="date" id="cc_desde" value="'+esc(FCC.desde)+'"></div>'+
+     '<div><label>Hasta</label><input type="date" id="cc_hasta" value="'+esc(FCC.hasta)+'"></div>'+
+     '<div><label>Filas a mostrar</label><select id="cc_filas">'+
+       [25,50,100,200,500].map(n=>'<option value="'+n+'" '+(FCC.filas===n?"selected":"")+'>'+n+'</option>').join("")+
+       '<option value="0" '+(FCC.filas===0?"selected":"")+'>Todas</option></select></div>'+
+     '<div style="min-width:auto"><button class="btn" id="cc_btn">Aplicar</button></div>'+
+     '<div style="min-width:auto"><button class="btn2" onclick="imprimirCCProv('+p.id+')">Imprimir / PDF</button></div>'+
+   '</div>'+
+   tabla+
+   (puede?'<div class="sec">Ajuste manual en '+m+'</div>'+
+     '<div class="muted" style="margin-bottom:8px">Para cargar un saldo inicial o corregir una diferencia en '+(m==="ARS"?"pesos":"dólares")+'. Las facturas y los pagos mueven esta cuenta solos.</div>'+
+     /* la moneda la fija la solapa: el campo va oculto para que ajustarPV lo lea igual */
+     '<input type="hidden" id="pj_moneda" value="'+m+'">'+
+     '<div class="grid">'+
+       '<div class="f"><label>Tipo</label><select id="pj_tipo"><option value="Credito">Le debemos más</option><option value="Debito">Le debemos menos</option></select></div>'+
+       '<div class="f"><label>Importe en '+m+'</label><input type="number" step="0.01" id="pj_importe"></div>'+
+     '</div><div class="f"><label>Detalle *</label><input id="pj_detalle" placeholder="Por qué se ajusta"></div>'+
+     '<div class="acciones"><button class="btn2" onclick="ajustarPV('+p.id+')">Registrar movimiento</button></div>':'');
+}
+
+/* ── Crédito/débito en ventana propia (30/8) ──
+   El mismo ajuste manual de la solapa CC, pero en dlg2 —la ficha ocupa main—
+   para llegarle desde la tarjeta de Acciones sin cambiar de solapa. Los ids
+   llevan prefijo pj2 para no chocar con los de la solapa; ajustarPV acepta el
+   prefijo y guarda con la misma rpc registrar_pv_manual. */
+function formCredDebProv(provId){
+  const p = PROVS.find(x=>x.id===provId) || {};
+  $("d2tit").textContent = "Crédito / débito · "+(p.nombre||"");
+  $("d2body").innerHTML = '<div id="pj2msg"></div>'+
+   '<div class="sec">Ajuste manual de cuenta corriente</div>'+
+   '<div class="muted" style="margin-bottom:8px">Para cargar un saldo inicial o corregir una diferencia. Las facturas y los pagos mueven esta cuenta solos. Este ajuste <b>no toca ninguna caja</b>: es solo la cuenta corriente del proveedor.</div>'+
+   '<div class="grid">'+
+     '<div class="f"><label>Moneda</label><select id="pj2_moneda">'+selTxt(["ARS","USD"],"ARS")+'</select></div>'+
+     '<div class="f"><label>Tipo</label><select id="pj2_tipo"><option value="Credito">Le debemos más</option><option value="Debito">Le debemos menos</option></select></div>'+
+     '<div class="f"><label>Importe</label><input type="number" step="0.01" id="pj2_importe"></div>'+
+   '</div><div class="f"><label>Detalle *</label><input id="pj2_detalle" placeholder="Por qué se ajusta"></div>'+
+   '<div class="acciones"><button class="btn" onclick="ajustarPV('+provId+',\'pj2\')">Guardar</button>'+
+   '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+
 /* ── Solapa: órdenes de compra del proveedor ── */
 function seccionOCProv(p, ocs, facs){
   const facDe = {}; (facs||[]).forEach(function(f){ if (f.orden_id) facDe[f.orden_id] = f; });
@@ -8060,12 +8413,17 @@ function seccionFactProv(p, facs, nots, imput){
    '<div class="muted" style="margin-bottom:8px">Cada factura es deuda con el proveedor. Tocá una para verla, imprimirla, pagarla o anularla. '+
    (vivas.length? (debeTxt ? 'Sin cancelar quedan '+debeTxt+'.' : 'No queda nada sin cancelar.') : '')+'</div>'+
    (facs.length? '<div class="tablewrap" style="max-height:42dvh;overflow:auto"><table><thead><tr>'+
-     ['Comprobante','Fecha','Total','Pagado','Saldo','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     ['Comprobante','Fecha','Vence','Total','Pagado','Saldo','Estado',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      facs.map(function(f){
        const pg = Number(imput[f.id]||0), sal = Number(f.total||0)-pg, e = estadoFactura(f, pg);
        return '<tr'+(f.anulado?' style="opacity:.45;text-decoration:line-through"':'')+'>'+
         '<td><b>'+esc(nroComp(f))+'</b></td>'+
-        '<td>'+fmtF(f.fecha)+'</td><td><b>'+fmtM(f.total,f.moneda)+'</b></td>'+
+        '<td>'+fmtF(f.fecha)+'</td>'+
+        /* 30/8: vencida = con deuda viva y la fecha pasada. Anulada o pagada nunca «vence». */
+        '<td>'+(!f.anulado && sal > 0.009 && f.fecha_vencimiento && String(f.fecha_vencimiento).slice(0,10) < hoy()
+           ? '<b style="color:#7a2415">VENCIDA hace '+diasDesde(f.fecha_vencimiento)+' día'+(diasDesde(f.fecha_vencimiento)===1?'':'s')+'</b>'
+           : (f.fecha_vencimiento?fmtF(f.fecha_vencimiento):''))+'</td>'+
+        '<td><b>'+fmtM(f.total,f.moneda)+'</b></td>'+
         '<td>'+(pg?fmtM(pg,f.moneda):'<span class="muted">—</span>')+'</td>'+
         '<td>'+(f.anulado?'<span class="muted">—</span>':fmtM0(sal,f.moneda))+'</td>'+
         '<td><b style="color:'+e.c+'">'+e.t+'</b></td>'+
@@ -8111,7 +8469,7 @@ function engancharCCProv(provId){
     FCC.desde = $("cc_desde").value || "";
     FCC.hasta = $("cc_hasta").value || "";
     FCC.filas = Number($("cc_filas").value || 50);
-    fichaProveedor(provId, "cc");
+    fichaProveedor(provId, PVTAB);   /* 30/8: conserva la solapa activa (ccars o ccusd) */
   };
 }
 /* Devuelve, para una moneda: saldo anterior al rango, los movimientos del rango
@@ -8143,7 +8501,9 @@ function ccCalcular(mov, m){
 /* Desde un renglón de la cuenta corriente, abrir el comprobante que lo generó:
    la orden de pago, la factura o la nota. Al cerrar vuelve al proveedor. */
 function verMovProv(tipo, ref, provId){
-  _VOLVER_PROV = {id:provId, tab:"cc"};
+  /* 30/8: se guarda la solapa activa (ccars o ccusd), no el viejo "cc": así el
+     Cerrar del comprobante vuelve a la misma moneda que se estaba mirando. */
+  _VOLVER_PROV = {id:provId, tab:PVTAB};
   if (tipo === "pago") return verPagoCompra(ref);
   if (tipo === "factura") return verFactura(ref);
   if (tipo === "nota") return verNota(ref);
@@ -8156,6 +8516,8 @@ function btnVerMov(x, provId){
   const rot = t === "pago" ? "Ver OP" : "Ver";
   return ' <button class="btn2 btn-sm" onclick="verMovProv(\''+t+'\','+x.ref_id+','+provId+')">'+rot+'</button>';
 }
+/* 30/8: sin uso desde hoy — la reemplazan seccionCCProvMon (una solapa por
+   moneda) en la ficha a pantalla completa. Se deja por si hay que volver. */
 function seccionCCProv(p, mov){
   const puede = P("compra-modificar");
   const bloque = function(m){
@@ -8282,6 +8644,13 @@ async function guardarProveedor(id){
   if (!id && r.data) return fichaProveedor(r.data.id);
   $("pvmsg").innerHTML='<div class="msg ok">Guardado.</div>';
   if (VISTA==="provee") VISTAS.provee();
+  else if (VISTA==="prov_ficha"){
+    /* 30/8: la ficha es pantalla propia — se relee el proveedor de la base, se
+       vuelve a dibujar en la solapa Datos y recién ahí se dice «Guardado»
+       (el repintado borra el cartel si se pone antes). */
+    await fichaProveedor(id, "datos");
+    if ($("pvmsg")) $("pvmsg").innerHTML='<div class="msg ok">Guardado.</div>';
+  }
 }
 async function guardarPreciosProv(provId){
   const filas = [];
@@ -8298,19 +8667,26 @@ async function guardarPreciosProv(provId){
   }
   $("pvmsg").innerHTML='<div class="msg ok">Lista de precios guardada: '+filas.length+' producto'+(filas.length===1?"":"s")+'.</div>';
 }
-async function ajustarPV(provId){
-  const imp = Number($("pj_importe").value||0);
-  if (!(imp>0)){ $("pvmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
+async function ajustarPV(provId, pref){
+  /* 30/8: acepta un prefijo de ids —"pj" en la solapa de cuenta corriente,
+     "pj2" en la ventana formCredDebProv— para que el mismo guardado sirva en
+     los dos lados sin duplicar la función ni chocar los ids. */
+  const px = pref || "pj";
+  const msg = $(px === "pj" ? "pvmsg" : px+"msg");
+  const decir = function(h){ if (msg) msg.innerHTML = h; };
+  const imp = Number($(px+"_importe").value||0);
+  if (!(imp>0)){ decir('<div class="msg err">Poné un importe mayor a cero.</div>'); return; }
   /* 26/8, auditoría: el detalle llevaba asterisco y se reemplazaba por la
      palabra «Ajuste». Esa columna es la única explicación que va a quedar de
      por qué cambió el saldo del proveedor. */
-  const det = ($("pj_detalle").value||"").trim();
-  if (!det){ $("pvmsg").innerHTML='<div class="msg err">Escribí el detalle: es lo único que va a explicar este movimiento en la cuenta corriente.</div>'; return; }
-  const {error} = await sb.rpc("registrar_pv_manual",{p_proveedor:provId, p_moneda:$("pj_moneda").value||"ARS",
-    p_tipo:$("pj_tipo").value, p_importe:imp, p_detalle:det});
-  if (error){ $("pvmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const det = ($(px+"_detalle").value||"").trim();
+  if (!det){ decir('<div class="msg err">Escribí el detalle: es lo único que va a explicar este movimiento en la cuenta corriente.</div>'); return; }
+  const {error} = await sb.rpc("registrar_pv_manual",{p_proveedor:provId, p_moneda:$(px+"_moneda").value||"ARS",
+    p_tipo:$(px+"_tipo").value, p_importe:imp, p_detalle:det});
+  if (error){ decir('<div class="msg err">'+esc(error.message)+'</div>'); return; }
   await cargarProveedores();
-  fichaProveedor(provId);
+  if (px !== "pj") cerrarDlg2();   /* 30/8: la ventana de crédito/débito se cierra al guardar */
+  fichaProveedor(provId, PVTAB);
 }
 async function anularPV(movId, provId){
   const motivo = await pedirMotivo("¿Por qué se anula este movimiento?");
@@ -8404,10 +8780,11 @@ async function comFacturas(){
    filtrosCompra("fc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formFacturaCompra()">+ Factura de compra</button></div>':'')+'</div>'+
    (Object.keys(tot).length? '<div class="kpis">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m].t,m)+'</div><div class="muted">neto '+fmtM(tot[m].n,m)+' · impuestos '+fmtM(tot[m].i,m)+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
-     ['Tipo','Punto vta.','Número','Proveedor','Fecha','Neto','Impuestos','Total','Moneda',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
+     ['Tipo','Punto vta.','Número','Proveedor','Fecha','Vence','Neto','Impuestos','Total','Moneda',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
      rows.map(x=>'<tr'+filaAnul(x)+' style="cursor:pointer'+(x.anulado?';opacity:.45;text-decoration:line-through':'')+'" onclick="verFactura('+x.id+')">'+
        '<td>'+esc(x.tipo)+'</td><td>'+esc(x.punto_venta)+'</td><td><b>'+esc(x.nro_comprobante)+'</b></td>'+
        '<td>'+esc(nomProv(x.proveedor_id))+'</td><td>'+fmtF(x.fecha)+'</td>'+
+       '<td>'+(x.fecha_vencimiento?fmtF(x.fecha_vencimiento):'')+'</td>'+  /* 30/8: vencimiento, si lo tiene */
        '<td>'+fmtM(x.neto,x.moneda)+'</td><td>'+fmtM(x.impuestos,x.moneda)+'</td><td><b>'+fmtM(x.total,x.moneda)+'</b></td><td>'+esc(x.moneda)+'</td>'+
        '<td>'+(x.anulado?'<span class="pill no">Anulada</span>':'')+'</td></tr>').join("")+
      '</tbody></table></div>' : '<div class="muted">No hay facturas de compra con esos filtros.</div>');
@@ -8453,10 +8830,13 @@ function avisoSinProveedores(){
 
 /* ─── Orden de compra ─── */
 let OC = null;
-function formOrdenCompra(){
+function formOrdenCompra(provId){
   $("dtit").textContent = "Orden de compra";
   if (!PROVS.filter(p=>p.activo).length){ $("dbody").innerHTML = avisoSinProveedores(); try{$("dlg").showModal();}catch(e){} return; }
-  OC = {proveedor_id:null, fecha:hoy(), fecha_recepcion:"", moneda:"USD", obs:"", items:[]};
+  /* 30/8: desde la ficha del proveedor viene elegido, como el pago y la
+     factura. Los llamadores viejos sin argumento siguen arrancando en blanco;
+     el select del proveedor lo pinta selProv con este valor. */
+  OC = {proveedor_id:provId||null, fecha:hoy(), fecha_recepcion:"", moneda:"USD", obs:"", items:[]};
   pintarOC(); try{ $("dlg").showModal(); }catch(e){}
 }
 function pintarOC(){
@@ -8531,7 +8911,10 @@ async function guardarOC(){
   const {error} = await sb.rpc("registrar_orden_compra",{p_proveedor:Number(OC.proveedor_id), p_fecha:OC.fecha||hoy(),
     p_fecha_recepcion:OC.fecha_recepcion||null, p_moneda:OC.moneda, p_items:OC.items, p_obs:OC.obs||null});
   if (error) return err(error.message);
-  $("dlg").close(); VISTAS.compras();
+  /* 30/8: si la orden se cargó desde la ficha del proveedor, se vuelve ahí
+     —con los datos releídos— en vez de expulsar a Compras. Es el mismo
+     criterio de la auditoría del 25/8 para los demás guardados de Compras. */
+  await volverDeCompras();
 }
 async function anularOC(id){
   /* 23/8, Gustavo: «no se puede anular nada que tenga mercadería recibida o
@@ -8551,7 +8934,9 @@ async function anularOC(id){
   const m = await pedirMotivo("¿Por qué se anula esta orden de compra?\n\nNo tiene nada recibido: no entró mercadería al depósito.", "Orden de compra"); if (m===null) return;
   const {error} = await sb.rpc("anular_orden_compra",{p_id:id, p_motivo:m||"Sin motivo"});
   if (error) return alert(error.message);
-  VISTAS.compras();
+  /* 30/8 auditoría: mismo camino de vuelta que anularFactura/anularPago — cierra el
+     diálogo y, si se vino de la ficha del proveedor, vuelve a la ficha con datos frescos. */
+  await volverDeCompras();
 }
 
 /* ─── Factura de compra ─── */
@@ -8563,7 +8948,7 @@ async function formFacturaCompra(provId){
   if (!PRODS.length) await cargarCatalogo();
   /* 25/8, auditoría: el botón de la ficha del proveedor abría el formulario en
      blanco y había que volver a elegirlo. Ahora se precarga, como el pago. */
-  FAC = {proveedor_id:provId||null, tipo:"Factura A", punto_venta:"", nro:"", fecha:hoy(), moneda:"ARS", neto:0, obs:"", imp:[], items:[], orden_id:null};
+  FAC = {proveedor_id:provId||null, tipo:"Factura A", punto_venta:"", nro:"", fecha:hoy(), venc:"", moneda:"ARS", neto:0, obs:"", imp:[], desc:[], items:[], orden_id:null}; /* 30/8: venc = vencimiento que da el proveedor (opcional); desc = descuentos del comprobante */
   pintarFac(); try{ $("dlg").showModal(); }catch(e){}
   if (provId) await facProvElegido();
 }
@@ -8577,6 +8962,8 @@ function pintarFac(){
      '<div class="f"><label>Punto de venta '+AST+'</label><input id="fa_pv" value="'+esc(FAC.punto_venta)+'" placeholder="0001"></div>'+
      '<div class="f"><label>Número '+AST+'</label><input id="fa_nro" value="'+esc(FAC.nro)+'" placeholder="00001234"></div>'+
      '<div class="f"><label>Fecha</label><input type="date" id="fa_fecha" value="'+FAC.fecha+'"></div>'+
+     /* 30/8: vencimiento opcional — la fecha de pago que da el proveedor. De acá sale el aviso de factura vencida. */
+     '<div class="f"><label>Vence <span class="muted" style="font-size:.85em">(la fecha de pago que da el proveedor — dejala vacía si no la trae)</span></label><input type="date" id="fa_venc" value="'+(FAC.venc||"")+'"></div>'+
      '<div class="f"><label>Moneda</label><select id="fa_moneda"><option value="ARS" '+(FAC.moneda==="ARS"?"selected":"")+'>ARS</option><option value="USD" '+(FAC.moneda==="USD"?"selected":"")+'>USD</option></select></div>'+
      '<div class="f"><label>Neto gravado *</label><input type="number" step="0.01" id="fa_neto" value="'+(FAC.neto||"")+'" oninput="facSincro(); facItemsTotal()"></div>'+
    '</div>'+
@@ -8599,11 +8986,17 @@ function pintarFac(){
    '<input type="number" step="0.01" id="fa_imp_pct" placeholder="%" style="width:70px" title="Porcentaje fijo, si lo tiene. Dejalo vacío si cambia según el caso, como los derechos de aduana.">'+
    '<button class="btn2 btn-sm" onclick="tipoImpAgregar()">Agregar a la lista</button></div></div>'+
    '<div id="fa_imps"></div>'+
+   /* 30/8: descuentos del comprobante — espejo de los impuestos, pero RESTAN del total */
+   '<div class="sec">Descuentos del comprobante</div>'+
+   '<div class="muted" style="margin-bottom:8px">Lo que el proveedor descuenta en esta factura: pronto pago, bonificación. <b>Restan del total.</b></div>'+
+   '<div class="acciones" style="margin-bottom:8px"><button class="btn2 btn-sm" onclick="facDescAgregar()">+ Descuento</button></div>'+
+   '<div id="fa_descs"></div>'+
    '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="fa_obs" value="'+esc(FAC.obs)+'"></div>'+
    '<div id="fa_tot" style="margin-top:8px"></div>'+
    '<div class="acciones"><button class="btn" id="fa_guardar" onclick="guardarFactura()">Registrar factura</button>'+
    '<button class="btn2" onclick="document.getElementById(\'dlg\').close()">Cancelar</button></div>';
   pintarFacImp();
+  pintarFacDesc(); /* 30/8: si había descuentos cargados, se repintan */
   pintarFacItems();
 }
 /* redondeo a dos decimales, para que el importe calculado no arrastre centésimas */
@@ -8619,6 +9012,14 @@ function facSincro(){
     if (p) x.porcentaje = p.value===""?null:Number(p.value);
     if (i) x.importe = i.value===""?0:Number(i.value);
   });
+  /* 30/8: los descuentos se leen igual que los impuestos, del DOM al estado */
+  (FAC.desc||[]).forEach(function(x,k){
+    const d=$("fd_"+k+"_detalle"), i=$("fd_"+k+"_importe");
+    if (d) x.detalle = d.value;
+    if (i) x.importe = i.value===""?0:Number(i.value);
+  });
+  /* 30/8: el vencimiento se lee aparte, con su nombre completo, para que se encuentre al buscarlo */
+  const ve=$("fa_venc"); if (ve) FAC.venc = ve.value;
   ["prov","tipo","pv","nro","fecha","moneda","neto","obs"].forEach(function(c){
     const el=$("fa_"+c); if(!el) return;
     if (c==="prov") FAC.proveedor_id=el.value||null;
@@ -8716,16 +9117,45 @@ function pintarFacImp(){
    }).join("")+'</tbody></table></div>';
   pintarFacTot();
 }
+/* ══ Descuentos del comprobante (30/8) ══
+   Espejo de los impuestos pero al revés: RESTAN del total. Pronto pago,
+   bonificación. El detalle es obligatorio al guardar, porque un descuento sin
+   explicación no lo entiende nadie después. Mientras se escribe NO se redibuja
+   la tabla (misma lección del bug de Gilda del 13/8): facSincro() actualiza el
+   estado y el total, nada más. */
+function facDescAgregar(){
+  facSincro();
+  FAC.desc.push({detalle:"", importe:""});
+  pintarFacDesc();
+}
+function facDescQuitar(k){ facSincro(); FAC.desc.splice(k,1); pintarFacDesc(); }
+function pintarFacDesc(){
+  const el = $("fa_descs"); if (!el) return;
+  el.innerHTML = !FAC.desc.length ? '' :
+   '<div class="tablewrap"><table><thead><tr><th style="min-width:220px">Detalle</th><th>Importe</th><th></th></tr></thead><tbody>'+
+   FAC.desc.map(function(x,k){
+     return '<tr><td><input style="width:100%" id="fd_'+k+'_detalle" value="'+esc(x.detalle)+'" oninput="facSincro()" placeholder="Pronto pago, bonificación…"></td>'+
+     '<td><input type="number" step="0.01" min="0" style="width:130px" id="fd_'+k+'_importe" value="'+(x.importe||"")+'" oninput="facSincro()"></td>'+
+     '<td><button class="btn2 btn-sm" onclick="facDescQuitar('+k+')">Quitar</button></td></tr>';
+   }).join("")+'</tbody></table></div>';
+  pintarFacTot();
+}
 function pintarFacTot(){
   const m = FAC.moneda||"ARS";
   const imp = FAC.imp.reduce((a,x)=>a+Number(x.importe||0),0);
-  const tot = Number(FAC.neto||0)+imp;
+  /* 30/8: los descuentos restan del total; si lo superan, cartel rojo (y guardarFactura lo frena) */
+  const dsc = (FAC.desc||[]).reduce((a,x)=>a+Number(x.importe||0),0);
+  const tot = Number(FAC.neto||0)+imp-dsc;
   const el = $("fa_tot"); if (!el) return;
   el.innerHTML = '<div class="tablewrap"><table><tbody>'+
    '<tr><td>Neto gravado</td><td style="text-align:right">'+fmtM0(FAC.neto,m)+'</td></tr>'+
    '<tr><td>Impuestos</td><td style="text-align:right">'+(fmtM(imp,m)||"—")+'</td></tr>'+
-   '<tr style="background:#f6f3ee"><td><b>TOTAL de la factura</b></td><td style="text-align:right;font-size:17px"><b>'+(fmtM(tot,m)||"—")+'</b></td></tr>'+
-   '</tbody></table></div>';
+   (dsc>0 ? '<tr><td>Descuentos</td><td style="text-align:right">−'+fmtM(dsc,m)+'</td></tr>' : '')+
+   '<tr style="background:#f6f3ee"><td><b>TOTAL de la factura</b></td><td style="text-align:right;font-size:17px"><b>'+fmtM0(tot,m)+'</b></td></tr>'+   /* 30/8 auditoría: acá el cero es dato — fmtM lo escondía */
+   '</tbody></table></div>'+
+   (dsc > Number(FAC.neto||0)+imp ? '<div class="msg err"><b>Los descuentos superan la factura.</b> Revisá los importes antes de guardar.</div>' : '')+
+   /* 30/8 auditoría: un importe en negativo INFLA el total en pantalla y el guardado lo descarta — dos números distintos sobre la misma plata */
+   ((FAC.desc||[]).some(function(x){ return Number(x.importe||0) < 0; }) ? '<div class="msg err"><b>Hay un descuento con importe en negativo.</b> Cargalo en positivo: el sistema ya lo resta solo.</div>' : '');
   const b = $("fa_guardar"); if (b) b.textContent = tot>0 ? ("Registrar factura por "+fmtM(tot,m)) : "Registrar factura";
 }
 /* ══════════════════════════════════════════════════════════════════════════
@@ -8905,9 +9335,33 @@ async function guardarFactura(){
   const itemsVivos = FAC.items.filter(function(x){ return Number(x.cantidad||0) > 0 && (x.producto_id || String(x.descripcion||"").trim()); })
     .map(function(x){ return {producto_id: x.producto_id?Number(x.producto_id):null, descripcion:x.descripcion||"",
                               cantidad:Number(x.cantidad||0), precio_unit:Number(x.precio_unit||0)}; });
-  const r = await sb.rpc("registrar_factura_compra",{p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
+  /* 30/8 — descuentos del comprobante. Candados ANTES de mandar nada:
+     un descuento con plata y sin detalle no se guarda (el detalle es lo único
+     que lo va a explicar después), y un total negativo tampoco. */
+  if ((FAC.desc||[]).some(function(x){ return Number(x.importe||0) < 0; }))
+    return err("Hay un descuento con importe en negativo. Cargalo en positivo: el sistema ya lo resta. No se registró nada.");
+  if ((FAC.desc||[]).some(function(x){ return Number(x.importe)>0 && !String(x.detalle||"").trim(); }))
+    return err("Escribí el detalle del descuento: es lo único que lo va a explicar después.");
+  const descVivos = (FAC.desc||[]).filter(function(x){ return Number(x.importe)>0 && String(x.detalle||"").trim(); })
+    .map(function(x){ return {detalle:String(x.detalle).trim(), importe:Number(x.importe)}; });
+  const impTot = filas.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  const descTot = descVivos.reduce(function(a,x){ return a+Number(x.importe||0); },0);
+  if (Number(FAC.neto)+impTot-descTot < 0)
+    return err("Los descuentos superan la factura: el total quedaría negativo. Revisá los importes; no se registró nada.");
+  /* 30/8: vencimiento y descuentos viajan SOLO si se cargaron, para que la
+     función vieja de la base (sin migración v85) siga andando con las facturas
+     de siempre (la migración v85 es la que agrega fecha_vencimiento y la tabla
+     factura_descuentos). Si van y la base no los conoce, el rpc falla con el
+     código de «función desconocida» y se avisa clarito más abajo — no se
+     registra nada a medias. */
+  const args = {p_proveedor:Number(FAC.proveedor_id), p_tipo:FAC.tipo,
     p_punto_venta:FAC.punto_venta||null, p_nro:FAC.nro||null, p_fecha:FAC.fecha||hoy(), p_moneda:FAC.moneda,
-    p_neto:Number(FAC.neto), p_impuestos:filas, p_items:itemsVivos, p_obs:FAC.obs||null, p_orden:FAC.orden_id||null});
+    p_neto:Number(FAC.neto), p_impuestos:filas, p_items:itemsVivos, p_obs:FAC.obs||null, p_orden:FAC.orden_id||null};
+  if (FAC.venc) args.p_vencimiento = FAC.venc;
+  if (descVivos.length) args.p_descuentos = descVivos;
+  const r = await sb.rpc("registrar_factura_compra", args);
+  if (r.error && r.error.code==="PGRST202")
+    return err("La factura NO se registró: el vencimiento o los descuentos necesitan la migración v85, que todavía no se corrió. Sacá esos datos y guardá, o avisá para correr la migración. No se tocó nada.");
   /* v61 (14/8): la base ya no acepta dos comprobantes iguales del mismo
      proveedor. El error viene técnico; acá se dice en criollo. */
   if (r.error) return err(esDuplicado(r.error)
@@ -8937,6 +9391,17 @@ async function guardarFactura(){
        se calculó cada impuesto no — se dice, no se traga */
     if (rd.error) alert("La factura quedó registrada BIEN, pero el detalle de base y porcentaje de los impuestos no se pudo guardar ("+rd.error.message+"). Los importes están; solo falta el detalle del cálculo.");
   }
+  /* 30/8 auditoría: mismo re-chequeo que los renglones, pero para la plata. Si la base
+     ignoró los descuentos (migración v85 a medias), el total guardado no es el de la
+     pantalla — y eso se dice, no se supone. */
+  if (idFac && descVivos.length){
+    try{
+      const chk2 = await sb.from("facturas_compra").select("total").eq("id", idFac).single();
+      const esperado = dos(Number(FAC.neto)+impTot-descTot);
+      if (!chk2.error && chk2.data && Math.abs(Number(chk2.data.total)-esperado) > 0.009)
+        alert("OJO: la factura se registró, pero la base guardó un total de "+fmtM0(chk2.data.total,FAC.moneda)+" y la pantalla decía "+fmtM0(esperado,FAC.moneda)+".\nSeguramente la base no restó los descuentos: falta una parte de la migración v85. Avisá antes de pagar esta factura.");
+    }catch(e){}
+  }
   await cargarProveedores(); await volverDeCompras();
 }
 /* 13/8, Gilda: «al cerrar la consulta VER, que no salga del proveedor». Se
@@ -8954,15 +9419,23 @@ async function volverDeCompras(){
   const pv = _VOLVER_PROV; _VOLVER_PROV = null;
   try{ $("dlg").close(); }catch(e){}
   if (pv){ await fichaProveedor(pv.id, pv.tab); return; }
+  /* 30/8: la ficha del proveedor ahora es pantalla propia. Un pago, una factura
+     o una orden guardados desde ahí vuelven a la ficha, con los datos releídos. */
+  if (VISTA === "prov_ficha" && PROVF){ await fichaProveedor(PROVF.p.id, PVTAB); return; }
   if (VISTA === "provee"){ try{ VISTAS.provee(); }catch(e){} return; }
   VISTAS.compras();
 }
 async function verFactura(id){
-  const [f,i,im] = await Promise.all([
+  const [f,i,im,de] = await Promise.all([
     sb.from("facturas_compra").select("*").eq("id",id).single(),
     sb.from("factura_impuestos").select("*").eq("factura_id",id).order("id"),
-    sb.from("pago_imputaciones").select("*").eq("factura_id",id)
+    sb.from("pago_imputaciones").select("*").eq("factura_id",id),
+    /* 30/8: los descuentos del comprobante. Si la tabla todavía no existe
+       (falta la migración v85), el error se tolera y la lista queda vacía,
+       sin cartel: la factura vieja no tiene por qué enterarse. */
+    sb.from("factura_descuentos").select("*").eq("factura_id",id).order("id")
   ]);
+  const descs = (de && !de.error && de.data) ? de.data : [];
   if (f.error) return alert(f.error.message);
   const x = f.data;
   if (!PROVS.length) await cargarProveedores();
@@ -8995,6 +9468,11 @@ async function verFactura(id){
      '<div class="f"><label>Total</label><div><b>'+fmtM(x.total,x.moneda)+'</b></div></div>'+
      '<div class="f"><label>Estado</label><div><b style="color:'+est.c+'">'+est.t+'</b></div></div>'+
      '<div class="f"><label>Saldo a pagar</label><div><b>'+(x.anulado?'—':fmtM0(saldoFac,x.moneda))+'</b></div></div>'+
+     /* 30/8: vencimiento. Si hay deuda viva y la fecha ya pasó, se dice en rojo y con los días. */
+     '<div class="f"><label>Vence</label><div>'+(!x.fecha_vencimiento ? '<span class="muted">—</span>'
+        : (!x.anulado && saldoFac > 0.009 && String(x.fecha_vencimiento).slice(0,10) < hoy()
+           ? '<b style="color:#7a2415">VENCIDA hace '+diasDesde(x.fecha_vencimiento)+' día'+(diasDesde(x.fecha_vencimiento)===1?'':'s')+'</b>'
+           : fmtF(x.fecha_vencimiento)))+'</div></div>'+
      '<div class="f"><label>Orden de compra</label><div>'+(oc
         ? '<a href="javascript:void(0)" onclick="verOrdenCompra('+oc.id+')"><b>'+esc(oc.codigo)+'</b></a>'
         : '<span class="muted">sin orden asociada</span>')+'</div></div>'+
@@ -9022,6 +9500,12 @@ async function verFactura(id){
        '<td>'+esc(t.detalle)+'</td><td style="text-align:right">'+fmtM(t.importe,x.moneda)+'</td></tr>').join("")+
      '<tr style="background:#f6f3ee"><td colspan="2"><b>Neto gravado</b></td><td style="text-align:right"><b>'+fmtM(x.neto,x.moneda)+'</b></td></tr>'+
      '</tbody></table></div>' : '<div class="muted">Sin impuestos discriminados.</div>')+
+   /* 30/8: los descuentos del comprobante, en negativo porque restan del total */
+   (descs.length ? '<div class="sec">Descuentos del comprobante</div>'+
+     '<div class="tablewrap"><table><thead><tr><th>Detalle</th><th style="text-align:right">Importe</th></tr></thead><tbody>'+
+     descs.map(function(t){ return '<tr><td>'+esc(t.detalle)+'</td><td style="text-align:right">−'+fmtM(t.importe,x.moneda)+'</td></tr>'; }).join("")+
+     '<tr style="background:#f6f3ee"><td><b>Total descuentos</b></td><td style="text-align:right"><b>−'+fmtM(descs.reduce(function(a,t){ return a+Number(t.importe||0); },0),x.moneda)+'</b></td></tr>'+
+     '</tbody></table></div>' : '')+
    selloAuditoria(x)+
    '<div class="acciones">'+
    (!x.anulado && saldoFac > 0.009 && P("compra-modificar")?'<button class="btn" onclick="formPagoCompra('+x.proveedor_id+')">Pagar esta factura</button>':'')+
@@ -11673,7 +12157,7 @@ async function fichaCliente(id, pre){
      '<div class="f"><label>Celular</label><input id="y_celular" value="'+esc(v("celular"))+'" '+d+'></div>'+
      '<div class="f"><label>Email</label><input id="y_email" value="'+esc(v("email"))+'" '+d+'></div>'+
      '<div class="f"><label>Dirección</label><input id="y_direccion" value="'+esc(v("direccion"))+'" '+d+'></div>'+
-     '<div class="f"><label>Localidad</label><select id="y_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select></div>'+
+     '<div class="f"><label>Localidad</label><div style="display:flex;gap:6px"><select id="y_localidad_id" '+d+'>'+selOpts(M.loc,v("localidad_id"))+'</select>'+btnLocMas('y_localidad_id', d!=="")+'</div></div>'+
      '<div class="f"><label>Cómo nos conoció</label><select id="y_origen_id" '+d+'>'+selOpts(M.ori,v("origen_id"))+'</select></div>'+
      '<div class="f"><label>Lista de precios</label><select id="y_lista_id" '+d+'>'+selOpts(LISTAS,v("lista_id"))+'</select></div>'+
      /* Migración v49 (9/8/2026). La lista «Tipo de clientes» existía en Tablas
