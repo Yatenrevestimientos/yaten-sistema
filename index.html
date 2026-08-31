@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.31-161";
+const VERSION = "v2026.08.31-162";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -892,6 +892,15 @@ function ir(v, sub){
   (VISTAS[v]||VISTAS.tablero)();
 }
 
+/* ── Búsqueda al servidor (31/8, tanda 3) ──
+   PostgREST rompe el .or() si el texto trae comas, paréntesis o comillas
+   («failed to parse logic tree», visto el 10/8), y % o \ se meten al LIKE.
+   UN solo limpiador para todas las búsquedas que viajan a la base; los dos
+   que ya existían (prospectos y presupuestos) pasan a usar este. */
+function txtServidor(t){
+  return String(t||"").replace(/[(),"\\%]/g," ").replace(/\s+/g," ").trim();
+}
+
 /* ─────────── DATOS ─────────── */
 const COLS = "id,codigo,fecha,estado,canal_id,origen_id,vl_id,motivo_consulta,decide_con,nombre,telefono,celular,email,localidad_id,direccion,objecion_entrada_id,notas_ato,derivacion,ato_id,fecha_visita,hora_visita,observaciones_previas,m2_cotizados,m2_colocar,resultado,nro_presup_papel,fecha_papel_a_vl,importe,moneda,producto_2do,objecion_visita_id,tipo_venta,motivo_descarte_id,creado_en";
 async function traerProspectos(f){
@@ -905,7 +914,7 @@ async function traerProspectos(f){
     if (f.vl)  q = q.eq("vl_id", f.vl);
     /* 10/8: una coma o un paréntesis en la búsqueda rompía el filtro de
        PostgREST («failed to parse logic tree»). Se limpian antes de armar. */
-    const ftxt = (f.texto||"").replace(/[(),]/g," ").trim();
+    const ftxt = txtServidor(f.texto);
     if (ftxt) q = q.or("nombre.ilike.%"+ftxt+"%,codigo.ilike.%"+ftxt+"%,telefono.ilike.%"+ftxt+"%,celular.ilike.%"+ftxt+"%,email.ilike.%"+ftxt+"%,direccion.ilike.%"+ftxt+"%,motivo_consulta.ilike.%"+ftxt+"%,nro_presup_papel.ilike.%"+ftxt+"%");
   }
   const {data,error} = await q;
@@ -1471,7 +1480,21 @@ async function locRapidaGuardar(selId){
   /* se recarga SOLO la maestra de localidades y se repinta SOLO el select:
      repintar el formulario entero perdería lo que ya se tipeó */
   const r2 = await sb.from("localidades").select("id,nombre,zona,visita_propia,activo").order("nombre");
-  M.loc = r2.data || M.loc;
+  if (r2.error){
+    /* 31/8, tanda 3 (anotación del auditor T2): el alta YA anduvo — el rpc v85
+       devolvió el id. Si la relectura falla, el select quedaba sin la localidad
+       nueva y el reintento del usuario la duplicaba. Mismo arreglo que
+       concRapidoGuardar (O4): se arma la fila con el id devuelto y se suma a la
+       maestra en memoria; el resto se refresca en la próxima carga. El rpc
+       normaliza espacios, así que la fila en memoria puede diferir en eso
+       hasta la próxima recarga — aceptable. */
+    const idNuevo = r.data;
+    if (idNuevo != null && !(M.loc||[]).some(function(x){ return String(x.id)===String(idNuevo); }))
+      M.loc = (M.loc||[]).concat([{id:idNuevo, nombre:n, zona:null, visita_propia:false, activo:true}])
+        .sort(function(a,b){ return String(a.nombre||"").localeCompare(String(b.nombre||"")); });
+  } else {
+    M.loc = r2.data || M.loc;
+  }
   if (sel) sel.innerHTML = selOpts(M.loc, r.data || null);
   cerrarDlg2();
 }
@@ -1621,6 +1644,18 @@ const HORAS_VISITA = (function(){
     l.push(String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0"));
   return l;
 })();
+/* 31/8, P3: la columna «Etapa» de la maestra de objeciones por fin filtra los
+   desplegables. Conservador: solo se esconde la que claramente es de la OTRA
+   etapa; vacía, «Ambas» o cualquier otro texto aparece en los dos. La ya
+   elegida se muestra siempre, aunque no corresponda (molde selOpts). */
+function objecionesDe(etapa, val){
+  const otra = etapa === "Entrada" ? "visita" : "entrada";
+  return (M.obj||[]).filter(function(x){
+    if (String(x.id) === String(val)) return true;
+    const e = String(x.etapa||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
+    return e !== otra;
+  });
+}
 function selHoraVisita(id, val, dis){
   const v = String(val==null?"":val).trim();
   const lista = HORAS_VISITA.slice();
@@ -1742,7 +1777,7 @@ function formHTML(p, ro, lig){
   '</div><div class="grid">'+
     '<div class="f"><label>Motivo de consulta '+AST2+'</label><input id="c_motivo_consulta" value="'+esc(p.motivo_consulta)+'" '+d+'></div>'+
     '<div class="f"><label>Decide con</label><input id="c_decide_con" value="'+esc(p.decide_con)+'" '+d+'></div>'+
-    '<div class="f"><label>Objeción de entrada</label><select id="c_objecion_entrada_id" '+d+'>'+selOpts(M.obj,p.objecion_entrada_id)+'</select></div>'+
+    '<div class="f"><label>Objeción de entrada</label><select id="c_objecion_entrada_id" '+d+'>'+selOpts(objecionesDe("Entrada",p.objecion_entrada_id),p.objecion_entrada_id)+'</select></div>'+
   '</div><div class="grid">'+
     '<div class="f"><label>Derivación '+AST2+'</label><select id="c_derivacion" '+d+' onchange="togglePorDerivacion()">'+selTxt(DERIVA,p.derivacion)+'</select>'+
       '<div class="muted" style="font-size:.85em;margin-top:4px">Se decide acá, cuando entra el cliente. Con «Presupuesto directo» el sistema saltea la visita.</div></div>'+
@@ -1808,7 +1843,7 @@ function formHTML(p, ro, lig){
         '<div class="f"><label>m² cotizados</label><input id="c_ro_m2c" value="'+(p.m2_cotizados==null?"":p.m2_cotizados)+'" disabled></div>'+
         '<div class="f"><label>m² a colocar</label><input id="c_ro_m2p" value="'+(p.m2_colocar==null?"":p.m2_colocar)+'" disabled></div>'
       : '')+
-    '<div class="f"><label>Objeción</label><select id="c_objecion_visita_id" '+d+'>'+selOpts(M.obj,p.objecion_visita_id)+'</select></div>'+
+    '<div class="f"><label>Objeción</label><select id="c_objecion_visita_id" '+d+'>'+selOpts(objecionesDe("Visita",p.objecion_visita_id),p.objecion_visita_id)+'</select></div>'+
     '<div class="f"><label>2do producto</label><input id="c_producto_2do" value="'+esc(p.producto_2do)+'" '+d+'></div>'+
     '<div class="f"><label>Motivo de descarte</label><select id="c_motivo_descarte_id" '+d+'>'+motivosDe("Prospecto",p.motivo_descarte_id)+'</select></div>'+
   '</div>'+
@@ -2844,17 +2879,17 @@ async function guardarProducto(id){
 const MAESTRAS = [
   {k:"loc", tabla:"localidades",      titulo:"Localidades",
    ayuda:"Toda localidad donde vendas o entregues. Si aparece una nueva, agregala acá y queda disponible en el acto. El tilde «Visita propia» es el que separa el embudo del tablero: tildado son las localidades donde el ATO sale a visitar (Bariloche y Dina Huapi); sin tildar son alrededores, donde se vende producto sin visita.",
-   cols:[{c:"zona", t:"Zona", ph:"Bariloche, Cordillera, Alto Valle…"},
+   cols:[{c:"zona", t:"Zona", ph:"Bariloche, Cordillera, Alto Valle…", sinuso:true},
          {c:"visita_propia", t:"Visita propia", chk:true}]},
   {k:"can", tabla:"canales_contacto", titulo:"Canales de contacto",
    ayuda:"Por dónde entró el contacto: WhatsApp, Instagram, teléfono, visita al local.",
    cols:[]},
   {k:"ori", tabla:"origenes",         titulo:"Cómo nos conocieron",
    ayuda:"Cada acción de publicidad o vía de recomendación. Cuando pruebes algo nuevo, lo agregás acá con su costo y después el reporte de orígenes te dice si sirvió.",
-   cols:[{c:"tipo", t:"Tipo", ph:"Organico, Pago, Referido, Offline"},
+   cols:[{c:"tipo", t:"Tipo", ph:"Organico, Pago, Referido, Offline", sinuso:true},
          {c:"costo_mensual", t:"Costo mensual", num:true, ph:"0"}]},
   {k:"obj", tabla:"objeciones",       titulo:"Objeciones",
-   ayuda:"El motivo que frena la venta. Sirve para saber contra qué estás peleando.",
+   ayuda:"El motivo que frena la venta. Sirve para saber contra qué estás peleando. La Etapa dice en qué desplegable aparece; vacía o «Ambas» = en los dos.",
    cols:[{c:"etapa", t:"Etapa", ph:"Entrada, Visita, Ambas"}]},
   {k:"mot", tabla:"motivos",          titulo:"Motivos de descarte",
    ayuda:"Por qué se cae un prospecto o un presupuesto.",
@@ -2895,8 +2930,8 @@ const MAESTRAS = [
    ayuda:"Con qué paga la gente: efectivo, transferencia, débito, cada tarjeta y cada plan de cuotas. El «Tipo» agrupa la familia (Crédito, Débito, Efectivo…) para filtrar de a montones. El «Costo %» es lo que te descuenta esa forma de pago: el arancel de la tarjeta más lo que te cuesta el plan de cuotas. Es el dato con el que el Estado de resultado calcula cuánta plata se te va en financiación — si lo dejás vacío, esa venta se cuenta como si no te costara nada.",
    cols:[{c:"tipo", t:"Tipo", ph:"Crédito, Débito, Efectivo, Transferencia…"},
          {c:"costo_pct", t:"Costo %", num:true, ph:"0"},
-         {c:"cuotas", t:"Cuotas", num:true, ph:"1"},
-         {c:"dias_acreditacion", t:"Días en acreditar", num:true, ph:"0"}]},
+         {c:"cuotas", t:"Cuotas", num:true, ph:"1", sinuso:true},
+         {c:"dias_acreditacion", t:"Días en acreditar", num:true, ph:"0", sinuso:true}]},
   {k:"tcl", extra:true, tabla:"tipos_cliente", titulo:"Tipo de clientes",
    ayuda:"Consumidor final, arquitecto, constructora, revendedor. Si le ponés un descuento, se sugiere solo cuando le hagas un presupuesto.",
    cols:[{c:"descuento_pct", t:"Descuento %", num:true, ph:"0"}]},
@@ -2906,7 +2941,7 @@ const MAESTRAS = [
          {c:"comision_pct", t:"Comisión %", num:true, ph:"0"}]},
   {k:"ins", extra:true, tabla:"instaladores", titulo:"Instaladores",
    ayuda:"La cuadrilla que coloca. El costo por m² es lo que le pagás a él, no lo que le cobrás al cliente: sirve para saber cuánto te queda de la venta instalada.",
-   cols:[{c:"telefono", t:"Teléfono", ph:""},{c:"email", t:"Email", ph:""},
+   cols:[{c:"telefono", t:"Teléfono", ph:"", sinuso:true},{c:"email", t:"Email", ph:"", sinuso:true},
          {c:"costo_m2", t:"Costo por m²", num:true, ph:"0"}]},
   {k:"man", extra:true, tabla:"motivos_anulacion", titulo:"Motivos de anulación", orden:"aplica_a",
    ayuda:"Nada se borra en el sistema: se anula con un motivo, y queda quién lo anuló y cuándo. En «Aplica a» ponés a qué documento corresponde el motivo (Remito, Presupuesto, Prospecto, Pago, Factura de compra, Orden de compra) o «Todos» si sirve para cualquiera.",
@@ -2984,7 +3019,12 @@ function maestraBloque(m){
     return '<div class="panel"><h2>'+m.titulo+'</h2><div class="desc">'+m.ayuda+'</div>'+
       '<div id="msg_'+m.k+'"></div>'+
       '<div class="tablewrap"><table><thead><tr><th>Nombre</th>'+
-        m.cols.map(c=>'<th>'+c.t+'</th>').join("")+'<th>Activo</th>'+(puede?'<th></th>':'')+
+        /* 31/8, P3: la auditoría del 25/8 encontró columnas que los formularios
+           cargan y ninguna pantalla del sistema lee (zona, tipo de origen,
+           cuotas, días en acreditar, teléfono/email de instaladores). Marcarlas
+           «(sin uso todavía)» es más honesto que fingir que sirven; borrarlas
+           es decisión de Gustavo. Etapa de objeciones SÍ se conectó (objecionesDe). */
+        m.cols.map(c=>'<th>'+c.t+(c.sinuso?' <span class="muted" style="font-weight:400" title="Se guarda, pero ninguna pantalla del sistema lo usa todavía">(sin uso todavía)</span>':'')+'</th>').join("")+'<th>Activo</th>'+(puede?'<th></th>':'')+
       '</tr></thead><tbody>'+filaNueva+filas+'</tbody></table></div>'+
       '<div class="muted" style="margin-top:8px">'+arr.length+' registros · '+arr.filter(o=>o.activo).length+' activos</div></div>';
 }
@@ -5309,7 +5349,7 @@ async function pintarPresupuestos(){
   }
   if (FPRE.desde)  q = q.gte("fecha", FPRE.desde);
   if (FPRE.hasta)  q = q.lte("fecha", FPRE.hasta);
-  const ptxt = (FPRE.texto||"").replace(/[(),]/g," ").trim();
+  const ptxt = txtServidor(FPRE.texto);
   if (ptxt)  q = q.or("cliente_nombre.ilike.%"+ptxt+"%,codigo.ilike.%"+ptxt+"%,nro_papel.ilike.%"+ptxt+"%,cliente_tel.ilike.%"+ptxt+"%,cliente_email.ilike.%"+ptxt+"%,direccion_obra.ilike.%"+ptxt+"%");
   const {data,error} = await q;
   if (error){ $("qlista").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
@@ -8581,15 +8621,19 @@ function seccionFactProv(p, facs, nots, imput){
 
 function seccionPreciosProv(p, precios){
   const puede = P("compra-modificar");
-  const mapa = {}; precios.forEach(x=>{ mapa[x.producto_id] = x; });
+  /* 31/8, v87: si hay historial, solo se edita la fila vigente; las cerradas quedan en la base */
+  const mapa = preciosVigentes(precios);
+  const conVig = precios.some(function(x){ return x.vigencia_desde && x.vigencia_hasta == null; });
   const activos = PRODS.filter(x=>x.activo);
   return '<div class="sec">Lista de precios de este proveedor</div>'+
    '<div class="muted" style="margin-bottom:8px">Lo que <b>nos cobra</b> este proveedor por cada producto. Sirve para comparar cotizaciones antes de armar un embarque. Dejalo vacío en los productos que no le compramos.</div>'+
-   (activos.length? '<div class="tablewrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Código</th><th>Producto</th><th>Precio en ARS</th><th>Precio en USD</th></tr></thead><tbody>'+
+   (conVig?'<div class="muted" style="margin-bottom:8px">Al guardar, el precio que cambia pasa al historial con su fecha: nada se pisa.</div>':'')+
+   (activos.length? '<div class="tablewrap" style="max-height:300px;overflow:auto"><table><thead><tr><th>Código</th><th>Producto</th><th>Precio en ARS</th><th>Precio en USD</th>'+(conVig?'<th>Vigente desde</th>':'')+'</tr></thead><tbody>'+
      activos.map(function(x){ const pr = mapa[x.id]||{};
        return '<tr><td>'+esc(x.codigo)+'</td><td>'+esc(x.nombre)+'</td>'+
         '<td><input type="number" step="0.01" style="width:120px" id="pp_'+x.id+'_ars" value="'+(pr.precio_ars==null?"":pr.precio_ars)+'" '+(puede?"":"disabled")+'></td>'+
-        '<td><input type="number" step="0.01" style="width:120px" id="pp_'+x.id+'_usd" value="'+(pr.precio_usd==null?"":pr.precio_usd)+'" '+(puede?"":"disabled")+'></td></tr>';
+        '<td><input type="number" step="0.01" style="width:120px" id="pp_'+x.id+'_usd" value="'+(pr.precio_usd==null?"":pr.precio_usd)+'" '+(puede?"":"disabled")+'></td>'+
+        (conVig?'<td class="muted">'+(pr.vigencia_desde?fmtF(pr.vigencia_desde):"—")+'</td>':"")+'</tr>';
      }).join("")+'</tbody></table></div>'+
      (puede?'<div class="acciones" style="margin-top:8px"><button class="btn2 btn-sm" onclick="guardarPreciosProv('+p.id+')">Guardar la lista de precios</button></div>':'')
     : '<div class="muted">Todavía no hay productos cargados en el catálogo.</div>');
@@ -8605,6 +8649,10 @@ function engancharCCProv(provId){
     FCC.desde = $("cc_desde").value || "";
     FCC.hasta = $("cc_hasta").value || "";
     FCC.filas = Number($("cc_filas").value || 50);
+    /* 31/8, tanda 3 (anotación de E2 T2): mismo gesto que irTabProv — la ficha
+       vuelve a pedir TODO a la base y hasta que termina no repinta; sin esto,
+       «Aplicar» parecía muerto. El token PVSEQ ya descarta la respuesta vieja. */
+    const cvg = $("pvcuerpo"); if (cvg) cvg.innerHTML = '<div class="msg">Cargando…</div>';
     fichaProveedor(provId, PVTAB);   /* 30/8: conserva la solapa activa (ccars o ccusd) */
   };
 }
@@ -8796,6 +8844,30 @@ async function guardarPreciosProv(provId){
     const va = a.value===""?null:Number(a.value), vu = u.value===""?null:Number(u.value);
     if (va!=null || vu!=null) filas.push({proveedor_id:provId, producto_id:x.id, precio_ars:va, precio_usd:vu});
   });
+  const v87 = await db87();
+  if (v87 === null){
+    /* 31/8, auditor T3 (H3): la sonda falló por algo que no es «columna
+       inexistente» (red, permisos, timeout). No se sabe si la base ya guarda
+       historial: correr el camino viejo (delete+insert) podría borrarlo.
+       No se toca nada y se avisa. */
+    $("pvmsg").innerHTML='<div class="msg err">No se pudo confirmar el estado de la base y no se guardó nada, para no arriesgar el historial de precios. Probá de nuevo en un momento.</div>';
+    return;
+  }
+  if (v87){
+    /* 31/8, v87: con vigencia, guarda la función de la base — cierra lo que
+       cambió (vigencia_hasta = hoy) e inserta lo nuevo, en UNA transacción.
+       Lo idéntico no se toca: guardar dos veces no duplica historial. */
+    const r = await sb.rpc("guardar_precios_proveedor", {p_proveedor: provId, p_filas: filas});
+    if (r.error){
+      if (r.error.code === "PGRST202"){ $("pvmsg").innerHTML='<div class="msg err">La base tiene las columnas de vigencia pero falta la función de la migración v87: no se guardó nada. Avisá para correrla completa.</div>'; return; }
+      $("pvmsg").innerHTML='<div class="msg err">'+esc(r.error.message)+'</div>'; return;
+    }
+    /* hoy la función, después de guardar bien, solo muestra el cartel (no
+       repinta la ficha): acá igual, para que el comportamiento no cambie */
+    $("pvmsg").innerHTML='<div class="msg ok">'+esc(r.data||"Lista de precios guardada.")+'</div>';
+    return;
+  }
+  /* sin migración v87: el camino de siempre (delete+insert, sin historia) */
   await sb.from("proveedor_precios").delete().eq("proveedor_id",provId);
   if (filas.length){
     const r = await sb.from("proveedor_precios").insert(filas);
@@ -8836,6 +8908,37 @@ async function anularPV(movId, provId){
 /* ═══════════ COMPRAS ═══════════ */
 let COM = {tab:"ordenes", texto:"", desde:"", hasta:"", anulados:false};
 let TIMP = [];
+/* 31/8, v87: ¿la base ya tiene la vigencia en proveedor_precios? Antes de la
+   migración la columna no existe y el select falla: se sigue por el camino viejo. */
+async function db87(){
+  if (window._db87 !== undefined) return window._db87;
+  const t = await sb.from("proveedor_precios").select("vigencia_hasta").limit(1);
+  if (!t.error){ window._db87 = true; return true; }
+  /* 31/8, auditor T3 (H3): solo «la columna no existe» (42703) prueba que la
+     base NO está migrada. Antes CUALQUIER error (red, permisos) cacheaba false
+     toda la sesión y, con la base ya migrada, el guardado caía al delete+insert
+     viejo y borraba el historial de precios en silencio. Ante un error que no
+     se entiende se devuelve null = «no se sabe», SIN cachear — el próximo
+     intento vuelve a sondear — y guardarPreciosProv frena con cartel: regla de
+     la casa, nada se borra; ante la duda no se corre el delete. */
+  const m = String(t.error.message||"");
+  if (t.error.code === "42703" || /does not exist/i.test(m) || /vigencia_hasta/i.test(m)){
+    window._db87 = false; return false;
+  }
+  return null;
+}
+/* 31/8, v87: la fila vigente de cada producto es la abierta (vigencia_hasta null).
+   Antes de la migración la columna no existe y undefined==null deja pasar todo,
+   como siempre. Si por una falla hubiera dos abiertas, manda la de id más alto. */
+function preciosVigentes(filas){
+  const porProd = {};
+  (filas||[]).forEach(function(x){
+    if (x.vigencia_hasta != null) return;
+    const y = porProd[x.producto_id];
+    if (!y || Number(x.id||0) > Number(y.id||0)) porProd[x.producto_id] = x;
+  });
+  return porProd;
+}
 async function db17(){
   if (window._db17 !== undefined) return window._db17;
   const t = await sb.from("facturas_compra").select("id").limit(1);
@@ -8874,6 +8977,30 @@ function engancharFiltros(id){
     COM.anulados=$(id+"_anul").value==="1"; COM.texto=$(id+"_txt").value.trim(); VISTAS.compras();
   };
 }
+/* 31/8, P1: los filtros de Compras van AL SERVIDOR. Antes TODO se filtraba
+   sobre los 400 más nuevos — hasta las fechas: pedir marzo mostraba vacío
+   aunque marzo existiera. aplicaFiltro sigue corriendo sobre lo traído
+   (mismas columnas: no cambia el resultado, cambia dónde se corta). */
+function qCompras(q, colsIlike){
+  if (COM.desde) q = q.gte("fecha", COM.desde);
+  if (COM.hasta) q = q.lte("fecha", COM.hasta);
+  if (!COM.anulados) q = q.eq("anulado", false);
+  const t = txtServidor(COM.texto);
+  if (t){
+    /* 31/8, auditor T3 (H1): mismos dos arreglos que en Ventas — % entre
+       palabras en el patrón del ilike, y el nombre del proveedor limpio con
+       txtServidor antes de comparar. Sin esto, buscar «Pérez, Hnos.» tal cual
+       figura daba pantalla vacía: el .in no viajaba (texto limpio contra nombre
+       crudo) y el ilike literal no encontraba el dato con coma o doble espacio.
+       El filtro local (aplicaFiltro) sigue decidiendo qué se muestra. */
+    const pat = t.replace(/ /g,"%");
+    const partes = (colsIlike||[]).map(function(c){ return c+".ilike.%"+pat+"%"; });
+    const ids = PROVS.filter(function(p){ return txtServidor(p.nombre).toLowerCase().indexOf(t.toLowerCase())>=0; }).map(function(p){ return p.id; });
+    if (ids.length) partes.push("proveedor_id.in.("+ids.join(",")+")");
+    if (partes.length) q = q.or(partes.join(","));
+  }
+  return q;
+}
 function aplicaFiltro(x, extra){
   const t = COM.texto.toLowerCase();
   if (COM.desde && x.fecha < COM.desde) return false;
@@ -8886,9 +9013,12 @@ const filaAnul = x => x.anulado ? ' style="opacity:.45;text-decoration:line-thro
 
 async function comOrdenes(){
   const puede = P("compra-modificar");
-  const {data} = await sb.from("ordenes_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  const {data,error} = await qCompras(sb.from("ordenes_compra").select("*"), ["codigo","observaciones"]).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  if (error){ $("cbody").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const recortado = (data||[]).length >= 400;
   const rows = (data||[]).filter(x=>aplicaFiltro(x, x.codigo));
   $("cbody").innerHTML = '<div class="desc">Lo que le pedimos al proveedor y todavía no llegó. La <b>fecha de recepción</b> es la que alimenta el pendiente de recepción del stock.</div>'+
+   (recortado?'<div class="msg" style="margin-bottom:8px">Se muestran los <b>400</b> más nuevos que cumplen el filtro: hay más que no se ven. Achicá el rango de fechas.</div>':'')+
    filtrosCompra("oc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formOrdenCompra()">+ Orden de compra</button></div>':'')+'</div>'+
    '<div class="muted" style="margin-bottom:8px">Hacé clic en cualquier renglón para <b>ver la orden</b> con sus productos y cuánto falta recibir.</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
@@ -8909,10 +9039,17 @@ async function comOrdenes(){
 }
 async function comFacturas(){
   const puede = P("compra-modificar");
-  const {data} = await sb.from("facturas_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  /* 31/8, auditor T3 (H2): punto_venta también viaja al .or — el filtro local
+     (aplicaFiltro) lo mira desde siempre y sin esto buscar «0002» daba vacío:
+     servidor y pantalla filtraban por columnas distintas. Es text en la base
+     (verificado por el director, 31/8). */
+  const {data,error} = await qCompras(sb.from("facturas_compra").select("*"), ["nro_comprobante","observaciones","punto_venta"]).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  if (error){ $("cbody").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const recortado = (data||[]).length >= 400;
   const rows = (data||[]).filter(x=>aplicaFiltro(x, (x.punto_venta||"")+" "+(x.nro_comprobante||"")));
   const tot = {}; rows.filter(x=>!x.anulado).forEach(x=>{ const m=x.moneda; tot[m]=tot[m]||{n:0,i:0,t:0}; tot[m].n+=Number(x.neto||0); tot[m].i+=Number(x.impuestos||0); tot[m].t+=Number(x.total||0); });
   $("cbody").innerHTML = '<div class="desc">Cada factura de compra le suma deuda al proveedor. Los impuestos se cargan uno por uno —IVA, percepciones, ingresos brutos, derechos de aduana—, cada uno con su base y su alícuota. Hacé clic en cualquier renglón para ver la factura.</div>'+
+   (recortado?'<div class="msg" style="margin-bottom:8px">Se muestran los <b>400</b> más nuevos que cumplen el filtro: hay más que no se ven. Achicá el rango de fechas.</div>':'')+
    filtrosCompra("fc")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formFacturaCompra()">+ Factura de compra</button></div>':'')+'</div>'+
    (Object.keys(tot).length? '<div class="kpis">'+Object.keys(tot).map(m=>'<div class="kpi"><div class="t">Total en '+m+'</div><div class="n">'+fmtM(tot[m].t,m)+'</div><div class="muted">neto '+fmtM(tot[m].n,m)+' · impuestos '+fmtM(tot[m].i,m)+'</div></div>').join("")+'</div>':'')+
    (rows.length? '<div class="tablewrap" style="max-height:55dvh;overflow:auto"><table><thead><tr>'+
@@ -8928,9 +9065,13 @@ async function comFacturas(){
 }
 async function comNotas(){
   const puede = P("compra-modificar");
-  const {data} = await sb.from("notas_proveedor").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  /* 31/8, auditor T3 (H2): punto_venta al .or, ídem comFacturas. */
+  const {data,error} = await qCompras(sb.from("notas_proveedor").select("*"), ["nro_comprobante","observaciones","tipo","punto_venta"]).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  if (error){ $("cbody").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const recortado = (data||[]).length >= 400;
   const rows = (data||[]).filter(x=>aplicaFiltro(x, (x.punto_venta||"")+" "+(x.nro_comprobante||"")+" "+x.tipo));
   $("cbody").innerHTML = '<div class="desc">Para corregir una factura sin borrarla. La nota de <b>crédito baja</b> lo que le debemos al proveedor; la de <b>débito lo sube</b>.</div>'+
+   (recortado?'<div class="msg" style="margin-bottom:8px">Se muestran los <b>400</b> más nuevos que cumplen el filtro: hay más que no se ven. Achicá el rango de fechas.</div>':'')+
    filtrosCompra("np")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formNotaProv()">+ Nota</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
      ['Tipo','Punto vta.','Número','Proveedor','Fecha','Neto','Impuestos','Total','Moneda',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
@@ -8944,9 +9085,12 @@ async function comNotas(){
 }
 async function comPagos(){
   const puede = P("compra-modificar");
-  const {data} = await sb.from("pagos_compra").select("*").order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  const {data,error} = await qCompras(sb.from("pagos_compra").select("*"), ["codigo","observaciones"]).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400);
+  if (error){ $("cbody").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
+  const recortado = (data||[]).length >= 400;
   const rows = (data||[]).filter(x=>aplicaFiltro(x, x.codigo));
   $("cbody").innerHTML = '<div class="desc">La plata que le sale al negocio para pagarle al proveedor. Baja la deuda con él y baja el saldo de la cuenta de donde sale, en una sola operación.</div>'+
+   (recortado?'<div class="msg" style="margin-bottom:8px">Se muestran los <b>400</b> más nuevos que cumplen el filtro: hay más que no se ven. Achicá el rango de fechas.</div>':'')+
    filtrosCompra("pg")+(puede?'<div style="min-width:auto;margin-left:auto"><button class="btn" onclick="formPagoCompra()">+ Pago a proveedor</button></div>':'')+'</div>'+
    (rows.length? '<div class="tablewrap" style="max-height:60dvh;overflow:auto"><table><thead><tr>'+
      ['Orden de Pago','Proveedor','Fecha','Importe','Moneda','Sale de','Observaciones',''].map(h=>'<th>'+h+'</th>').join("")+'</tr></thead><tbody>'+
@@ -9326,7 +9470,7 @@ async function facProvElegido(){
       sb.from("proveedor_precios").select("*").eq("proveedor_id", Number(FAC.proveedor_id))
     ]);
     FAC_OCS = oc.data||[];
-    (pp.data||[]).forEach(function(x){ FAC_PPRECIOS[x.producto_id] = x; });
+    FAC_PPRECIOS = preciosVigentes(pp.data);   /* 31/8, v87: solo la fila vigente de cada producto */
   }
   const sel = $("fa_orden");
   if (sel) sel.innerHTML = facOpcionesOC();
@@ -10497,6 +10641,31 @@ VISTAS.ventas = async function(){
   if (SUBVISTA === "encurso")    q = q.eq("estado","En curso");
   else if (SUBVISTA === "cerradas")   q = q.eq("estado","Cerrada");
   else if (SUBVISTA === "pendientes") q = q.eq("estado","Pendiente a cerrar");
+  const tSrvV = txtServidor(FVEN.texto);
+  let busqVRecortada = false;   /* 31/8, auditor T3 (H5): la lista de ids del buscador se recorta a 300 — el cartel de abajo lo dice */
+  if (tSrvV){
+    /* 31/8, P1: la búsqueda va al servidor — antes buscaba solo entre las 500
+       traídas y una venta vieja no aparecía ni buscándola. Mismas columnas que
+       el filtro de abajo: código, observaciones, y el cliente resuelto contra
+       CLIS (si CLIS viene recortado a 1000, el nombre viejo puede no matchear:
+       queda anotado, el código de venta siempre matchea). Tope de 300 ids para
+       no reventar el largo de la URL. */
+    /* 31/8, auditor T3 (H1): dos arreglos del doble filtro.
+       1) El patrón del ilike lleva % entre palabras: txtServidor saca comas y
+          colapsa espacios, y el ilike literal no encontraba el dato crudo
+          («pago  contado» con doble espacio, «Pérez, Juan» con coma). % es el
+          comodín del LIKE: matchea de más en el servidor, nunca de menos, y el
+          filtro local de abajo sigue decidiendo qué se muestra.
+       2) El nombre del cliente se limpia con el MISMO txtServidor antes de
+          comparar: buscar «Pérez, Juan» tal cual figura daba pantalla vacía
+          (texto limpio contra nombre crudo → el .in no viajaba). */
+    const patV = tSrvV.replace(/ /g,"%");
+    const partes = ["codigo.ilike.%"+patV+"%","observaciones.ilike.%"+patV+"%"];
+    const cIds = CLIS.filter(function(c){ return txtServidor(c.nombre).toLowerCase().indexOf(tSrvV.toLowerCase())>=0; }).map(function(c){ return c.id; });
+    if (cIds.length > 300){ cIds.length = 300; busqVRecortada = true; }   /* 31/8 (H5): recorta con aviso */
+    if (cIds.length) partes.push("cliente_id.in.("+cIds.join(",")+")");
+    q = q.or(partes.join(","));
+  }
   const {data,error} = await q;
   if (error){ $("main").innerHTML = '<div class="msg err">'+esc(error.message)+'</div>'; return; }
   const recortadoV = (data||[]).length === 500;
@@ -10523,7 +10692,8 @@ VISTAS.ventas = async function(){
   const rotV = {encurso:"Ventas en curso", cerradas:"Ventas cerradas", pendientes:"Ventas pendientes a cerrar"}[SUBVISTA] || "Historial de ventas";
   $("main").innerHTML = '<div class="panel"><h2>'+rotV+'</h2>'+
    '<div class="desc">Cada venta nace de un presupuesto pasado a «Vendido» y genera sola la deuda en la cuenta corriente del cliente. No se borra: se anula, y la anulación revierte la deuda.</div>'+
-   (recortadoV?'<div class="msg" style="margin-bottom:8px">Se muestran las <b>500</b> ventas más nuevas del rango: hay más que no se ven, y el buscador solo busca entre estas. Achicá el rango de fechas.</div>':'')+
+   (recortadoV?'<div class="msg" style="margin-bottom:8px">Se muestran las <b>500</b> ventas más nuevas del rango: hay más que no se ven. Achicá el rango de fechas, o buscá: la búsqueda va a la base y encuentra también lo viejo.</div>':'')+
+   (busqVRecortada?'<div class="msg" style="margin-bottom:8px">El texto coincide con más de <b>300</b> clientes: la búsqueda en la base usó los primeros 300 y puede faltar alguna venta. Escribí el nombre más completo.</div>':'')+
    '<div class="filtros">'+
      '<div><label>Desde</label><input type="date" id="vf_desde" value="'+FVEN.desde+'"></div>'+
      '<div><label>Hasta</label><input type="date" id="vf_hasta" value="'+FVEN.hasta+'"></div>'+
@@ -12119,6 +12289,39 @@ VISTAS.clientes = async function(){
   const verPlata = P("cliente-historial");
   if (SUBVISTA === "morosos") FDEUDA = true;
   else if (SUBVISTA === "afavor") FDEUDA = false;
+  /* 31/8, P1: CLIS llega recortado por el tope de PostgREST (1000 filas) y SIN
+     cartel: un cliente viejo que no entró no aparecía ni buscándolo. Con texto
+     y el tope alcanzado, se piden a la base los que matchean (mismas columnas
+     que el filtro de abajo) y se SUMAN a CLIS — la ficha y nomCli buscan ahí.
+     Con menos de 1000 clientes esta rama duerme y todo sigue igual. */
+  const clisRecortado = CLIS.length >= 1000;
+  const tSrv = txtServidor(FCLI);
+  let errBusq = "", busqClisRecortada = false;
+  if (clisRecortado && tSrv){
+    /* 31/8, auditor T3 (H1): misma receta que Ventas y Compras — nombre de la
+       localidad limpio con txtServidor antes de comparar, y % entre palabras en
+       el patrón, para que el texto limpio (sin comas ni espacios dobles)
+       encuentre el dato crudo. Matchea de más, nunca de menos: el filtro local
+       de abajo sigue decidiendo qué se ve. */
+    const locIds = (M.loc||[]).filter(l=>txtServidor(l.nombre).toLowerCase().indexOf(tSrv.toLowerCase())>=0).map(l=>l.id);
+    const patC = tSrv.replace(/ /g,"%");
+    const partes = ["nombre","codigo","telefono","celular","nro_doc","email","direccion","observaciones"]
+      .map(c=>c+".ilike.%"+patC+"%");
+    if (locIds.length) partes.push("localidad_id.in.("+locIds.join(",")+")");
+    const rb = await sb.from("clientes").select("*").or(partes.join(",")).order("nombre").limit(1000);
+    if (rb.error) errBusq = rb.error.message;
+    else {
+      let sumo = false;
+      (rb.data||[]).forEach(function(c){ if (!CLIS.some(x=>x.id===c.id)){ CLIS.push(c); sumo = true; } });
+      /* 31/8, auditor T3 (H4): lo hallado en la base iba al FINAL de una lista
+         alfabética de cientos de filas — el que no mira el fondo cree que el
+         cliente no está. Se reordena, igual que locRapidaGuardar. */
+      if (sumo) CLIS.sort(function(a,b){ return String(a.nombre||"").localeCompare(String(b.nombre||"")); });
+      /* 31/8, auditor T3 (H6): la búsqueda extra también tiene tope — si lo
+         alcanza, cartel: toda lista que se recorta lleva cartel. */
+      if ((rb.data||[]).length >= 1000) busqClisRecortada = true;
+    }
+  }
   const t = FCLI.toLowerCase();
   let rows = CLIS.filter(c => !t || (c.nombre+" "+(c.codigo||"")+" "+(c.telefono||"")+" "+(c.celular||"")+" "+(c.nro_doc||"")+" "+(c.email||"")+" "+(c.direccion||"")+" "+nom(M.loc,c.localidad_id)+" "+(c.observaciones||"")).toLowerCase().indexOf(t)>=0);
   /* Filtro por forma de pago: para eso se anota la preferencia. «Todas las de
@@ -12169,6 +12372,9 @@ VISTAS.clientes = async function(){
   const cuenta = m => rows.filter(c => favor ? saldoCli(c.id,m)<0 : saldoCli(c.id,m)>0).length;
   $("main").innerHTML = '<div class="panel"><h2>'+(SUBVISTA==="morosos"?"Clientes morosos":(favor?"Clientes con saldo a favor":"Clientes"))+'</h2>'+
    '<div class="desc">'+(SUBVISTA==="morosos"?'Todos los que te deben plata, del más atrasado al más nuevo. Si tiene saldo, está acá: no hace falta que la deuda tenga una antigüedad mínima. Tocá la fila para entrar a la ficha y cobrarle.':(favor?'Los que pagaron de más o dejaron seña sin aplicar.':'Cada cliente tiene su cuenta corriente en pesos y en dólares. Una venta le suma deuda, una cobranza se la baja.'))+'</div>'+
+   (clisRecortado?'<div class="msg" style="margin-bottom:8px">Hay más de 1.000 clientes: la lista muestra los primeros, pero el buscador busca en <b>todos</b> desde la base.</div>':'')+
+   (errBusq?'<div class="msg err" style="margin-bottom:8px">La búsqueda en la base falló: '+esc(errBusq)+'. Se muestra solo lo ya traído.</div>':'')+
+   (busqClisRecortada?'<div class="msg" style="margin-bottom:8px">La búsqueda coincide con más de <b>1.000</b> clientes y se recortó: puede faltar alguno. Escribí un texto más completo.</div>':'')+
    '<div class="filtros"><div style="min-width:300px"><label>Buscar</label><input id="cf_txt" placeholder="nombre, teléfono, dirección, email, documento, localidad…" value="'+esc(FCLI)+'"></div>'+
    (SUBVISTA||!verPlata?'':'<div><label>Ver</label><select id="cf_deuda"><option value="0" '+(FDEUDA?"":"selected")+'>Todos los clientes</option><option value="1" '+(FDEUDA?"selected":"")+'>Solo los que me deben ('+cuantosDeben+')</option></select></div>')+
    (M.mpg? '<div><label>Forma de pago</label><select id="cf_mpg"><option value="">Todas</option>'+
