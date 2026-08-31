@@ -276,7 +276,7 @@ const SB_URL = "https://xcprsduktitgkowdlyvl.supabase.co";
 const SB_KEY = "sb_publishable_PtmtCbNGs3yug0SBJ0jc9w_ABMb8zWF";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const VERSION = "v2026.08.30-160";
+const VERSION = "v2026.08.31-161";
 let PERFIL = null, M = {}, EQUIPO = [], VISTA = "tablero";
 let PRODS = [], TIPOSP = [], LISTAS = [], PRECIOS = {};   // catalogo en memoria
 let PRE = null;                                           // presupuesto abierto en edicion
@@ -1475,6 +1475,90 @@ async function locRapidaGuardar(selId){
   if (sel) sel.innerHTML = selOpts(M.loc, r.data || null);
   cerrarDlg2();
 }
+/* ── Conceptos de plata conectados a sus formularios (30/8) ──
+   Las tres maestras (conceptos_transferencia, conceptos_pago, conceptos_ingreso)
+   existían en Tablas básicas y NADIE las leía: se cargaban conceptos y no
+   aparecían en ningún formulario. Verificado en Pirka el 26/8: allá el concepto
+   elegido alimenta el Detalle del movimiento. Acá igual: el elegido viaja
+   ADENTRO del texto que ya viaja («Concepto — detalle»), sin columnas nuevas,
+   igual que el motivo de pedirMotivo viaja en el texto de anulación.
+   conceptos_cobranza ya estaba conectada (no se toca); el retiro queda afuera.
+   Si la maestra no tiene filas activas, el campo NI SE PINTA: todo queda como hoy. */
+const CONC_PLATA = {ctr:"conceptos_transferencia", cpa:"conceptos_pago", cin:"conceptos_ingreso"};
+function optsConcepto(lista, val){
+  /* «Otro…» primero: el concepto es opcional; sin elegir nada se guarda como siempre.
+     Se muestran las activas, más la ya elegida aunque esté de baja (molde selOpts). */
+  const vis = (lista||[]).filter(o=>o.activo!==false || String(val)===String(o.id));
+  return '<option value="">Otro…</option>' + vis.map(o=>'<option value="'+o.id+'" '+(String(val)===String(o.id)?"selected":"")+'>'+esc(o.nombre)+(o.activo!==false?"":" (de baja)")+'</option>').join("");
+}
+function conceptoDeSel(selId, lista){
+  /* nombre del concepto elegido en un select, o "" si el campo no se pintó o no eligió */
+  const sel = $(selId);
+  if (!sel || !sel.value) return "";
+  return nom(lista||[], Number(sel.value));
+}
+function componerConcepto(cNombre, detalle){
+  /* compone el texto que viaja en obs/detalle: el concepto NO tiene columna propia */
+  const d = String(detalle||"").trim();
+  if (!cNombre) return d || null;
+  return d ? (cNombre + " — " + d) : cNombre;
+}
+function btnConcMas(k, selId){
+  return ' <button class="btn2 btn-sm" type="button" title="Agregar un concepto nuevo" onclick="concRapido(\''+k+'\',\''+selId+'\')">+</button>';
+}
+/* Mismo molde que locRapida (30/8): quien está registrando plata y le falta el
+   concepto no tiene que cortar e irse a Tablas básicas. En dlg2 porque el
+   formulario vive en dlg: queda encima. */
+async function concRapido(k, selId){
+  $("d2tit").textContent = "Concepto nuevo";
+  $("d2body").innerHTML = '<div id="crmsg"></div>'+
+    '<div class="f"><label>Nombre *</label><input id="conc_nuevo"></div>'+
+    '<div class="acciones"><button class="btn" onclick="concRapidoGuardar(\''+k+'\',\''+selId+'\')">Agregar</button>'+
+    '<button class="btn2" onclick="cerrarDlg2()">Cancelar</button></div>';
+  try{ dlg2().showModal(); }catch(e){}
+}
+async function concRapidoGuardar(k, selId){
+  const err = t => { const e=$("crmsg"); if (e) e.innerHTML='<div class="msg err">'+esc(t)+'</div>'; };
+  const n = ($("conc_nuevo")||{value:""}).value.trim();
+  if (!n) return err("Escribí el nombre del concepto.");
+  const sel = $(selId);
+  /* si ya existe (aunque cambien mayúsculas o tildes) no se duplica: se elige y
+     listo; y uno DE BAJA no se elige en silencio — mismo criterio que localidades */
+  const igual = s => String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
+  const ya = (M[k]||[]).find(x=>igual(x.nombre)===igual(n));
+  if (ya && ya.activo===false) return err("«"+ya.nombre+"» ya existe pero está dado de baja. Reactivalo desde Tablas básicas y volvé a elegirlo acá.");
+  if (ya){ if (sel) sel.innerHTML = optsConcepto(M[k], ya.id); cerrarDlg2(); return; }
+  /* insert directo, molde concGastoAgregar — sin rpc. Si la política de la tabla
+     frena para algún rol, el error se ve acá mismo (la decisión quedó anotada en
+     el borrador v86: política espejo de conceptos_gasto o función security definer). */
+  /* 30/8 auditor: .select().single() trae la fila insertada con su id. Sin eso,
+     si la relectura de abajo fallaba, el diálogo se cerraba mudo SIN el concepto
+     en el select, y el reintento del usuario metía una fila DUPLICADA en la
+     tabla (el control de duplicados mira la maestra en memoria, que quedó vieja). */
+  const {data:fila, error} = await sb.from(CONC_PLATA[k]).insert({nombre:n, activo:true}).select().single();
+  if (error) return err(error.message);
+  /* se recarga SOLO esa maestra y se repinta SOLO el select: repintar el
+     formulario entero perdería lo que ya se tipeó */
+  const r2 = await sb.from(CONC_PLATA[k]).select("*").order("nombre");
+  if (r2.error && fila){
+    /* 30/8 auditor: el alta YA anduvo — que la relectura falle no puede dejar el
+       diálogo mudo ni el select sin el concepto (eso invitaba a cargarlo de
+       nuevo y duplicaba). Se suma la fila devuelta a la maestra en memoria; el
+       resto de la lista se refresca solo en la próxima carga de maestras. */
+    if (!(M[k]||[]).some(x=>x.id===fila.id))
+      M[k] = (M[k]||[]).concat([fila]).sort(function(a,b){ return String(a.nombre||"").localeCompare(String(b.nombre||"")); });
+  } else if (!r2.error){
+    M[k] = r2.data || [];
+  }
+  const nue = fila || (M[k]||[]).find(x=>igual(x.nombre)===igual(n));
+  if (sel) sel.innerHTML = optsConcepto(M[k], nue ? nue.id : null);
+  cerrarDlg2();
+}
+function ajTipoCambio(){
+  /* el concepto de ingreso solo aplica cuando ENTRA plata: al sacar se esconde */
+  const box = $("aj_conc_box");
+  if (box) box.style.display = ($("aj_tipo").value==="Ingreso") ? "" : "none";
+}
 /* opciones de cuentas de dinero: solo las activas, con la moneda a la vista */
 function optCtas(lista){
   return (lista||[]).map(c=>'<option value="'+c.id+'">'+esc(c.nombre)+' ('+c.moneda+')</option>').join("");
@@ -2385,12 +2469,22 @@ async function hrImprimir(){
   if (!de || !ha) return err("Poné las dos fechas del rango.");
   if (de > ha) return err("«Desde» no puede ser posterior a «Hasta».");
   const atoId = ($("hr_ato")||{}).value ? Number($("hr_ato").value) : null;
-  /* mismo camino que la pantalla de agenda: traerProspectos (últimas 1000 fichas) */
-  const todos = await traerProspectos();
-  const rows = todos.filter(function(p){
-    return p.fecha_visita && p.fecha_visita >= de && p.fecha_visita <= ha &&
-           (!atoId || Number(p.ato_id) === atoId);
-  });
+  /* 30/8: antes reusaba traerProspectos() (últimas 1000 fichas por fecha de
+     CARGA): una visita agendada sobre una ficha vieja quedaba fuera del papel
+     sin aviso. La impresión hace ahora su propia consulta por fecha_visita,
+     que es lo que se imprime, con tope 2000 y cartel si se llega al tope. */
+  let q = sb.from("prospectos").select(COLS)
+    .not("fecha_visita","is",null)
+    .gte("fecha_visita", de).lte("fecha_visita", ha);
+  /* 30/8 auditor: el filtro de ATO va EN la consulta, no después en la pantalla.
+     Filtrando acá afuera, con el rango al tope de 2000 el papel podía decir a la
+     vez «se imprimen las primeras 2000» y «no hay visitas en el rango», y faltar
+     visitas del ATO sin aviso cierto. En la base, el tope de 2000 cuenta visitas
+     DEL ATO elegido y el cartel de recorte dice siempre la verdad. */
+  if (atoId) q = q.eq("ato_id", atoId);
+  const {data, error} = await q.order("fecha_visita").order("id").limit(2000);
+  if (error) return err(error.message);
+  const rows = data||[];   /* 30/8 auditor: ya vienen filtradas por ATO desde la base */
   rows.sort(function(a,b){
     const ka = a.fecha_visita+" "+(a.hora_visita||""), kb = b.fecha_visita+" "+(b.hora_visita||"");
     return ka > kb ? 1 : -1;
@@ -2398,9 +2492,9 @@ async function hrImprimir(){
   try{ document.getElementById("dlg").close(); }catch(e){}
   const rango = fmtF(de)+(de===ha ? "" : " al "+fmtF(ha));
   const titulo = 'Hoja de ruta de visitas · '+rango+(atoId ? ' · '+esc(nomP(atoId)) : '');
-  /* traerProspectos corta en 1000 por fecha de carga: si vino al tope puede faltar algo viejo */
-  const notaCorte = todos.length >= 1000
-    ? '<div style="font-size:10px;color:#7a2415;margin:6px 0">Ojo: el sistema leyó las últimas 1000 fichas; si hay más, puede faltar alguna visita de fichas viejas.</div>' : '';
+  /* 30/8: la consulta corta en 2000 visitas: si vino al tope, avisar en el papel */
+  const notaCorte = rows.length >= 2000
+    ? '<div style="font-size:10px;color:#7a2415;margin:6px 0">Se imprimen las primeras 2000 visitas — achicá el rango de fechas.</div>' : '';
   const html = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Hoja de ruta</title><style>'+
    'body{font:12px Georgia,serif;color:#1b2426;margin:26px}'+
    'table{width:100%;border-collapse:collapse;margin:8px 0}th,td{padding:5px 7px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}'+
@@ -7952,6 +8046,7 @@ VISTAS.provee = async function(){
    desde el proveedor, que es donde se las busca. */
 let PVTAB = "datos";
 let PROVF = null;   /* 30/8: lo cargado para la ficha del proveedor a pantalla completa (molde CLI del cliente) */
+let PVSEQ = 0;      /* 30/8 auditor: número del último pedido de ficha lanzado — fichaProveedor lo incrementa al entrar y lo chequea al volver de la base, para tirar las respuestas que ya nadie espera */
 /* Quién cargó o anuló un documento — la auditoría en criollo */
 function quienEs(uuid){
   if (!uuid) return "—";
@@ -7976,8 +8071,20 @@ function tabsProv(p){
       return '<button class="'+(act?"btn":"btn2")+' btn-sm" onclick="irTabProv('+p.id+',\''+t[0]+'\')">'+t[1]+'</button>';
     }).join("")+'</div>';
 }
-function irTabProv(id, tab){ PVTAB = tab; fichaProveedor(id); }
+function irTabProv(id, tab){
+  PVTAB = tab;
+  /* 30/8: fichaProveedor vuelve a pedir TODO a la base y hasta que termina no
+     redibuja; el usuario tocaba la solapa y no pasaba nada. Cartel al toque. */
+  const c = $("pvcuerpo");
+  if (c) c.innerHTML = '<div class="msg">Cargando…</div>';
+  fichaProveedor(id);
+}
 async function fichaProveedor(id, tab){
+  /* 30/8 auditor: token contra respuestas tardías. La ficha pide TODO a la base
+     y recién al final repinta; si mientras esperaba el usuario tocó Volver, se
+     fue por el menú o abrió OTRO proveedor, esta respuesta ya no la espera
+     nadie: pintarla igual era el bug (la ficha vieja pisaba la pantalla nueva). */
+  const mio = ++PVSEQ, v0 = VISTA;
   if (tab) PVTAB = tab;
   /* 30/8: la cuenta corriente pasó de una solapa «cc» a dos («ccars»/«ccusd»).
      Los _VOLVER_PROV viejos y cualquier llamador que traiga "cc" caen en pesos. */
@@ -7987,7 +8094,7 @@ async function fichaProveedor(id, tab){
   const puede = P("compra-modificar");
   const d = puede?"":"disabled";
   const v = k => p ? (p[k]==null?"":p[k]) : "";
-  let mov = [], precios = [], ocs = [], facs = [], nots = [], imput = {}, pagos = [], medios = [], chqPagos = {};
+  let mov = [], precios = [], ocs = [], facs = [], nots = [], imput = {}, pagos = [], medios = [], chqPagos = {}, errsF = [];
   if (p){
     const [m,pr,o,f,n,pg] = await Promise.all([
       sb.from("pv_movimientos").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(3000),
@@ -7999,16 +8106,24 @@ async function fichaProveedor(id, tab){
       sb.from("pagos_compra").select("*").eq("proveedor_id",p.id).order("fecha",{ascending:false}).order("id",{ascending:false}).limit(400)
     ]);
     mov = m.data||[]; precios = pr.data||[]; ocs = o.data||[]; facs = f.data||[]; nots = n.data||[]; pagos = pg.data||[];
+    /* 30/8 auditor: estas respuestas alimentan solapas que afirman plata
+       («Todavía no se le registró ningún pago», «Sin movimientos»). Si la base
+       falló, eso es mentira: el error se junta acá y pintarFichaProv lo pone en
+       pvmsg. Regla de la casa: ningún error de base se traga. */
+    if (m.error)  errsF.push("Cuenta corriente: " + m.error.message);
+    if (pg.error) errsF.push("Pagos: " + pg.error.message);
     /* 30/8: de qué cuenta salió cada pago y con qué se pagó, sin abrirlos de a
        uno. El número del cheque vive en la tabla cheques: sin él, la columna
        «Forma de pago» diría «cheque» a secas y no identifica nada. */
     if (pagos.length){
       const me = await sb.from("pago_medios").select("*").in("pago_id", pagos.map(x=>x.id));
       medios = me.data||[];
+      if (me.error) errsF.push("Formas de pago: " + me.error.message);
       const chIds = medios.map(y=>y.cheque_id).filter(Boolean);
       if (chIds.length){
         const ch = await sb.from("cheques").select("id,numero,tipo").in("id", chIds);
         (ch.data||[]).forEach(function(x){ chqPagos[x.id] = x; });
+        if (ch.error) errsF.push("Cheques de los pagos: " + ch.error.message);
       }
     }
     /* para «Sale de» hacen falta las cuentas: mismo patrón que verFactura.
@@ -8034,6 +8149,11 @@ async function fichaProveedor(id, tab){
       });
     }
   }
+  /* 30/8 auditor: si este pedido ya no es el último, o el usuario navegó a otra
+     pantalla mientras la base contestaba, se descarta acá y no se pinta nada.
+     VISTA==="prov_ficha" distinta de v0 no descarta sola: ese caso solo puede
+     venir de un pedido más nuevo, y a ese ya lo corta el token. */
+  if (mio !== PVSEQ || (VISTA !== v0 && VISTA !== "prov_ficha")) return;
   $("dtit").textContent = p ? p.nombre : "Proveedor nuevo";
   const datos =
    '<div class="sec">Datos del proveedor</div><div class="grid">'+
@@ -8063,7 +8183,7 @@ async function fichaProveedor(id, tab){
      tarjetas de Acciones y Auditoría a la derecha. El diálogo quedaba chico
      para OCs, facturas, pagos y dos cuentas corrientes. */
   PROVF = {p:p, datos:datos, mov:mov, precios:precios, ocs:ocs, facs:facs,
-           nots:nots, imput:imput, pagos:pagos, medios:medios, chqPagos:chqPagos, puede:puede};
+           nots:nots, imput:imput, pagos:pagos, medios:medios, chqPagos:chqPagos, errs:errsF, puede:puede};
   VISTA = "prov_ficha"; SUBVISTA = "";
   try{ $("dlg").close(); }catch(e){}
   pintarNav();
@@ -8111,9 +8231,16 @@ function pintarFichaProv(){
   $("main").innerHTML =
     '<div class="panel" style="margin-bottom:12px"><h2>'+esc(p.nombre)+'</h2>'+
       '<div class="desc">Todo lo que pasó con este proveedor, solapa por solapa. Los botones están en la columna de la derecha; en el teléfono, arriba de todo.</div></div>'+
-    '<div class="prewrap"><div class="panel" style="margin:0"><div id="pvmsg"></div>'+solapas+cuerpo+'</div>'+
+    /* 30/8: el cuerpo variable va en su propio div para que irTabProv pueda
+       poner «Cargando…» al instante mientras la consulta de la solapa viaja */
+    '<div class="prewrap"><div class="panel" style="margin:0"><div id="pvmsg"></div>'+solapas+'<div id="pvcuerpo">'+cuerpo+'</div></div>'+
     '<div class="preside">'+lateral+'</div></div>';
   /* cada solapa engancha lo suyo después de dibujarse, como en el cliente */
+  /* 30/8 auditor: los errores juntados en fichaProveedor se pintan acá, arriba
+     de las solapas. Sin esto, la solapa vacía decía «no hay pagos» con la base
+     caída — y eso es una afirmación de plata que no es cierta. */
+  if (PROVF.errs && PROVF.errs.length)
+    $("pvmsg").innerHTML = '<div class="msg err">Ojo: no se pudo leer todo de la base. '+esc(PROVF.errs.join(" · "))+'</div>';
   if (PVTAB === "datos" && PROVF.puede && $("pv_guardar"))
     $("pv_guardar").onclick = function(){ guardarProveedor(p.id); };
   if (PVTAB === "ccars" || PVTAB === "ccusd") engancharCCProv(p.id);
@@ -8191,7 +8318,7 @@ function seccionPagosProv(p, pagos, medios){
         '<td style="white-space:nowrap"><button class="btn2 btn-sm" onclick="_VOLVER_PROV={id:'+p.id+',tab:\'pagos\'}; verPagoCompra('+x.id+')">Ver</button>'+
         (x.anulado?' <span class="pill no">Anulado</span>':'')+'</td></tr>';
      }).join("")+'</tbody></table></div>'+
-     (pagos.length===400 ? '<div class="msg" style="margin-top:6px">Se muestran los <b>400</b> pagos más nuevos. Los anteriores se ven desde Compras → Pagos, filtrando por fecha.</div>' : '')
+     (pagos.length>=400 ? /* 30/8: era ===400; si la consulta trae más del límite exacto el cartel no salía */ '<div class="msg" style="margin-top:6px">Se muestran los <b>400</b> pagos más nuevos. Los anteriores se ven desde Compras → Pagos, filtrando por fecha.</div>' : '')
     : '<div class="muted">Todavía no se le registró ningún pago a este proveedor.</div>');
 }
 
@@ -9983,7 +10110,7 @@ async function formPagoCompra(provId){
     try{$("dlg").showModal();}catch(e){} return;
   }
   if (!CHEQUERAS.length){ try{ await cargarCheques(); }catch(e){} }
-  PAG = {proveedor_id:(provId||null), fecha:hoy(), moneda:"ARS", obs:"", medios:[], facturas:[], cartera:[]};
+  PAG = {proveedor_id:(provId||null), fecha:hoy(), moneda:"ARS", obs:"", concepto_id:null, medios:[], facturas:[], cartera:[]};
   pintarPago(); try{ $("dlg").showModal(); }catch(e){}
   /* si se entra desde la factura o desde el proveedor, ya viene elegido */
   if (provId && $("pa_prov")){ $("pa_prov").value = String(provId); await pagoProveedor(); }
@@ -10010,6 +10137,10 @@ function pintarPago(){
    '<div class="sec">Qué se paga</div>'+
    '<div class="muted" style="margin-bottom:8px">A qué comprobantes se aplica esta orden. Lo que no imputes baja igual la deuda general del proveedor.</div>'+
    '<div id="pa_facturas"><div class="muted">Elegí el proveedor.</div></div>'+
+   /* 30/8: concepto de pago — el form se repinta a cada rato, por eso el elegido
+      vive en PAG.concepto_id (pagSincro lo lee) y acá se repinta seleccionado.
+      Solo se pinta si la maestra tiene filas activas; viaja adentro de p_obs. */
+   (((M.cpa||[]).some(x=>x.activo!==false)) ? '<div class="f" style="margin-top:10px"><label>Concepto</label><div style="display:flex;gap:6px"><select id="pa_concepto" style="flex:1">'+optsConcepto(M.cpa, PAG.concepto_id)+'</select>'+btnConcMas('cpa','pa_concepto')+'</div></div>' : '')+
    '<div class="f" style="margin-top:10px"><label>Observaciones</label><input id="pa_obs" value="'+esc(PAG.obs)+'"></div>'+
    '<div id="pa_tot" style="margin-top:8px"></div>'+
    '<div class="acciones"><button class="btn" id="pa_guardar" onclick="guardarPago()">Registrar la orden de pago</button>'+
@@ -10021,6 +10152,8 @@ function pintarPago(){
    en la grilla de impuestos, para que no se pierda el cursor al escribir. */
 function pagSincro(){
   ["fecha","obs"].forEach(function(c){ const el=$("pa_"+c); if (el) PAG[c]=el.value; });
+  /* 30/8: el concepto también se sincroniza sin redibujar, como fecha y obs */
+  const kc=$("pa_concepto"); if (kc) PAG.concepto_id = kc.value||null;
   const mo = $("pa_moneda"); if (mo) PAG.moneda = mo.value;
   const pr = $("pa_prov"); if (pr) PAG.proveedor_id = pr.value||null;
   PAG.medios.forEach(function(x,k){
@@ -10336,7 +10469,7 @@ async function guardarPago(){
   });
   $("pa_guardar").disabled = true;
   const r = await sb.rpc("registrar_pago_compra_multi",{p_proveedor:Number(prov), p_fecha:PAG.fecha||hoy(),
-    p_moneda:m, p_medios:medios, p_imputaciones:imputaciones, p_obs:PAG.obs||null});
+    p_moneda:m, p_medios:medios, p_imputaciones:imputaciones, p_obs:componerConcepto(nom(M.cpa||[], Number(PAG.concepto_id)), PAG.obs)});
   $("pa_guardar").disabled = false;
   if (r.error) return err(r.error.message);
   await cargarProveedores(); await cargarFin(); try{ await cargarCheques(); }catch(e){}
@@ -13767,9 +13900,14 @@ function fichaCuenta(id){
      '<div class="muted" style="margin-bottom:8px">Para abrir la cuenta con un saldo inicial, o para corregir una diferencia de arqueo. Queda como un movimiento más, con tu nombre y la fecha. No es un retiro ni un gasto.</div>'+
      '<div id="ajmsg"></div><div class="grid">'+
        '<div class="f"><label>Fecha</label><input type="date" id="aj_fecha" value="'+hoy()+'"></div>'+
-       '<div class="f"><label>Qué hago</label><select id="aj_tipo"><option value="Ingreso">Ingresar dinero</option><option value="Egreso">Sacar dinero</option></select></div>'+
+       '<div class="f"><label>Qué hago</label><select id="aj_tipo" onchange="ajTipoCambio()"><option value="Ingreso">Ingresar dinero</option><option value="Egreso">Sacar dinero</option></select></div>'+
        '<div class="f"><label>Importe en '+esc(c.moneda)+'</label><input type="number" step="0.01" id="aj_importe"></div>'+
-     '</div><div class="f"><label>Detalle</label><input id="aj_detalle" placeholder="Saldo inicial de la caja, ajuste de arqueo…"></div>'+
+     '</div>'+
+     /* 30/8: concepto de ingreso — solo cuando ENTRA plata (aporte de socio,
+        intereses…). Al elegir «Sacar dinero» ajTipoCambio esconde la caja.
+        Solo se pinta si la maestra tiene filas activas; viaja adentro de p_detalle. */
+     (((M.cin||[]).some(x=>x.activo!==false)) ? '<div class="f" id="aj_conc_box"><label>Concepto</label><div style="display:flex;gap:6px"><select id="aj_concepto" style="flex:1">'+optsConcepto(M.cin)+'</select>'+btnConcMas('cin','aj_concepto')+'</div></div>' : '')+
+     '<div class="f"><label>Detalle</label><input id="aj_detalle" placeholder="Saldo inicial de la caja, ajuste de arqueo…"></div>'+
      '<div class="acciones"><button class="btn2" onclick="ajustarCuenta('+c.id+')">Registrar movimiento</button></div>':'')+
    (puede?'<div class="acciones"><button class="btn" id="z_guardar">'+(c?"Guardar":"Crear cuenta")+'</button></div>':'');
   if (puede) $("z_guardar").onclick = async function(){
@@ -14076,7 +14214,7 @@ function formGasto(){
     /* Igual que en Pirka y que en la cobranza: primero el tipo —efectivo, banco,
        tarjeta— y después la cuenta. Con trece cuentas, buscar la correcta en una
        lista sola es incómodo. Pedido de Gustavo, 9/8/2026. */
-    '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="7">7 %</option></select></div>'+
+    '<div class="f"><label>Impuesto</label><select id="g_imp" onchange="calcGasto()"><option value="0">Exento</option><option value="21">21 %</option><option value="10.5">10,5 %</option><option value="27">27 %</option></select></div>'+ /* 30/8: 7% no es una alícuota real de IVA en Argentina; 27% sí (servicios públicos) */
     '<div class="f"><label>Concepto</label><select id="g_concepto">'+selOpts(CGASTOS,null)+'</select></div>'+
     '<div class="f"><label>¿Falta el concepto?</label><div style="display:flex;gap:6px"><input id="g_conc_nuevo" placeholder="Concepto nuevo"><button class="btn2 btn-sm" onclick="concGastoAgregar()">Agregar</button></div></div>'+
     /* El área es el segundo eje: el concepto dice qué se gastó, el área para qué. */
@@ -14357,7 +14495,11 @@ function formTransf(origenId){
     '<div class="f"><label>Entra en</label><select id="x_destino">'+op+'</select></div>'+
     '<div class="f" id="x_box_tc" style="display:none"><label>Tipo de cambio</label><input type="number" step="0.01" id="x_tc" oninput="calcTransf()" placeholder="pesos por dólar"></div>'+
     '<div class="f"><label>Importe que entra</label><input type="number" step="0.01" id="x_id" placeholder="se completa solo con el tipo de cambio"></div>'+
-   '</div><div id="x_nota" class="muted"></div><div class="f"><label>Observaciones</label><input id="x_obs"></div>'+
+   '</div><div id="x_nota" class="muted"></div>'+
+   /* 30/8: concepto de transferencia — la maestra existía y nadie la leía.
+      Solo se pinta si tiene filas activas; el elegido viaja adentro de p_obs. */
+   (((M.ctr||[]).some(x=>x.activo!==false)) ? '<div class="f"><label>Concepto</label><div style="display:flex;gap:6px"><select id="x_concepto" style="flex:1">'+optsConcepto(M.ctr)+'</select>'+btnConcMas('ctr','x_concepto')+'</div></div>' : '')+
+   '<div class="f"><label>Observaciones</label><input id="x_obs"></div>'+
    '<div class="acciones"><button class="btn" id="x_guardar">Registrar</button></div>';
   $("x_origen").onchange = calcTransf; $("x_destino").onchange = calcTransf; $("x_io").oninput = calcTransf;
   calcTransf();
@@ -14376,7 +14518,7 @@ function formTransf(origenId){
     const idst = distinta ? Number($("x_id").value||0) : io;
     if (!saldoAlcanza($("x_origen").value, io, "ftmsg")) return;
     const {error} = await sb.rpc("registrar_transferencia",{p_fecha:$("x_fecha").value||hoy(), p_origen:Number($("x_origen").value), p_destino:Number($("x_destino").value),
-      p_imp_origen:io, p_imp_destino:idst, p_obs:$("x_obs").value||null, p_cotizacion:tc||null});
+      p_imp_origen:io, p_imp_destino:idst, p_obs:componerConcepto(conceptoDeSel("x_concepto",M.ctr), $("x_obs").value), p_cotizacion:tc||null});
     if (error){ $("ftmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
     /* 26/8, recorrida de Gilda: guardar la transferencia te tiraba al listado
        de cuentas. Ahora cae en Transferencias, con la recién hecha arriba. */
@@ -14701,7 +14843,7 @@ async function ajustarCuenta(id){
   const imp = Number($("aj_importe").value||0);
   if (!(imp>0)){ $("ajmsg").innerHTML='<div class="msg err">Poné un importe mayor a cero.</div>'; return; }
   if ($("aj_tipo").value === "Egreso" && !saldoAlcanza(id, imp, "ajmsg")) return;
-  const {error} = await sb.rpc("ajustar_saldo_cuenta",{p_cuenta:id, p_fecha:$("aj_fecha").value||hoy(), p_tipo:$("aj_tipo").value, p_importe:imp, p_detalle:$("aj_detalle").value||null});
+  const {error} = await sb.rpc("ajustar_saldo_cuenta",{p_cuenta:id, p_fecha:$("aj_fecha").value||hoy(), p_tipo:$("aj_tipo").value, p_importe:imp, p_detalle: ($("aj_tipo").value==="Ingreso" ? componerConcepto(conceptoDeSel("aj_concepto",M.cin), $("aj_detalle").value) : ($("aj_detalle").value||null))});
   if (error){ $("ajmsg").innerHTML='<div class="msg err">'+esc(error.message)+'</div>'; return; }
   await cargarFin();
   fichaCuenta(id);
